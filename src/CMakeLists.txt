@@ -27,6 +27,12 @@ add_library(tabulasonora
     rom/wave_rom.cpp
     rom/sha256.cpp
     rom/table_manifest.cpp
+    voices/voice_pool.cpp
+    realtime/part.cpp
+    realtime/partial_voice.cpp
+    realtime/sequence_player.cpp
+    realtime/tone_generator.cpp
+    realtime/wave_reader.cpp
     render/note_renderer.cpp
     render/sequence_renderer.cpp
     render/wav_writer.cpp

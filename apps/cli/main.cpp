@@ -1,6 +1,7 @@
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/send_effects.hpp"
+#include "tabulasonora/sequence_player.hpp"
 #include "tabulasonora/sequence_renderer.hpp"
 #include "tabulasonora/table_manifest.hpp"
 #include "tabulasonora/wav_writer.hpp"
@@ -186,20 +187,50 @@ int dump_effect_command(const std::string& kind, int type, int samples, const fs
 }
 
 /// Renders a Standard MIDI File to a WAV.
+///
+/// `--stream` drives the real-time block loop instead of rendering note by note. The two share
+/// their DSP, so what the flag exposes is the difference the architecture makes: a 64-voice limit
+/// that actually steals, live controllers, and effect types that can change mid-song.
 int render_command(const std::string& dll,
                    const fs::path& midi,
                    const fs::path& output,
                    int map,
-                   const ts::RenderOptions& base)
+                   const ts::RenderOptions& base,
+                   bool stream)
 {
     const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
     ts::NoteRenderer notes{rom};
-    ts::SequenceRenderer renderer{notes};
 
     ts::RenderOptions options = base;
     options.map = static_cast<ts::ToneMap>(map);
 
-    const ts::RenderResult result = renderer.render_file(midi, options);
+    ts::RenderResult result;
+    if (stream) {
+        ts::ToneGeneratorOptions engine_options;
+        engine_options.map = options.map;
+        engine_options.drum_channel = options.drum_channel;
+        engine_options.reverb = options.reverb;
+        engine_options.chorus = options.chorus;
+        engine_options.delay = options.delay;
+        engine_options.reverb_type = options.reverb_type;
+        engine_options.chorus_type = options.chorus_type;
+        engine_options.delay_type = options.delay_type;
+        engine_options.drum_ring_seconds = options.drum_ring_seconds;
+        engine_options.output_gain = options.output_gain;
+        engine_options.channels = options.channels;
+
+        ts::ToneGenerator generator{notes, engine_options};
+        // Not an engine option: the row is settable while the engine runs, because it is what the
+        // module would have taken from a bank select. Carried over so --stream and the offline path
+        // resolve the same kits from the same file.
+        generator.set_drum_map_row(options.drum_map_row);
+
+        ts::SequencePlayer player = ts::SequencePlayer::from_file(generator, midi);
+        result = player.render_to_end(options.tail_seconds, options.end_seconds);
+    } else {
+        ts::SequenceRenderer renderer{notes};
+        result = renderer.render_file(midi, options);
+    }
     ts::wav::write(output, result.left, result.right, result.sample_rate);
 
     const double seconds = static_cast<double>(result.left.size()) / result.sample_rate;
@@ -251,6 +282,7 @@ int main(int argc, char** argv)
     bool no_reverb = false;
     bool no_chorus = false;
     bool no_delay = false;
+    bool stream = false;
     CLI::App* render = app.add_subcommand("render", "Render a Standard MIDI File to a WAV.");
     render->add_option("dll", dll_path, "Path to SCCore.dll")->required();
     render->add_option("midi", midi_path, "Input .mid path")->required();
@@ -264,6 +296,7 @@ int main(int argc, char** argv)
     render->add_flag("--no-reverb", no_reverb, "Disable the reverb send");
     render->add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     render->add_flag("--no-delay", no_delay, "Disable the delay send");
+    render->add_flag("--stream", stream, "Render through the real-time block loop");
 
     std::string effect_kind;
     int effect_type = 0;
@@ -291,7 +324,7 @@ int main(int argc, char** argv)
             render_options.reverb = !no_reverb;
             render_options.chorus = !no_chorus;
             render_options.delay = !no_delay;
-            return render_command(dll_path, midi_path, output_file, map, render_options);
+            return render_command(dll_path, midi_path, output_file, map, render_options, stream);
         }
         if (dump_effect->parsed()) {
             return dump_effect_command(effect_kind, effect_type, effect_samples, output_file);

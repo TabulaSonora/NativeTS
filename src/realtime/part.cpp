@@ -1,0 +1,39 @@
+#include "tabulasonora/part.hpp"
+
+namespace ts {
+
+void Part::reset()
+{
+    program = 0;
+    bank = 0;
+    pan = sequence_builder::default_pan;
+    modulation = 0;
+    damper = 0;
+    reverb_send = sequence_builder::default_reverb_send;
+    chorus_send = sequence_builder::default_chorus_send;
+    delay_send = 0;
+    bend = 8192;
+    bend_range = 2;
+    rpn_msb = 0x7F;
+    rpn_lsb = 0x7F;
+    nrpn_msb = 0x7F;
+    nrpn_lsb = 0x7F;
+    data_entry_is_nrpn = false;
+    drum_keys.reset();
+    sustained.clear();
+    portamento_time = 0;
+    portamento_on = false;
+    mono = false;
+    portamento_control_key = -1;
+    last_key = -1;
+    sostenuto_down = false;
+    sostenuto_captured.clear();
+    sostenuto_released.clear();
+
+    volume_ = sequence_builder::default_volume;
+    expression_ = sequence_builder::default_expression;
+    master_ = sequence_builder::default_master;
+    recompute();
+}
+
+} // namespace ts

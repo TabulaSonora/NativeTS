@@ -14,6 +14,7 @@ add_executable(ts_tests
     sequence_tests.cpp
     sha256_tests.cpp
     table_manifest_tests.cpp
+    tone_generator_tests.cpp
     table_set_tests.cpp
     test_data.cpp
     wave_rom_tests.cpp
