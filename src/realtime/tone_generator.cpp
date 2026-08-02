@@ -22,6 +22,10 @@ struct ToneGenerator::Impl {
         delay_type = opts.delay_type;
 
         pool.stealing = [this](int index) { steal(index); };
+
+        for (int i = 0; i < ToneGenerator::part_count; ++i) {
+            parts[static_cast<std::size_t>(i)].rx_channel = i % Sequence::channel_count;
+        }
     }
 
     NoteRenderer* notes;
@@ -69,6 +73,23 @@ struct ToneGenerator::Impl {
     std::int64_t position = 0;
     int note_count = 0;
 
+    // The system-common block, from GS SysEx 40 00 xx.
+    //
+    // Master tune is kept raw: 0.1-cent units with 0x400 centred, clamped to 0x18-0x7e8 exactly as
+    // `sysex_master_tune` does -- which makes one raw step one milli-semitone. Master key shift is
+    // 0x40 centred and clamped to 0x28-0x58 (`sysex_master_key_shift`). Master pan is latched but
+    // not yet consumed: the mixer has no post-pan master stage to apply it in.
+    int master_tune = 0x400;
+    int master_key_shift = 0x40;
+    int master_pan = 0x40;
+
+    /// The global pitch offset every voice shares, in milli-semitones.
+    [[nodiscard]] double master_tune_milli_semitones() const noexcept
+    {
+        return static_cast<double>(master_tune - 0x400)
+               + ((master_key_shift - 0x40) * 1000.0);
+    }
+
     [[nodiscard]] int effective_drum_map_row() const noexcept
     {
         if (drum_map_row) {
@@ -88,13 +109,53 @@ struct ToneGenerator::Impl {
         return ((port & (ToneGenerator::port_count - 1)) * Sequence::channel_count) + channel;
     }
 
-    // Every port has its own drum part, on the same channel within that port.
+    // Every port has its own drum part, on the same channel within that port -- unless SysEx
+    // `40 1x 15` (use-for-rhythm) has overridden the routing for the part.
     [[nodiscard]] bool is_drum_part(int part) const noexcept
     {
+        const Part& state = parts[static_cast<std::size_t>(part)];
+        if (state.rhythm >= 0) {
+            return state.rhythm > 0;
+        }
         return part % Sequence::channel_count == options.drum_channel;
     }
 
+    // Which vintage's tone map the part resolves against: bank select LSB 1-4 names one, anything
+    // else keeps the configured default.
+    [[nodiscard]] ToneMap tone_map_for(const Part& part) const noexcept
+    {
+        if (part.bank_lsb >= 1 && part.bank_lsb <= 4) {
+            return static_cast<ToneMap>(part.bank_lsb);
+        }
+        return options.map;
+    }
+
+    // The drum map row a program change on a drum part resolves against.
+    [[nodiscard]] int drum_row_for(const Part& part) const noexcept
+    {
+        if (part.bank_lsb >= 1 && part.bank_lsb <= 4) {
+            const std::optional<int> row =
+                DrumKitTable::row_for_map(static_cast<ToneMap>(part.bank_lsb));
+            if (row) {
+                return *row;
+            }
+        }
+        return effective_drum_map_row();
+    }
+
+    void apply_channel(int part_index, Part& part, int status, int data1, int data2);
+    void program_change(int part_index, Part& part, int program);
     void control_change(int channel, Part& part, int controller, int value);
+    void commit_data_entry_msb(int channel, Part& part, int value);
+    void commit_data_entry_lsb(Part& part, int value);
+    void gs_part_parameter(int part_index, Part& part, int address, std::span<const std::uint8_t> data);
+    void gs_drum_setup(int port, int parameter, int key, std::span<const std::uint8_t> data);
+    void release_sustained(int channel, Part& part);
+    void flush_part_voices(int channel);
+
+    // Returns every part to power-on state without touching the clocks: what a GM System On, GS
+    // reset or system-mode-set does mid-stream.
+    void stream_reset();
     [[nodiscard]] bool any_voice_on(int channel) const;
     void stop_note(int channel, int note, int damper = 0);
     void start_note(int channel, int note, int velocity);
@@ -211,9 +272,14 @@ void ToneGenerator::reset()
     impl_->dying.clear();
     impl_->pool.reset();
 
-    for (Part& part : impl_->parts) {
+    for (int i = 0; i < part_count; ++i) {
+        Part& part = impl_->parts[static_cast<std::size_t>(i)];
         part.reset();
+        part.rx_channel = i % Sequence::channel_count;
     }
+    impl_->master_tune = 0x400;
+    impl_->master_key_shift = 0x40;
+    impl_->master_pan = 0x40;
 
     if (impl_->reverb) {
         impl_->reverb->reset();
@@ -258,26 +324,48 @@ void ToneGenerator::send_channel(int status, int data1, int data2)
 
 void ToneGenerator::send_channel(int port, int status, int data1, int data2)
 {
-    const int channel = Impl::part_of(port, status & 0x0F);
-    Part& part = impl_->parts[static_cast<std::size_t>(channel)];
+    // Parts are matched by their receive channel rather than indexed by it, the way the engine
+    // walks a per-channel list of listening parts: SysEx can point several parts at one channel,
+    // or detach a part entirely.
+    const int incoming = status & 0x0F;
+    const int base = (port & (port_count - 1)) * Sequence::channel_count;
+    for (int i = 0; i < Sequence::channel_count; ++i) {
+        const int index = base + i;
+        Part& part = impl_->parts[static_cast<std::size_t>(index)];
+        if (part.rx_channel == incoming) {
+            impl_->apply_channel(index, part, status & 0xF0, data1, data2);
+        }
+    }
+}
 
-    switch (status & 0xF0) {
+void ToneGenerator::Impl::apply_channel(int part_index, Part& part, int status, int data1,
+                                        int data2)
+{
+    const int channel = part_index;
+
+    switch (status) {
     case 0x90:
         if (data2 > 0) {
+            if (!part.rx.notes) {
+                break;
+            }
             // Re-striking a still-open note takes the old voice first.
-            impl_->stop_note(channel, data1);
+            stop_note(channel, data1);
 
             // The new strike supersedes a note-off the pedal is still holding for this note.
             std::erase(part.sustained, data1);
             std::erase(part.sostenuto_captured, data1);
             std::erase(part.sostenuto_released, data1);
 
-            impl_->start_note(channel, data1, data2);
+            start_note(channel, data1, data2);
             break;
         }
         [[fallthrough]];
 
     case 0x80:
+        if (!part.rx.notes) {
+            break;
+        }
         if (part.sostenuto_down
             && std::find(part.sostenuto_captured.begin(), part.sostenuto_captured.end(), data1)
                    != part.sostenuto_captured.end()) {
@@ -286,34 +374,55 @@ void ToneGenerator::send_channel(int port, int status, int data1, int data2)
         } else if (part.damper_down()) {
             part.sustained.push_back(data1);
         } else {
-            impl_->stop_note(channel, data1, part.damper);
+            stop_note(channel, data1, part.damper);
         }
+        break;
+
+    case 0xA0:
+        // Poly pressure reaches the modulation matrix on the module (`poly_aftertouch_apply`);
+        // this engine has no per-note matrix yet, so the message is recognised and dropped.
         break;
 
     case 0xB0:
-        impl_->control_change(channel, part, data1, data2);
+        control_change(channel, part, data1, data2);
         break;
 
-    case 0xC0: {
-        part.program = data1;
-        if (impl_->is_drum_part(channel)) {
-            const std::optional<int> kit =
-                impl_->notes->drums().kit_for_program(data1, impl_->effective_drum_map_row());
-            if (kit) {
-                // An undefined program leaves the current kit in place rather than falling back to
-                // Standard.
-                impl_->drum_kit[static_cast<std::size_t>(channel / Sequence::channel_count)] = *kit;
-            }
+    case 0xC0:
+        if (part.rx.program_change) {
+            program_change(part_index, part, data1);
         }
         break;
-    }
+
+    case 0xD0:
+        // Channel pressure is likewise a matrix source (`channel_pressure_apply`); the value is
+        // kept so a later matrix has it, but nothing consumes it yet.
+        if (part.rx.channel_pressure) {
+            part.channel_pressure = data1;
+        }
+        break;
 
     case 0xE0:
-        part.bend = data1 | (data2 << 7);
+        if (part.rx.pitch_bend) {
+            part.bend = data1 | (data2 << 7);
+        }
         break;
 
     default:
         break;
+    }
+}
+
+void ToneGenerator::Impl::program_change(int part_index, Part& part, int program)
+{
+    part.program = program;
+    if (is_drum_part(part_index)) {
+        const std::optional<int> kit =
+            notes->drums().kit_for_program(program, drum_row_for(part));
+        if (kit) {
+            // An undefined program leaves the current kit in place rather than falling back to
+            // Standard.
+            drum_kit[static_cast<std::size_t>(part_index / Sequence::channel_count)] = *kit;
+        }
     }
 }
 
@@ -333,34 +442,420 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
         return;
     }
 
-    // Roland GS DT1: F0 41 dev 42 12 <3-byte address> <data> checksum F7.
-    if (bytes.size() < 11 || bytes[0] != 0xF0 || bytes[1] != 0x41 || bytes[3] != 0x42
-        || bytes[4] != 0x12) {
+    // Universal non-realtime General MIDI mode: F0 7E 7F 09 xx F7. GM System On (01, and the GM2
+    // form 03) resets the stream state; GM System Off (02) is recognised and left alone -- the
+    // module treats it as a switch to its native map, which this engine expresses through
+    // `ToneGeneratorOptions::map` instead.
+    if (bytes.size() >= 6 && bytes[0] == 0xF0 && bytes[1] == 0x7E && bytes[3] == 0x09) {
+        if (bytes[4] == 0x01 || bytes[4] == 0x03) {
+            impl_->stream_reset();
+        }
+        return;
+    }
+
+    // Roland GS: F0 41 dev 42 <command> <3-byte address> <data...> checksum F7.
+    if (bytes.size() < 11 || bytes[0] != 0xF0 || bytes[1] != 0x41 || bytes[3] != 0x42) {
+        return;
+    }
+
+    // RQ1 asks for a dump, and the engine has no MIDI output to answer on.
+    if (bytes[4] != 0x12) {
+        return;
+    }
+
+    // The checksum folds the address and data to a multiple of 128, and the engine
+    // (`sysex_receive_parse`) drops the message when it does not.
+    unsigned int sum = 0;
+    for (std::size_t i = 5; i + 1 < bytes.size(); ++i) {
+        sum += bytes[i];
+    }
+    if (sum % 0x80 != 0) {
         return;
     }
 
     const int a1 = bytes[5];
     const int a2 = bytes[6];
     const int a3 = bytes[7];
-    const int value = bytes[8];
-
-    if (a1 == 0x40 && a2 == 0x01) {
-        if ((a3 == 0x30 || a3 == 0x31) && value <= 7) {
-            impl_->reverb_type =
-                impl_->options.reverb_type ? impl_->options.reverb_type : std::optional{value};
-        } else if (a3 == 0x38 && value <= 7) {
-            impl_->chorus_type =
-                impl_->options.chorus_type ? impl_->options.chorus_type : std::optional{value};
-        } else if (a3 == 0x50 && value <= 9) {
-            impl_->delay_type =
-                impl_->options.delay_type ? impl_->options.delay_type : std::optional{value};
-        }
-    } else if (a1 == 0x40 && (a2 & 0xF0) == 0x10 && a3 == 0x2C) {
-        impl_
-            ->parts[static_cast<std::size_t>(
-                Impl::part_of(port, sequence_builder::channel_from_block(a2 & 0x0F)))]
-            .delay_send = value;
+    const std::span<const std::uint8_t> data = bytes.subspan(8, bytes.size() - 10);
+    if (data.empty()) {
+        return;
     }
+    const int value = data[0];
+
+    // System mode set: 00 00 7F selects mode 1 or 2, and either way arrives as a full reset.
+    if (a1 == 0x00 && a2 == 0x00 && a3 == 0x7F) {
+        impl_->stream_reset();
+        return;
+    }
+
+    // The `50`/`51` blocks are the second port's patch and drum-setup mirrors: same layout, port
+    // B parts, whatever port the message arrived on.
+    const int block_port = (a1 == 0x50 || a1 == 0x51) ? 1 : (port & (port_count - 1));
+
+    if (a1 == 0x40 || a1 == 0x50) {
+        if (a2 == 0x00) {
+            // System common.
+            switch (a3) {
+            case 0x00:
+                // Master tune, four nibble bytes; clamped as `sysex_master_tune` clamps it.
+                if (data.size() >= 4) {
+                    const int raw = ((data[0] * 0x100 + data[2]) * 0x10) + (data[1] * 0x100)
+                                    + data[3];
+                    impl_->master_tune = std::clamp(raw, 0x18, 0x7E8);
+                }
+                break;
+            case 0x04:
+                for (Part& part : impl_->parts) {
+                    part.set_master(value);
+                }
+                break;
+            case 0x05:
+                // Master key shift, clamped to +-24 semitones (`sysex_master_key_shift`).
+                impl_->master_key_shift = std::clamp(value, 0x28, 0x58);
+                break;
+            case 0x06:
+                // Latched but not yet consumed -- the mixer has no master pan stage.
+                impl_->master_pan = value;
+                break;
+            case 0x7F:
+                // GS reset (00). The other defined value, 7F, exits GS mode; both return the
+                // stream state to power-on.
+                impl_->stream_reset();
+                break;
+            default:
+                break;
+            }
+            return;
+        }
+
+        if (a2 == 0x01) {
+            // Patch common: the effect macros with their engine-checked ranges, and the parameter
+            // blocks behind them.
+            if ((a3 == 0x30 || a3 == 0x31) && value <= 7) {
+                impl_->reverb_type =
+                    impl_->options.reverb_type ? impl_->options.reverb_type : std::optional{value};
+            } else if (a3 == 0x38 && value <= 7) {
+                impl_->chorus_type =
+                    impl_->options.chorus_type ? impl_->options.chorus_type : std::optional{value};
+            } else if (a3 == 0x50 && value <= 9) {
+                impl_->delay_type =
+                    impl_->options.delay_type ? impl_->options.delay_type : std::optional{value};
+            }
+            // Recognised and left alone: the patch name (00-0F) and voice reserve (10-1F) have no
+            // audible counterpart here, and the individual reverb (32-37), chorus (39-40) and
+            // delay (51-5A) parameters are carried by the preset tables the macros select --
+            // applying single-parameter edits on top is follow-up DSP work
+            // (`sysex_reverb_params` / `sysex_chorus_params` / `sysex_delay_params`).
+            return;
+        }
+
+        if (a2 == 0x02) {
+            // The four-band EQ block (`sysex_eq_params`). Placeholder: the render graph has no EQ
+            // stage yet.
+            return;
+        }
+
+        if (a2 == 0x03) {
+            // Insertion EFX (`sysex_insertion_fx_type` / `sysex_insertion_fx_params`): 00-01 pick
+            // one of the 67 algorithms, 03 onward are its parameters, and the tail of the block
+            // carries the EFX send and control assignments. Placeholder until the insertion chain
+            // exists; the spec's own scope note keeps EFX out of this codebase for now.
+            return;
+        }
+
+        if ((a2 & 0xF0) == 0x10) {
+            // Part parameters, port-relative block addressing.
+            const int index =
+                Impl::part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+            impl_->gs_part_parameter(index, impl_->parts[static_cast<std::size_t>(index)], a3,
+                                     data);
+            return;
+        }
+
+        if ((a2 & 0xF0) == 0x20) {
+            // The controller assignment matrix (`sysex_part_control_matrix`): CC1/CC2, bend and
+            // aftertouch routing into the modulation matrix. Placeholder -- this engine models
+            // only the mod wheel's LFO1 route so far.
+            return;
+        }
+        return;
+    }
+
+    if (a1 == 0x41 || a1 == 0x51) {
+        // Drum setup: a2 is (map << 4) | parameter, a3 the first key.
+        impl_->gs_drum_setup(block_port, a2 & 0x0F, a3, data);
+        return;
+    }
+}
+
+void ToneGenerator::Impl::gs_part_parameter(int part_index, Part& part, int address,
+                                            std::span<const std::uint8_t> data)
+{
+    const int value = data[0];
+
+    switch (address) {
+    // Tone number: the bank MSB then the program, exactly a CC#0 plus program change pair.
+    case 0x00:
+        part.bank = value;
+        if (data.size() >= 2) {
+            program_change(part_index, part, data[1] & 0x7F);
+        }
+        break;
+
+    case 0x02:
+        // Rx channel, 0-15, or 0x10 for off. Written as-is: matching happens per message.
+        part.rx_channel = std::min(value, 0x10);
+        break;
+
+    case 0x03:
+        part.rx.pitch_bend = value != 0;
+        break;
+    case 0x04:
+        part.rx.channel_pressure = value != 0;
+        break;
+    case 0x05:
+        part.rx.program_change = value != 0;
+        break;
+    case 0x06:
+        part.rx.control_change = value != 0;
+        break;
+    case 0x07:
+        part.rx.poly_pressure = value != 0;
+        break;
+    case 0x08:
+        part.rx.notes = value != 0;
+        break;
+    case 0x09:
+        part.rx.rpn = value != 0;
+        break;
+    case 0x0A:
+        part.rx.nrpn = value != 0;
+        break;
+    case 0x0B:
+        part.rx.modulation = value != 0;
+        break;
+    case 0x0C:
+        part.rx.volume = value != 0;
+        break;
+    case 0x0D:
+        part.rx.panpot = value != 0;
+        break;
+    case 0x0E:
+        part.rx.expression = value != 0;
+        break;
+    case 0x0F:
+        part.rx.hold = value != 0;
+        break;
+    case 0x10:
+        part.rx.portamento = value != 0;
+        break;
+    case 0x11:
+        part.rx.sostenuto = value != 0;
+        break;
+    case 0x12:
+        part.rx.soft = value != 0;
+        break;
+
+    case 0x13:
+        // Mono/poly: zero is mono, like CC#126/127 collapsed to a byte.
+        part.mono = value == 0;
+        flush_part_voices(part_index);
+        break;
+
+    case 0x14:
+        // Assign mode (`sysex_part_assign_mode`): single/limited/full voice assignment.
+        // Placeholder -- the voice pool has one allocation policy.
+        break;
+
+    case 0x15:
+        // Use for rhythm: 0 melodic, 1 or 2 a drum map. Re-resolves the kit so a program already
+        // in force selects one, the way the engine's handler re-runs the program change.
+        part.rhythm = std::min(value, 2);
+        if (part.rhythm > 0) {
+            program_change(part_index, part, part.program);
+        }
+        break;
+
+    case 0x16:
+        // Part key shift, same clamp as the master (`sysex_part_key_shift`).
+        part.key_shift = std::clamp(value, 0x28, 0x58);
+        break;
+
+    case 0x17:
+        // Pitch offset fine, stored raw; the module's unit is Hz, which nothing consumes yet.
+        part.pitch_offset_fine = value;
+        break;
+
+    case 0x19:
+        part.set_volume(value);
+        break;
+
+    case 0x1A:
+        part.velocity_depth = value;
+        break;
+    case 0x1B:
+        part.velocity_offset = value;
+        break;
+
+    case 0x1C:
+        // The SysEx panpot is the one writer that can reach zero -- GS RND.
+        part.pan = value;
+        break;
+
+    case 0x1D:
+        part.key_low = value;
+        break;
+    case 0x1E:
+        part.key_high = value;
+        break;
+
+    case 0x1F:
+    case 0x20:
+        // CC1/CC2 controller numbers for the assignable-controller matrix. Placeholder alongside
+        // the `40 2x` block.
+        break;
+
+    case 0x21:
+        part.chorus_send = value;
+        break;
+    case 0x22:
+        part.reverb_send = value;
+        break;
+
+    case 0x23:
+        part.rx.bank_msb = value != 0;
+        break;
+    case 0x24:
+        part.rx.bank_lsb = value != 0;
+        break;
+
+    case 0x2C:
+        part.delay_send = value;
+        break;
+
+    // The part modify offsets -- third writer onto the same bytes as CC#71-78 and the NRPNs.
+    case 0x30:
+        part.vibrato_rate = value;
+        break;
+    case 0x31:
+        part.vibrato_depth = value;
+        break;
+    case 0x32:
+        part.tvf_cutoff = value;
+        break;
+    case 0x33:
+        part.tvf_resonance = value;
+        break;
+    case 0x34:
+        part.env_attack = value;
+        break;
+    case 0x35:
+        part.env_decay = value;
+        break;
+    case 0x36:
+        part.env_release = value;
+        break;
+    case 0x37:
+        part.vibrato_delay = value;
+        break;
+
+    default:
+        // Scale tuning is written as a run: a DT1 at 40 up to twelve bytes long is the common
+        // form, and single-entry writes land here too.
+        if (address >= 0x40 && address <= 0x4B) {
+            for (std::size_t i = 0; i < data.size() && address + static_cast<int>(i) <= 0x4B;
+                 ++i) {
+                part.scale_tuning[static_cast<std::size_t>(address - 0x40) + i] = data[i];
+            }
+        }
+        break;
+    }
+}
+
+void ToneGenerator::Impl::gs_drum_setup(int port, int parameter, int key,
+                                        std::span<const std::uint8_t> data)
+{
+    // The engine keeps one drum-setup buffer per map, shared by every part on that map; here the
+    // overrides live on the parts, so the write lands on each of the port's rhythm parts.
+    const int base = (port & (ToneGenerator::port_count - 1)) * Sequence::channel_count;
+    for (int i = 0; i < Sequence::channel_count; ++i) {
+        const int index = base + i;
+        if (!is_drum_part(index)) {
+            continue;
+        }
+        Part& part = parts[static_cast<std::size_t>(index)];
+
+        for (std::size_t offset = 0; offset < data.size(); ++offset) {
+            const int note = key + static_cast<int>(offset);
+            const int value = data[offset];
+            switch (parameter) {
+            case 0x00:
+                // Drum set name -- nothing to display it on.
+                break;
+            case 0x01:
+                // Play key number: absolute, unlike the relative pitch NRPN.
+                part.drum_keys.set_play_key(note, value);
+                break;
+            case 0x02:
+                part.drum_keys.set_level(note, value);
+                break;
+            case 0x03:
+                // Assign group, clamped to the engine's 1-4 (`drum_setup_assign_group`).
+                part.drum_keys.set_group(note, std::clamp(value, 1, 4));
+                break;
+            case 0x04:
+                part.drum_keys.set_pan(note, value);
+                break;
+            case 0x05:
+                part.drum_keys.set_reverb(note, value);
+                break;
+            case 0x06:
+                part.drum_keys.set_chorus(note, value);
+                break;
+            case 0x07:
+            case 0x08:
+                // Rx note-off / note-on per key. Placeholder: the drum path already ignores
+                // note-off, and gating note-on per key has no recovered law yet.
+                break;
+            case 0x09:
+                part.drum_keys.set_delay(note, value);
+                break;
+            default:
+                break;
+            }
+        }
+    }
+}
+
+void ToneGenerator::Impl::stream_reset()
+{
+    // What a reset message does mid-stream: every voice fades rather than being cut dead, every
+    // part returns to power-on, and the effect selections fall back to the host's configuration.
+    // The clocks and counters stay -- this is a message in the stream, not a host reset.
+    for (int i = 0; i < VoicePool::max_voices; ++i) {
+        auto& slot = slots[static_cast<std::size_t>(i)];
+        if (slot) {
+            slot->choke();
+            dying.push_back(std::move(slot));
+            pool.free_slot(i);
+        }
+    }
+    pool.reset();
+
+    for (int i = 0; i < ToneGenerator::part_count; ++i) {
+        Part& part = parts[static_cast<std::size_t>(i)];
+        part.reset();
+        part.rx_channel = i % Sequence::channel_count;
+    }
+
+    reverb_type = options.reverb_type;
+    chorus_type = options.chorus_type;
+    delay_type = options.delay_type;
+
+    master_tune = 0x400;
+    master_key_shift = 0x40;
+    master_pan = 0x40;
+    drum_kit.fill(0);
 }
 
 void ToneGenerator::send_packet(std::uint32_t packet)
@@ -461,7 +956,12 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     const Part& part = parts[static_cast<std::size_t>(voice.channel())];
     std::span<float> block{scratch};
 
-    voice.render(block, part.bend_milli_semitones(), part.mod_wheel_depth());
+    // The static tune rides in with the bend: the engine folds RPN and key-shift tuning into one
+    // per-part milli-semitone offset added to every voice's pitch, and the master tune and key
+    // shift sit on top of that globally.
+    const double pitch_offset = part.bend_milli_semitones() + part.tune_milli_semitones()
+                                + master_tune_milli_semitones();
+    voice.render(block, pitch_offset, part.mod_wheel_depth());
 
     // A silenced channel contributes nothing at all -- not to the dry mix and not to the sends
     // either, so muting a part also removes its tail. It keeps running, so unmuting is instant.
@@ -651,8 +1151,14 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     }
 
     Part& part = parts[static_cast<std::size_t>(channel)];
+
+    // GS keyboard range, SysEx-only and defaulted wide open.
+    if (note < part.key_low || note > part.key_high) {
+        return;
+    }
+
     const std::vector<int> tones =
-        notes->directory().program_tones(part.program, options.map, part.bank);
+        notes->directory().program_tones(part.program, tone_map_for(part), part.bank);
     if (tones.empty()) {
         return;
     }
@@ -711,8 +1217,11 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             Envelopes built = envelopes(tone_number, partial, key, velocity);
             auto [lfo1, lfo2] = notes->lfo().create_runners(tone_number, partial);
 
+            // Scale tuning folds in here rather than riding with the bend: it is per-key, so it
+            // is latched at note-on like the rest of the note's pitch.
             const double base_pitch =
-                notes->pitch().base_pitch_milli_semitones(partial, note, partial.key_center());
+                notes->pitch().base_pitch_milli_semitones(partial, note, partial.key_center())
+                + part.scale_offset_milli_semitones(key);
 
             VoiceSetup setup;
             setup.channel = channel;
@@ -757,8 +1266,21 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     // The kit's own key is kept alongside the overridden one, because the envelope rate key-follow
     // indexes off the stored plane rather than the plane the override has already doubled the NRPN
     // offset into.
-    const DrumKey kit_key = notes->drums().key(
+    DrumKey kit_key = notes->drums().key(
         note, drum_kit[static_cast<std::size_t>(channel / Sequence::channel_count)]);
+
+    // The drum-setup SysEx planes replace their kit entries outright, before the relative NRPN
+    // overrides go on top.
+    if (const std::optional<int> play_key = part.drum_keys.play_key(note)) {
+        kit_key.pitch = *play_key;
+    }
+    if (const std::optional<int> level = part.drum_keys.level(note)) {
+        kit_key.level = *level;
+    }
+    if (const std::optional<int> group = part.drum_keys.group(note)) {
+        kit_key.group = *group;
+    }
+
     const DrumKey key = DrumKeyOverrides::apply(kit_key,
                                                 part.drum_keys.pitch_offset(note),
                                                 part.drum_keys.pan_for_hit(note, notes->noise()));
@@ -834,25 +1356,69 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     }
 }
 
+void ToneGenerator::Impl::release_sustained(int channel, Part& part)
+{
+    // Oldest first, which is the order the offline renderer closes them in too. The damper value
+    // at the lift reaches the release rate on half-damper tones, so a pedal eased up through
+    // 1-0x3f gives those notes a proportionally longer tail.
+    const std::vector<int> releasing = part.sustained;
+    part.sustained.clear();
+    for (int note : releasing) {
+        stop_note(channel, note, part.damper);
+    }
+}
+
+void ToneGenerator::Impl::flush_part_voices(int channel)
+{
+    for (auto& slot : slots) {
+        if (slot && !slot->finished() && slot->channel() == channel) {
+            slot->choke();
+        }
+    }
+}
+
 void ToneGenerator::Impl::control_change(int channel, Part& part, int controller, int value)
 {
+    // Every controller handler in the engine opens with a test of the part's Rx-CC gate; only the
+    // channel-mode messages (CC#120 up) bypass it.
+    if (controller < 120 && !part.rx.control_change) {
+        return;
+    }
+
     switch (controller) {
     case 0:
-        part.bank = value;
+        if (part.rx.bank_msb) {
+            part.bank = value;
+        }
+        break;
+    // Bank select LSB is the tone-map select on this module: 1-4 name a vintage, 0 keeps the
+    // default. Stored raw here and interpreted at resolution time (`tone_map_for`).
+    case 32:
+        if (part.rx.bank_lsb) {
+            part.bank_lsb = value;
+        }
         break;
     case 1:
-        part.modulation = value;
+        if (part.rx.modulation) {
+            part.modulation = value;
+        }
         break;
     case 7:
-        part.set_volume(value);
+        if (part.rx.volume) {
+            part.set_volume(value);
+        }
         break;
     // CC#10 zero is stored as one, so the wheel cannot reach the random position: only the GS
     // SysEx panpot writes a true zero, which is what RND is.
     case 10:
-        part.pan = value == 0 ? 1 : value;
+        if (part.rx.panpot) {
+            part.pan = value == 0 ? 1 : value;
+        }
         break;
     case 11:
-        part.set_expression(value);
+        if (part.rx.expression) {
+            part.set_expression(value);
+        }
         break;
     case 91:
         part.reverb_send = value;
@@ -860,38 +1426,75 @@ void ToneGenerator::Impl::control_change(int channel, Part& part, int controller
     case 93:
         part.chorus_send = value;
         break;
+    // CC#94 is the delay send's Control Change alias: the engine routes it into the same part
+    // byte the `40 1x 2C` SysEx writes (`caseD_5e`).
+    case 94:
+        part.delay_send = value;
+        break;
 
     case 64:
+        if (!part.rx.hold) {
+            break;
+        }
         part.damper = value;
         if (value < 0x40) {
-            // Oldest first, which is the order the offline renderer closes them in too. The pedal
-            // value at the lift reaches the release rate on half-damper tones, so a pedal eased up
-            // through 1-0x3f gives those notes a proportionally longer tail.
-            const std::vector<int> releasing = part.sustained;
-            part.sustained.clear();
-            for (int note : releasing) {
-                stop_note(channel, note, value);
-            }
+            release_sustained(channel, part);
         }
         break;
 
     case 5:
-        part.portamento_time = value;
-        break;
-    case 126:
-        part.mono = true;
-        break;
-    case 127:
-        part.mono = false;
+        if (part.rx.portamento) {
+            part.portamento_time = value;
+        }
         break;
     case 65:
-        part.portamento_on = value >= 0x40;
+        if (part.rx.portamento) {
+            part.portamento_on = value >= 0x40;
+        }
         break;
     case 84:
         part.portamento_control_key = value;
         break;
 
+    // CC#67 soft pedal, binary like sostenuto -- the engine reads only bit 6.
+    case 67:
+        if (part.rx.soft) {
+            part.soft = value >= 0x40;
+        }
+        break;
+
+    // The sound controllers land on the same per-part modify bytes as the NRPNs and the part
+    // SysEx: CC#71 is `part+0x3e7` (resonance), CC#72 `0x3ea` (release), and so on through the
+    // recovered `caseD_47`-`caseD_4e` handlers.
+    case 71:
+        part.tvf_resonance = value;
+        break;
+    case 72:
+        part.env_release = value;
+        break;
+    case 73:
+        part.env_attack = value;
+        break;
+    case 74:
+        part.tvf_cutoff = value;
+        break;
+    case 75:
+        part.env_decay = value;
+        break;
+    case 76:
+        part.vibrato_rate = value;
+        break;
+    case 77:
+        part.vibrato_depth = value;
+        break;
+    case 78:
+        part.vibrato_delay = value;
+        break;
+
     case 66:
+        if (!part.rx.sostenuto) {
+            break;
+        }
         // Binary -- the engine reads only bit 6, so there is no half-sostenuto.
         if (value >= 0x40) {
             if (!part.sostenuto_down) {
@@ -942,25 +1545,18 @@ void ToneGenerator::Impl::control_change(int channel, Part& part, int controller
         break;
 
     case 6:
-        // Data entry commits whichever of RPN or NRPN was selected last.
-        if (part.data_entry_is_nrpn) {
-            switch (part.nrpn_msb) {
-            case 0x18:
-                part.drum_keys.set_pitch(part.nrpn_lsb, value);
-                break;
-            case 0x1C:
-                part.drum_keys.set_pan(part.nrpn_lsb, value);
-                break;
-            default:
-                break;
-            }
-        } else if (part.rpn_msb == 0 && part.rpn_lsb == 0) {
-            part.bend_range = value;
-        }
+        commit_data_entry_msb(channel, part, value);
+        break;
+    case 38:
+        commit_data_entry_lsb(part, value);
         break;
 
     case 120:
     case 123:
+        // Both take a zero data byte only, as the engine's `caseD_78`/`caseD_7b` do.
+        if (value != 0) {
+            break;
+        }
         for (auto& slot : slots) {
             if (slot && slot->channel() == channel) {
                 // All Sound Off cuts; All Notes Off releases. Both stop the note sounding, and the
@@ -979,11 +1575,140 @@ void ToneGenerator::Impl::control_change(int channel, Part& part, int controller
         break;
 
     case 121:
+        if (value != 0) {
+            break;
+        }
         part.reset_controllers();
+        // The damper is up now, so anything it was holding releases -- the engine's `caseD_79`
+        // runs `part_sustain_release` for exactly this.
+        release_sustained(channel, part);
+        break;
+
+    // Mono On accepts a voice count of up to sixteen; Poly On takes only zero. Either mode change
+    // flushes what the part is sounding.
+    case 126:
+        if (value <= 0x10) {
+            part.mono = true;
+            flush_part_voices(channel);
+        }
+        break;
+    case 127:
+        if (value == 0) {
+            part.mono = false;
+            flush_part_voices(channel);
+        }
         break;
 
     default:
         break;
+    }
+}
+
+void ToneGenerator::Impl::commit_data_entry_msb(int channel, Part& part, int value)
+{
+    // Data entry commits whichever of RPN or NRPN was selected last.
+    if (part.data_entry_is_nrpn) {
+        if (!part.rx.nrpn) {
+            return;
+        }
+        switch (part.nrpn_msb) {
+        // 01 xx -- the part modify offsets, the same bytes the sound controllers write.
+        case 0x01:
+            switch (part.nrpn_lsb) {
+            case 0x08:
+                part.vibrato_rate = value;
+                break;
+            case 0x09:
+                part.vibrato_depth = value;
+                break;
+            case 0x0A:
+                part.vibrato_delay = value;
+                break;
+            case 0x20:
+                part.tvf_cutoff = value;
+                break;
+            case 0x21:
+                part.tvf_resonance = value;
+                break;
+            case 0x63:
+                part.env_attack = value;
+                break;
+            case 0x64:
+                part.env_decay = value;
+                break;
+            case 0x66:
+                part.env_release = value;
+                break;
+            default:
+                break;
+            }
+            break;
+
+        // 1x rr -- the drum planes, keyed by the NRPN LSB. The engine applies these only on a
+        // rhythm part (`nrpn_apply` tests the part's drum flag before every plane write).
+        case 0x18:
+            if (is_drum_part(channel)) {
+                part.drum_keys.set_pitch(part.nrpn_lsb, value);
+            }
+            break;
+        case 0x1A:
+            if (is_drum_part(channel)) {
+                part.drum_keys.set_level(part.nrpn_lsb, value);
+            }
+            break;
+        case 0x1C:
+            if (is_drum_part(channel)) {
+                part.drum_keys.set_pan(part.nrpn_lsb, value);
+            }
+            break;
+        case 0x1D:
+            if (is_drum_part(channel)) {
+                part.drum_keys.set_reverb(part.nrpn_lsb, value);
+            }
+            break;
+        case 0x1E:
+            if (is_drum_part(channel)) {
+                part.drum_keys.set_chorus(part.nrpn_lsb, value);
+            }
+            break;
+        case 0x1F:
+            if (is_drum_part(channel)) {
+                part.drum_keys.set_delay(part.nrpn_lsb, value);
+            }
+            break;
+        default:
+            break;
+        }
+        return;
+    }
+
+    if (!part.rx.rpn || part.rpn_is_null() || part.rpn_msb != 0) {
+        return;
+    }
+    switch (part.rpn_lsb) {
+    case 0:
+        part.bend_range = value;
+        break;
+    case 1:
+        part.fine_tune = (value << 7) | (part.fine_tune & 0x7F);
+        break;
+    case 2:
+        part.coarse_tune = value;
+        break;
+    default:
+        break;
+    }
+}
+
+void ToneGenerator::Impl::commit_data_entry_lsb(Part& part, int value)
+{
+    // Only the RPN fine tune keeps its LSB: the bend range ignores cents on this module, and the
+    // NRPN targets are all single-byte.
+    if (part.data_entry_is_nrpn || !part.rx.rpn || part.rpn_is_null()) {
+        return;
+    }
+    if (part.rpn_msb == 0 && part.rpn_lsb == 1) {
+        part.fine_tune = (part.fine_tune & 0x3F80) | (value & 0x7F);
     }
 }
 

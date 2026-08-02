@@ -387,3 +387,193 @@ TEST_CASE("a seek replays state but not notes", "[stream][sccore]")
     }
     CHECK(peak > 0.0);
 }
+
+namespace {
+
+/// Builds a GS DT1 with the checksum the engine verifies: address and data folded to a multiple
+/// of 128.
+[[nodiscard]] std::vector<std::uint8_t> dt1(std::initializer_list<int> address_and_data)
+{
+    std::vector<std::uint8_t> message{0xF0, 0x41, 0x10, 0x42, 0x12};
+    int sum = 0;
+    for (int byte : address_and_data) {
+        message.push_back(static_cast<std::uint8_t>(byte));
+        sum += byte;
+    }
+    message.push_back(static_cast<std::uint8_t>((0x80 - (sum & 0x7F)) & 0x7F));
+    message.push_back(0xF7);
+    return message;
+}
+
+} // namespace
+
+TEST_CASE("the controller set the engine dispatches is handled", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    // CC#94 is the delay send's controller alias.
+    generator.send_channel(0xB0, 94, 55);
+    CHECK(generator.part(0).delay_send == 55);
+
+    // Bank select LSB is stored; 42 is outside the 1-4 map range and selects nothing.
+    generator.send_channel(0xB0, 32, 42);
+    CHECK(generator.part(0).bank_lsb == 42);
+
+    // Soft pedal is binary at bit 6.
+    generator.send_channel(0xB0, 67, 0x3F);
+    CHECK_FALSE(generator.part(0).soft);
+    generator.send_channel(0xB0, 67, 0x40);
+    CHECK(generator.part(0).soft);
+
+    // The sound controllers land on the shared modify offsets.
+    generator.send_channel(0xB0, 71, 0x50);
+    generator.send_channel(0xB0, 72, 0x51);
+    generator.send_channel(0xB0, 73, 0x52);
+    generator.send_channel(0xB0, 74, 0x53);
+    generator.send_channel(0xB0, 75, 0x54);
+    generator.send_channel(0xB0, 76, 0x55);
+    generator.send_channel(0xB0, 77, 0x56);
+    generator.send_channel(0xB0, 78, 0x57);
+    CHECK(generator.part(0).tvf_resonance == 0x50);
+    CHECK(generator.part(0).env_release == 0x51);
+    CHECK(generator.part(0).env_attack == 0x52);
+    CHECK(generator.part(0).tvf_cutoff == 0x53);
+    CHECK(generator.part(0).env_decay == 0x54);
+    CHECK(generator.part(0).vibrato_rate == 0x55);
+    CHECK(generator.part(0).vibrato_depth == 0x56);
+    CHECK(generator.part(0).vibrato_delay == 0x57);
+}
+
+TEST_CASE("RPN fine and coarse tune move the part's static tune", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    // Coarse tune +2 semitones: RPN 00/02, data entry 0x42.
+    generator.send_channel(0xB0, 101, 0);
+    generator.send_channel(0xB0, 100, 2);
+    generator.send_channel(0xB0, 6, 0x42);
+    CHECK(generator.part(0).coarse_tune == 0x42);
+    CHECK_THAT(generator.part(0).tune_milli_semitones(), WithinAbs(2000.0, 1e-9));
+
+    // Fine tune fully sharp: +100 cents at 0x3FFF, to 14-bit precision.
+    generator.send_channel(0xB0, 100, 1);
+    generator.send_channel(0xB0, 6, 0x7F);
+    generator.send_channel(0xB0, 38, 0x7F);
+    CHECK(generator.part(0).fine_tune == 0x3FFF);
+
+    // The null RPN parks data entry: this commit must reach nothing.
+    generator.send_channel(0xB0, 101, 0x7F);
+    generator.send_channel(0xB0, 100, 0x7F);
+    generator.send_channel(0xB0, 6, 0x10);
+    CHECK(generator.part(0).coarse_tune == 0x42);
+    CHECK(generator.part(0).bend_range == 2);
+
+    // Reset All Controllers takes only a zero data byte, then parks the selection and lifts the
+    // pedals; the tuning stays.
+    generator.send_channel(0xB0, 101, 0);
+    generator.send_channel(0xB0, 100, 0);
+    generator.send_channel(0xB0, 6, 12);
+    CHECK(generator.part(0).bend_range == 12);
+    generator.send_channel(0xB0, 121, 1);
+    CHECK(generator.part(0).bend_range == 12);
+    generator.send_channel(0xB0, 121, 0);
+    CHECK(generator.part(0).bend_range == 12);
+    CHECK(generator.part(0).coarse_tune == 0x42);
+    generator.send_channel(0xB0, 6, 3);
+    CHECK(generator.part(0).bend_range == 12);
+}
+
+TEST_CASE("the NRPN modify set shares bytes with the sound controllers", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    generator.send_channel(0xB0, 99, 0x01);
+    generator.send_channel(0xB0, 98, 0x20);
+    generator.send_channel(0xB0, 6, 0x30);
+    CHECK(generator.part(0).tvf_cutoff == 0x30);
+
+    // The drum planes only land on a rhythm part.
+    generator.send_channel(0xB0, 99, 0x1A);
+    generator.send_channel(0xB0, 98, 46);
+    generator.send_channel(0xB0, 6, 0x20);
+    CHECK_FALSE(generator.part(0).drum_keys.level(46).has_value());
+
+    generator.send_channel(0xB9, 99, 0x1A);
+    generator.send_channel(0xB9, 98, 46);
+    generator.send_channel(0xB9, 6, 0x20);
+    CHECK(generator.part(9).drum_keys.level(46) == 0x20);
+}
+
+TEST_CASE("GS part parameters arrive over SysEx", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    // Block 1 is channel 0. Part level, then the panpot's true zero -- RND, which CC#10 cannot
+    // reach.
+    generator.send_sysex(dt1({0x40, 0x11, 0x19, 90}));
+    CHECK(generator.part(0).volume() == 90);
+    generator.send_sysex(dt1({0x40, 0x11, 0x1C, 0}));
+    CHECK(generator.part(0).pan == 0);
+
+    // A wrong checksum drops the message, as the engine's receive parser does.
+    std::vector<std::uint8_t> bad = dt1({0x40, 0x11, 0x19, 41});
+    bad[bad.size() - 2] = (bad[bad.size() - 2] + 1) & 0x7F;
+    generator.send_sysex(bad);
+    CHECK(generator.part(0).volume() == 90);
+
+    // Key shift is clamped to the engine's 0x28-0x58.
+    generator.send_sysex(dt1({0x40, 0x11, 0x16, 0x10}));
+    CHECK(generator.part(0).key_shift == 0x28);
+
+    // Scale tuning arrives as a run of twelve.
+    generator.send_sysex(dt1({0x40, 0x11, 0x40, 0x40, 0x42, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,
+                              0x40, 0x40, 0x40, 0x40}));
+    CHECK(generator.part(0).scale_tuning[1] == 0x42);
+    CHECK_THAT(generator.part(0).scale_offset_milli_semitones(61), WithinAbs(20.0, 1e-9));
+
+    // Rx channel off detaches the part.
+    generator.send_sysex(dt1({0x40, 0x11, 0x02, 0x10}));
+    generator.send_channel(0x90, 60, 100);
+    CHECK(generator.note_count() == 0);
+
+    // Master volume and the GS reset, which returns everything to power-on.
+    generator.send_sysex(dt1({0x40, 0x00, 0x04, 50}));
+    CHECK(generator.part(1).master() == 50);
+    generator.send_sysex(dt1({0x40, 0x00, 0x7F, 0x00}));
+    CHECK(generator.part(0).volume() == 100);
+    CHECK(generator.part(0).pan == 64);
+    CHECK(generator.part(0).master() == 127);
+    generator.send_channel(0x90, 60, 100);
+    CHECK(generator.note_count() == 1);
+}
+
+TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    // 41 x2 kk is the level plane; it lands on the port's rhythm part.
+    generator.send_sysex(dt1({0x41, 0x02, 40, 100, 101, 102}));
+    CHECK(generator.part(9).drum_keys.level(40) == 100);
+    CHECK(generator.part(9).drum_keys.level(41) == 101);
+    CHECK(generator.part(9).drum_keys.level(42) == 102);
+    CHECK_FALSE(generator.part(0).drum_keys.level(40).has_value());
+
+    // Assign group clamps to the engine's 1-4.
+    generator.send_sysex(dt1({0x41, 0x03, 40, 7}));
+    CHECK(generator.part(9).drum_keys.group(40) == 4);
+}

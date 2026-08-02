@@ -57,7 +57,81 @@ void DrumKeyOverrides::reset() noexcept
 {
     pitch_.fill(0);
     pan_.fill(-1);
+    play_key_.fill(-1);
+    level_.fill(-1);
+    group_.fill(-1);
+    reverb_.fill(-1);
+    chorus_.fill(-1);
+    delay_.fill(-1);
     any_ = false;
+}
+
+namespace {
+
+/// Shared plumbing for the drum-setup planes: one value per key, -1 meaning "follow the kit".
+void set_plane(std::array<int, DrumKitTable::key_count>& plane, int note, int entry, bool& any)
+{
+    if (note < 0 || note >= DrumKitTable::key_count) {
+        return;
+    }
+    plane[static_cast<std::size_t>(note)] = entry;
+    any = true;
+}
+
+[[nodiscard]] std::optional<int> read_plane(const std::array<int, DrumKitTable::key_count>& plane,
+                                            int note)
+{
+    if (note < 0 || note >= DrumKitTable::key_count || plane[static_cast<std::size_t>(note)] < 0) {
+        return std::nullopt;
+    }
+    return plane[static_cast<std::size_t>(note)];
+}
+
+} // namespace
+
+void DrumKeyOverrides::set_play_key(int note, int entry) noexcept
+{
+    set_plane(play_key_, note, entry, any_);
+}
+
+void DrumKeyOverrides::set_level(int note, int entry) noexcept
+{
+    set_plane(level_, note, entry, any_);
+}
+
+void DrumKeyOverrides::set_group(int note, int entry) noexcept
+{
+    set_plane(group_, note, entry, any_);
+}
+
+void DrumKeyOverrides::set_reverb(int note, int entry) noexcept
+{
+    set_plane(reverb_, note, entry, any_);
+}
+
+void DrumKeyOverrides::set_chorus(int note, int entry) noexcept
+{
+    set_plane(chorus_, note, entry, any_);
+}
+
+void DrumKeyOverrides::set_delay(int note, int entry) noexcept
+{
+    set_plane(delay_, note, entry, any_);
+}
+
+std::optional<int> DrumKeyOverrides::play_key(int note) const noexcept
+{
+    return read_plane(play_key_, note);
+}
+
+std::optional<int> DrumKeyOverrides::level(int note) const noexcept
+{
+    return read_plane(level_, note);
+}
+
+std::optional<int> DrumKeyOverrides::group(int note) const noexcept
+{
+    return read_plane(group_, note);
 }
 
 void DrumKeyOverrides::set_pitch(int note, int entry) noexcept

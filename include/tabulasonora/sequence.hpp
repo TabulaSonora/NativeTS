@@ -69,11 +69,40 @@ public:
     /// Records a panpot override for one key, used directly as the key's pan.
     void set_pan(int note, int entry) noexcept;
 
+    /// Records an absolute play-key override for one key, from drum-setup SysEx `41 m1 kk`.
+    ///
+    /// Unlike the pitch NRPN this is not relative: the value replaces the kit's coarse-pitch
+    /// plane entry outright.
+    void set_play_key(int note, int entry) noexcept;
+
+    /// Records a level override for one key, replacing the kit's level plane entry.
+    void set_level(int note, int entry) noexcept;
+
+    /// Records an assign-group override for one key.
+    void set_group(int note, int entry) noexcept;
+
+    /// Records per-key send depths, from NRPN `1D`/`1E`/`1F` or drum-setup SysEx.
+    ///
+    /// Latched but not yet consumed: the mixer runs one send bus per part, so scaling a single
+    /// key's contribution needs per-voice send gains it does not have yet.
+    void set_reverb(int note, int entry) noexcept;
+    void set_chorus(int note, int entry) noexcept;
+    void set_delay(int note, int entry) noexcept;
+
     /// The coarse-pitch offset held for a key, in NRPN steps of one semitone.
     [[nodiscard]] int pitch_offset(int note) const noexcept;
 
     /// The panpot held for a key, or nothing when the key follows its kit record.
     [[nodiscard]] std::optional<int> pan(int note) const noexcept;
+
+    /// The absolute play-key override for a key, or nothing when it follows the kit.
+    [[nodiscard]] std::optional<int> play_key(int note) const noexcept;
+
+    /// The level override for a key, or nothing when it follows the kit.
+    [[nodiscard]] std::optional<int> level(int note) const noexcept;
+
+    /// The assign-group override for a key, or nothing when it follows the kit.
+    [[nodiscard]] std::optional<int> group(int note) const noexcept;
 
     /// Resolves the panpot for one strike, spreading a randomly-panned key.
     ///
@@ -95,6 +124,13 @@ public:
 private:
     std::array<int, DrumKitTable::key_count> pitch_{};
     std::array<int, DrumKitTable::key_count> pan_{};
+    // The drum-setup planes, -1 where the key follows its kit record.
+    std::array<int, DrumKitTable::key_count> play_key_{};
+    std::array<int, DrumKitTable::key_count> level_{};
+    std::array<int, DrumKitTable::key_count> group_{};
+    std::array<int, DrumKitTable::key_count> reverb_{};
+    std::array<int, DrumKitTable::key_count> chorus_{};
+    std::array<int, DrumKitTable::key_count> delay_{};
     bool any_ = false;
 };
 
