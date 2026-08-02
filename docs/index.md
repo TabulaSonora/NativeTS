@@ -34,6 +34,12 @@ auto result = renderer.render_file("song.mid", {
 | \subpage spec | The normative specification this engine is built to |
 | [API reference](annotated.html) | Every public type |
 
+Or hear it first. The same engine is live at
+[**tabula-sonora.kddlb.cl**](https://tabula-sonora.kddlb.cl) — a
+[player](https://tabula-sonora.kddlb.cl/) for Standard MIDI Files and a
+[live instrument](https://tabula-sonora.kddlb.cl/live), running in the browser with nothing to
+build. It needs the same DLL this library does, and reads it in the page.
+
 ## The library, by area
 
 The headers under `include/tabulasonora` divide the way the engine does. Everything is in

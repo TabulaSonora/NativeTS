@@ -4,6 +4,12 @@
 application that serves it. Not a demo and not a thin remote control over a server: the same
 ts::ToneGenerator block loop the command line drives, running in the browser's sandbox.
 
+It is live at [**tabula-sonora.kddlb.cl**](https://tabula-sonora.kddlb.cl). Everything below
+describes that deployment, so it is worth having open: the
+[player](https://tabula-sonora.kddlb.cl/) is the first page and the
+[live instrument](https://tabula-sonora.kddlb.cl/live) the second. Supply a DLL and it plays;
+nothing here needs building to be read against the running thing.
+
 ```sh
 cmake --preset web && cmake --build --preset web   # needs the emsdk on PATH
 cd web && npm install && npm run build
@@ -48,8 +54,8 @@ Driving a progress bar from the renderer would show the song finishing before it
 
 | | |
 |---|---|
-| `/` | the **player**: load a Standard MIDI File, drive the transport, mix it while it runs, export it to WAV |
-| `/live` | the **instrument**: a controller or the on-screen keyboard, every sound the ROM holds, and the drum maps |
+| [`/`](https://tabula-sonora.kddlb.cl/) | the **player**: load a Standard MIDI File, drive the transport, mix it while it runs, export it to WAV |
+| [`/live`](https://tabula-sonora.kddlb.cl/live) | the **instrument**: a controller or the on-screen keyboard, every sound the ROM holds, and the drum maps |
 
 The split is not cosmetic: loading a file and driving a transport has nothing in common with
 connecting a controller and playing, and each was burying the other's panels. Navigating changes

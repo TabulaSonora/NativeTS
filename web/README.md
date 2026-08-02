@@ -1,9 +1,14 @@
 # Tabula Sonora — the web player
 
 The engine, compiled to WebAssembly, behind the same two-page player the retired Blazor deployment
-served: Player (`/`) for Standard MIDI Files and Live (`/live`) for playing the instrument. Fully
-client-side — the user supplies `SCCore.dll`, it is hashed and cached in IndexedDB, and nothing
-leaves the tab.
+served: Player ([`/`](https://tabula-sonora.kddlb.cl/)) for Standard MIDI Files and Live
+([`/live`](https://tabula-sonora.kddlb.cl/live)) for playing the instrument. Fully client-side —
+the user supplies `SCCore.dll`, it is hashed and cached in IndexedDB, and nothing leaves the tab.
+
+Live at [**tabula-sonora.kddlb.cl**](https://tabula-sonora.kddlb.cl). The long-form write-up — the
+thread model, the sound-set browser, what the browser is allowed to remember — is
+[the documentation's page on this build](https://tabulasonora.github.io/NativeTS/web.html);
+this file is the build and deploy procedure only.
 
 ## Architecture
 

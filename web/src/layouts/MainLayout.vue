@@ -45,6 +45,13 @@
         <p class="colophon">
             <a href="https://github.com/TabulaSonora/NativeTS" target="_blank" rel="noopener">Source on GitHub</a>
             &middot;
+            <!-- The published documentation, and specifically the page about this build: what the
+                 three threads are, why the export is byte-identical to the command line, and what
+                 the browser is allowed to remember. -->
+            <a href="https://tabulasonora.github.io/NativeTS/web.html" target="_blank" rel="noopener">How this page works</a>
+            &middot;
+            <a href="https://tabulasonora.github.io/NativeTS/" target="_blank" rel="noopener">Documentation</a>
+            &middot;
             <a href="https://github.com/TabulaSonora/NativeTS/blob/main/LICENSE" target="_blank" rel="noopener">BSD 3-Clause</a>
             &middot;
             <a href="https://github.com/TabulaSonora/NativeTS/blob/main/NOTICE.md" target="_blank" rel="noopener">Third-party rights</a>

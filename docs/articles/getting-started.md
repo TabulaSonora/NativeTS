@@ -11,6 +11,14 @@ build and refuses any other, because a different build moves every table offset:
 | SHA-256 | `117e6aa147a96fbde5e10d2caf16c89965acc1e44235fd245992216cc620bdb1` |
 | PE timestamp | 2019-10-30 |
 
+That build is the one shipped in **SOUND Canvas VA 1.1.6**. The release number is how you find the
+right installer and nothing more — the DLL carries no version resource, so the hash, the size and
+the timestamp are what identify it.
+
+\note If all you want is to hear the engine, you do not need any of what follows. The same code
+runs at [tabula-sonora.kddlb.cl](https://tabula-sonora.kddlb.cl), which takes the same DLL and
+reads it in the browser — see \ref web.
+
 You also need CMake 3.24 or newer, a C++20 compiler, and
 [vcpkg](https://github.com/microsoft/vcpkg) with `VCPKG_ROOT` set.
 

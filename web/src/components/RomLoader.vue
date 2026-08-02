@@ -42,6 +42,11 @@
                 This needs <code>SCCore.dll</code> from your own Sound Canvas VA installation —
                 exactly 27,347,456 bytes. It is read and cached in this browser, on this machine,
                 and is never uploaded.
+                <!-- Which build, and why only that one, is a fair question to have at the file
+                     picker. The answer is long enough to belong in the documentation rather than
+                     on the panel. -->
+                <a href="https://tabulasonora.github.io/NativeTS/getting-started.html"
+                   target="_blank" rel="noopener">Which build, and why</a>.
             </p>
 
             <!-- The one primary action while the page is still behind this gate. Once a ROM is
