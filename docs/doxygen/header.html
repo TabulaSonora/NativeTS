@@ -6,6 +6,22 @@
 <meta http-equiv="X-UA-Compatible" content="IE=11"/>
 <meta name="generator" content="Doxygen $doxygenversion"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
+<!-- The LoSnoCo typefaces are served from LoSnoCo's own host rather than bundled, the same four
+     stylesheets and the same family names the app at tabula-sonora.kddlb.cl loads. The connection
+     and the sheets are worth starting before the parser reaches the links below, and the two faces
+     every page actually sets type in are worth starting before the sheets are even parsed: Inter
+     for everything that is prose, and the ligature-free Iosevka for every identifier. -->
+<link rel="preconnect" href="https://assets.losno.co" crossorigin/>
+<link rel="preload" as="style" href="https://assets.losno.co/fonts/inter/stylesheet.css"/>
+<link rel="preload" as="style" href="https://assets.losno.co/fonts/IosevkaLoSnoCo/IosevkaLoSnoCo.css"/>
+<link rel="preload" as="style" href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLig/IosevkaLoSnoCoNoLig.css"/>
+<link rel="preload" as="style" href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLigQp/IosevkaLoSnoCoNoLigQp.css"/>
+<link rel="preload" as="font" type="font/ttf" crossorigin href="https://assets.losno.co/fonts/inter/InterVariableLoSnoCo.ttf"/>
+<link rel="preload" as="font" type="font/woff2" crossorigin href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLig/WOFF2/IosevkaLoSnoCoNoLig-Regular.woff2"/>
+<link rel="stylesheet" href="https://assets.losno.co/fonts/inter/stylesheet.css"/>
+<link rel="stylesheet" href="https://assets.losno.co/fonts/IosevkaLoSnoCo/IosevkaLoSnoCo.css"/>
+<link rel="stylesheet" href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLig/IosevkaLoSnoCoNoLig.css"/>
+<link rel="stylesheet" href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLigQp/IosevkaLoSnoCoNoLigQp.css"/>
 <!--BEGIN PROJECT_NAME--><title>$projectname: $title</title><!--END PROJECT_NAME-->
 <!--BEGIN !PROJECT_NAME--><title>$title</title><!--END !PROJECT_NAME-->
 <!--BEGIN PROJECT_ICON-->
@@ -29,6 +45,12 @@ $search
 $mathjax
 $darkmode
 $mermaidjs
+<!-- Re-themes the Mermaid instance $mermaidjs just initialised, which Doxygen gives the stock
+     palette and no way to configure. It has to come after that line and stay a module, so that
+     both run in the same deferred pass and this one wins. Doxygen emits $mermaidjs on every page
+     whether or not it has a graph, so this one costs a page without graphs nothing but the fetch,
+     and does nothing on it. -->
+<script type="module" src="$relpath^losnoco-mermaid.js"></script>
 <link href="$relpath^$stylesheet" rel="stylesheet" type="text/css" />
 $extrastylesheet
 <!-- doxygen-awesome: dark-mode toggle, copy buttons on code fragments, and anchor links on
@@ -38,6 +60,34 @@ $extrastylesheet
 <script type="text/javascript" src="$relpath^doxygen-awesome-fragment-copy-button.js"></script>
 <script type="text/javascript" src="$relpath^doxygen-awesome-paragraph-link.js"></script>
 <script type="text/javascript">
+    // Each of those three wraps its init() in jQuery -- $(fn), $(document).ready(fn) and, in the
+    // toggle, $(window).resize(fn). Doxygen has not shipped jQuery since 1.11, so on 1.17 the
+    // first call throws ReferenceError, takes the other two down with it, and the theme silently
+    // loses its dark-mode toggle, its copy buttons and its heading anchors. Those three call
+    // shapes are the whole of the dependency, and every one of them means "run this when the DOM
+    // is ready" or "run this on resize", so that is all this stands in for. It is deliberately not
+    // a jQuery: anything else the vendored scripts might one day ask of $ should fail loudly here
+    // rather than quietly do the wrong thing.
+    function $(target) {
+        const whenReady = (callback) => {
+            if (document.readyState === "loading") {
+                document.addEventListener("DOMContentLoaded", callback, { once: true })
+            } else {
+                callback()
+            }
+        }
+
+        if (typeof target === "function") {
+            whenReady(target)
+            return
+        }
+
+        return {
+            ready: whenReady,
+            resize: (callback) => window.addEventListener("resize", callback),
+        }
+    }
+
     DoxygenAwesomeDarkModeToggle.init()
     DoxygenAwesomeFragmentCopyButton.init()
     DoxygenAwesomeParagraphLink.init()

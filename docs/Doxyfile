@@ -106,17 +106,27 @@ WARN_FORMAT            = "$file:$line: $text"
 # that matches the Doxygen version in .github/workflows/docs.yml -- a mismatch between the two is
 # the usual cause of broken styling. GENERATE_TREEVIEW and HTML_COLORSTYLE=LIGHT are both
 # requirements of the sidebar-only variant, not preferences.
+#
+# losnoco.css puts the result in the LoSnoCo design language, the one the app at
+# tabula-sonora.kddlb.cl is built in. It is last on purpose: it overrides doxygen-awesome and
+# has to load after it.
 
 GENERATE_HTML          = YES
 HTML_OUTPUT            = docs
 HTML_FILE_EXTENSION    = .html
 HTML_HEADER            = docs/doxygen/header.html
 HTML_EXTRA_STYLESHEET  = docs/doxygen/doxygen-awesome/doxygen-awesome.css \
-                         docs/doxygen/doxygen-awesome/doxygen-awesome-sidebar-only.css
+                         docs/doxygen/doxygen-awesome/doxygen-awesome-sidebar-only.css \
+                         docs/doxygen/losnoco.css
 HTML_EXTRA_FILES       = docs/doxygen/doxygen-awesome/doxygen-awesome-darkmode-toggle.js \
                          docs/doxygen/doxygen-awesome/doxygen-awesome-fragment-copy-button.js \
-                         docs/doxygen/doxygen-awesome/doxygen-awesome-paragraph-link.js
+                         docs/doxygen/doxygen-awesome/doxygen-awesome-paragraph-link.js \
+                         docs/doxygen/losnoco-mermaid.js
 HTML_COLORSTYLE        = LIGHT
+# The inheritance diagrams are raster, drawn by Doxygen itself rather than from the stylesheet, so
+# the only say the palette gets over them is this hue. 170 is the teal the rest of the theme reads
+# as interactive; doxygen-awesome inverts them for the dark page.
+HTML_COLORSTYLE_HUE    = 170
 GENERATE_TREEVIEW      = YES
 DISABLE_INDEX          = NO
 FULL_SIDEBAR           = NO

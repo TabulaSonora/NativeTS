@@ -1,0 +1,543 @@
+/*
+ * The LoSnoCo design language, applied to Doxygen.
+ *
+ * The engine's own pages at tabula-sonora.kddlb.cl are built on the LoSnoCo token sheet
+ * (web/src/css/losnoco.css); this file puts the documentation on the same footing without
+ * forking doxygen-awesome. It does two things, in this order:
+ *
+ *   1. declares the LoSnoCo tokens;
+ *   2. points every doxygen-awesome variable at one of them, and restyles the handful of
+ *      elements the upstream theme does not express as a variable.
+ *
+ * Both themes come out of one set of declarations. Colours that differ between light and
+ * dark are written as light-dark(), which resolves from the `color-scheme` doxygen-awesome
+ * already sets on <html> for its two dark selectors -- the media query and the .dark-mode
+ * class its toggle applies. That is the load-bearing assumption here: if a future
+ * doxygen-awesome drops those `color-scheme: dark` declarations, this file goes light-only.
+ *
+ * The mapping in (2) sits in a rule that applies to both themes, because the variables it
+ * reads resolve where they are used, not where they are written. Its selector is `html:root`
+ * rather than plain `html` so it outranks doxygen-awesome's own `html.dark-mode` block --
+ * a bare `html` would lose on specificity whatever order the sheets load in.
+ *
+ * Load this last: it is the third HTML_EXTRA_STYLESHEET, after doxygen-awesome and its
+ * sidebar-only companion.
+ */
+
+
+/* ── LoSnoCo tokens ───────────────────────────────────────────────────────────────────── */
+
+html:root {
+    /* Brand. Orange and teal appear together in the logo only, never as alternating UI
+       accents. Teal #0DF2C9 is a dark-surface value, so on light pages the interactive
+       teal is #00967F. */
+    --orange:      #F25E0D;                       /* Kevin / "Lo" */
+    --teal:        #0DF2C9;                       /* Chris / "Sno" -- dark surfaces only */
+    --teal-light:  light-dark(#00967F, #0DF2C9);  /* links, focus, active state */
+    --purple:      #7B41B9;                       /* tags, annotations, selection */
+
+    /* #7B41B9 is a background value on the dark page -- as text it disappears into it. The
+       lifted variant is the editor theme's entity.name.type, so it is still a LoSnoCo colour
+       rather than an invented one. */
+    --purple-text: light-dark(#7B41B9, #B07AE0);
+
+    --white: #FFFFFF;
+
+    /* Surfaces. Warm off-white in light, cool teal-tinted near-black in dark. */
+    --bg:            light-dark(#F4F3F0, #111C1A);
+    --surface:       light-dark(#ECEAE5, #182926);
+    --surface-2:     light-dark(#E4E2DC, #1E332F);
+    --surface-3:     light-dark(#D8D5CE, #243D38);
+    --border:        light-dark(#D8D5CE, #243D38);
+    --border-strong: light-dark(#B8B5AE, #2F524B);
+    --muted:         light-dark(#888880, #7A9E98);
+    --muted-2:       light-dark(#ADABA5, #567873);
+    --text:          light-dark(#1A1917, #E5EFED);
+
+    /* Code surfaces are the deliberate exception: they keep the dark terminal treatment on
+       the light page too, so there is nothing to switch. */
+    --code-bg:        #111C1A;
+    --code-inline-bg: #182926;
+    --code-border:    #2F524B;
+    --code-text:      #E5EFED;
+    --code-muted:     #7A9E98;
+    --code-rule:      #243D38;  /* the gutter hairline -- the dark theme's surface-3 */
+
+    /* Syntax, from references/LoSnoCo-color-theme.json. These are absolute because the
+       surface under them is: a listing looks the same on either page. */
+    --syn-keyword:  #0DF2C9;  /* keyword, keyword.control, storage.type */
+    --syn-type:     #B07AE0;  /* entity.name.type */
+    --syn-function: #5EFAD4;  /* entity.name.function, keyword.operator */
+    --syn-string:   #F8A06B;  /* string */
+    --syn-comment:  #7A9E98;  /* comment */
+
+    /* Semantic states */
+    --ring:        var(--teal-light);
+    --ring-offset: var(--bg);
+    --error:       light-dark(#C0392B, #E07060);
+    --success:     light-dark(#22AA99, #2ED9B8);
+    --shadow:      light-dark(rgb(0 0 0 / 0.1), rgb(0 0 0 / 0.4));
+
+    /* Type. Sans is variable across 100-900, so any weight below is exact. Mono ships four
+       static weights -- 100 / 400 / 700 / 900 -- and nothing here asks for another. The
+       "Web" aliases are the family names the per-family stylesheets on assets.losno.co
+       declare, and match what web/index.html loads. */
+    --font-sans:       'Inter LoSnoCo', ui-sans-serif, system-ui, sans-serif;
+    --font-mono:       'Iosevka LoSnoCo', 'Iosevka LoSnoCo Web', ui-monospace, 'SF Mono', Menlo, monospace;
+    --font-mono-nolig: 'Iosevka LoSnoCo NoLig', 'Iosevka LoSnoCo NoLig Web', ui-monospace, 'SF Mono', Menlo, monospace;
+    --font-mono-qp:    'Iosevka LoSnoCo NoLig QP', 'Iosevka LoSnoCo NoLig QP Web', ui-monospace, 'SF Mono', Menlo, monospace;
+
+    --text-display:    2.8125rem;
+    --text-heading:    1.625rem;
+    --text-subheading: 1.0625rem;
+    --text-body:       0.9375rem;
+    --text-technical:  0.8375rem;
+    --text-label:      0.6875rem;
+
+    --lh-body:      1.7;
+    --lh-technical: 1.6;
+
+    --tracking-display:    -0.03em;
+    --tracking-heading:    -0.02em;
+    --tracking-subheading: -0.01em;
+    --tracking-label:       0.20em;
+
+    /* Spacing -- multiplicative, so the steps read as distinct */
+    --space-xs:  0.25rem;
+    --space-sm:  0.5rem;
+    --space-md:  1rem;
+    --space-lg:  1.5rem;
+
+    /* Radii */
+    --radius-container: 10px;
+    --radius-card:       8px;
+    --radius-btn:        6px;
+    --radius-code:       3px;
+    --radius-tag:       99px;
+
+    --content-width: 820px;
+
+    /* Motion. Short and eased, never bouncy. */
+    --dur-fast:   100ms;
+    --dur-quick:  160ms;
+    --dur-slow:   420ms;
+    --ease-out:   cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Insurance for the one case doxygen-awesome leaves implicit: the reader is on a dark system
+   but has forced light mode with the toggle. Without this the used color-scheme is `normal`,
+   which light-dark() reads as light -- correct today, but only by default. */
+html.light-mode { color-scheme: light; }
+
+
+/* ── doxygen-awesome variables, mapped onto those tokens ──────────────────────────────── */
+
+html:root {
+    /* Teal is the interactive register: links, arrows, focus, the active tree item. Orange
+       is spent on section labels alone, which is the whole of its job here. */
+    --primary-color:       var(--teal-light);
+    --link-color:          var(--teal-light);
+    --primary-dark-color:  var(--text);
+    --on-primary-color:    var(--bg);
+
+    /* Used for the "you followed a link to here" highlight and the border that comes with
+       it, so it has to work as both a fill and an outline. */
+    --primary-light-color: color-mix(in srgb, var(--teal-light) 22%, transparent);
+
+    --page-background-color:           var(--bg);
+    --page-foreground-color:           var(--text);
+    --page-secondary-foreground-color: var(--muted);
+    --separator-color:                 var(--border);
+
+    --border-radius-large:  var(--radius-container);
+    --border-radius-medium: var(--radius-card);
+    --border-radius-small:  var(--radius-btn);
+
+    --spacing-small:  var(--space-xs);
+    --spacing-medium: var(--space-sm);
+    --spacing-large:  var(--space-md);
+    --spacing-xlarge: var(--space-lg);
+
+    /* Shadows only where something is structurally above the page -- popped search results,
+       the member cards. Nothing ornamental. */
+    --box-shadow: 0 4px 24px var(--shadow);
+    --odd-color:  color-mix(in srgb, var(--text) 4%, transparent);
+
+    --menu-focus-foreground:   var(--on-primary-color);
+    --menu-focus-background:   var(--teal-light);
+    --menu-selected-background: color-mix(in srgb, var(--purple) 14%, transparent);
+
+    --side-nav-background:  var(--surface);
+    --side-nav-foreground:  var(--text);
+
+    /* doxygen-awesome hides the tree's disclosure arrows until the row is hovered, which leaves
+       no way to tell an expandable entry from a leaf without going looking for it. They are the
+       tree's only affordance; they stay on. */
+    --side-nav-arrow-opacity: 1;
+    --side-nav-arrow-hover-opacity: 1;
+    --searchbar-background: var(--surface);
+    --searchbar-foreground: var(--text);
+
+    --blockquote-background: var(--surface);
+    --blockquote-foreground: var(--muted);
+    --tablehead-background:  var(--surface);
+    --tablehead-foreground:  var(--text);
+
+    /* Inline code and fenced blocks, both on the dark terminal palette */
+    --code-background:   var(--code-inline-bg);
+    --code-foreground:   var(--code-text);
+    --fragment-background: var(--code-bg);
+    --fragment-foreground: var(--code-text);
+
+    /* Doxygen's keywordtype is `int` / `void` / `float`. The editor theme colours those with
+       the keywords, as storage.type; lending them the type register instead keeps a listing
+       legible and stays inside the palette. Cross-referenced identifiers -- mostly functions
+       -- take the function colour, which is also what tells them apart from the rest. */
+    --fragment-keyword:     var(--syn-keyword);
+    --fragment-keywordflow: var(--syn-keyword);
+    --fragment-keywordtype: var(--syn-type);
+    --fragment-preprocessor: var(--syn-keyword);
+    --fragment-token:       var(--syn-string);
+    --fragment-comment:     var(--syn-comment);
+    --fragment-link:        var(--syn-function);
+    --fragment-linenumber-color:      var(--code-border);
+    --fragment-linenumber-background: var(--code-inline-bg);
+    --fragment-linenumber-border:     var(--code-rule);
+
+    --font-family:           var(--font-sans);
+    --font-family-monospace: var(--font-mono-nolig);
+
+    --page-font-size:       var(--text-body);
+    --navigation-font-size: var(--text-technical);
+    --toc-font-size:        var(--text-technical);
+    --code-font-size:       var(--text-technical);
+    --title-font-size:      var(--text-heading);
+    --memtitle-font-size:   var(--text-subheading);
+
+    --content-line-height: var(--lh-body);
+    --content-maxwidth:    var(--content-width);
+    --webkit-scrollbar-color: var(--border-strong);
+
+    --animation-duration: var(--dur-quick);
+
+    /* Admonitions. Each is one brand colour in three roles -- a tint for the fill, the colour
+       itself for the rule and the term, and the colour pulled most of the way to the page's
+       text for the body. Mixing against --text is what makes them work in both themes from a
+       single declaration. */
+    --warning-color:        color-mix(in srgb, var(--orange) 8%, var(--bg));
+    --warning-color-dark:   var(--orange);
+    --warning-color-darker: color-mix(in srgb, var(--orange) 60%, var(--text));
+
+    --note-color:        color-mix(in srgb, var(--teal-light) 8%, var(--bg));
+    --note-color-dark:   var(--teal-light);
+    --note-color-darker: color-mix(in srgb, var(--teal-light) 60%, var(--text));
+
+    --todo-color:        color-mix(in srgb, var(--purple-text) 8%, var(--bg));
+    --todo-color-dark:   var(--purple-text);
+    --todo-color-darker: color-mix(in srgb, var(--purple-text) 60%, var(--text));
+
+    --deprecated-color:        color-mix(in srgb, var(--muted) 12%, var(--bg));
+    --deprecated-color-dark:   var(--muted);
+    --deprecated-color-darker: color-mix(in srgb, var(--muted) 60%, var(--text));
+
+    --bug-color:        color-mix(in srgb, var(--error) 8%, var(--bg));
+    --bug-color-dark:   var(--error);
+    --bug-color-darker: color-mix(in srgb, var(--error) 60%, var(--text));
+
+    --invariant-color:        color-mix(in srgb, var(--success) 8%, var(--bg));
+    --invariant-color-dark:   var(--success);
+    --invariant-color-darker: color-mix(in srgb, var(--success) 60%, var(--text));
+}
+
+
+/* ── Type ─────────────────────────────────────────────────────────────────────────────── */
+
+/* Titles are sentence case and tightly tracked; the scale is semantic rather than numeric,
+   so only the weight and tracking are set here and doxygen-awesome keeps the sizing it needs
+   for its layout. */
+div.contents h1, .PageDoc h1, div.header .title {
+    font-weight: 800;
+    letter-spacing: var(--tracking-display);
+}
+
+div.contents h2:not(.groupheader):not(.memtitle),
+div.contents h3 {
+    font-weight: 700;
+    letter-spacing: var(--tracking-heading);
+}
+
+div.contents h4, div.contents h5, div.contents h6 {
+    font-weight: 600;
+    letter-spacing: var(--tracking-subheading);
+}
+
+/* The section label: uppercase, 11px, 700, +0.2em, orange. Doxygen's group headers are
+   exactly that -- "Public Member Functions", "Detailed Description" -- and they are the only
+   orange on the page. */
+h2.groupheader, div.contents h2.groupheader {
+    font-size: var(--text-label);
+    font-weight: 700;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    color: var(--orange);
+    border-bottom: none;
+    margin-top: var(--space-lg);
+}
+
+h2.groupheader a, h2.groupheader a:hover {
+    color: var(--orange);
+}
+
+/* The member card's own title is a signature, not a label, so it stays mono and cased. */
+h2.memtitle {
+    font-family: var(--font-mono-nolig);
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+/* The sidebar head. The version is metadata: mono, tabular, receded. */
+#projectname {
+    font-weight: 800;
+    letter-spacing: var(--tracking-display);
+}
+
+#projectnumber {
+    font-family: var(--font-mono-qp);
+    font-size: var(--text-technical);
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+}
+
+#projectbrief {
+    color: var(--muted);
+    line-height: var(--lh-technical);
+}
+
+/* Paths read as paths. The breadcrumb is one, and so is every file and include line. */
+#nav-path ul li, .contents .directory td.entry, div.contents .headertitle .title .ingroups {
+    font-family: var(--font-mono-qp);
+    font-variant-numeric: tabular-nums;
+}
+
+
+/* ── Code ─────────────────────────────────────────────────────────────────────────────── */
+
+/* Inline code sits on the dark inline surface with no outline -- the fill is the boundary --
+   and at the 3px radius the scale reserves for it. Identifiers get the ligature-free build so
+   an operator in a name is not fused into a glyph that is not there. */
+code, span.tt, .memname code {
+    font-family: var(--font-mono-nolig);
+    font-variant-numeric: tabular-nums;
+    border: 0;
+    border-radius: var(--radius-code);
+    padding: 0.1em 0.4em;
+}
+
+/* Fenced blocks and listings are terminals, so they take the ligature build. */
+div.fragment, pre.fragment {
+    font-family: var(--font-mono);
+    border: 2px solid var(--code-border);
+    border-radius: var(--radius-card);
+}
+
+div.fragment div.line, pre.fragment {
+    line-height: var(--lh-technical);
+}
+
+/* An #include is a keyword.control.import, which the editor theme sets in italic. It is the
+   one thing separating it from the surrounding keywords, since the hue is shared. */
+div.fragment span.preprocessor {
+    font-style: italic;
+}
+
+/* The copy button is chrome over a dark surface; it should read as part of the terminal. */
+doxygen-awesome-fragment-copy-button {
+    background: var(--code-inline-bg);
+    border-color: var(--code-border);
+}
+
+doxygen-awesome-fragment-copy-button doxygen-awesome-fragment-copy-button-icon,
+doxygen-awesome-fragment-copy-button svg {
+    fill: var(--code-muted);
+}
+
+/* Signatures are not listings. The member tables and the proto blocks carry structure, not
+   syntax, so they stay on the page's own surface rather than following the fragment colour
+   doxygen-awesome hands them.
+
+   The row that follows a group heading needs saying twice: doxygen-awesome singles it out with
+   a longer selector than it uses for the rest, and without matching that selector here the first
+   member under every heading comes out as a black bar with the rest of the table on the page's
+   own surface. */
+div.memproto,
+h2.memtitle,
+h2.memtitle:after,
+table.memberdecls tr.heading + tr[class^='memitem'] td.memItemLeft,
+table.memberdecls tr.heading + tr[class^='memitem'] td.memItemRight,
+table.memberdecls td.memItemLeft,
+table.memberdecls td.memItemRight,
+table.memberdecls .memTemplParams,
+table.memberdecls .memTemplItemLeft,
+table.memberdecls .memTemplItemRight {
+    background: var(--surface);
+}
+
+div.memdoc {
+    background: var(--bg);
+}
+
+/* Same trap, other end of the sheet: doxygen-awesome fills a reference list's term with the
+   inline-code background and then writes the page's own text colour on top of it, which is dark
+   on dark once the code surface stops following the theme. */
+dl.reflist dt {
+    background: var(--surface);
+    color: var(--text);
+}
+
+
+/* ── The tree ─────────────────────────────────────────────────────────────────────────── */
+
+/* The arrowhead is a CSS triangle drawn out of borders, and doxygen-awesome colours it with the
+   faint highlight tint. At full opacity that reads as a smudge, so it takes the metadata colour
+   instead -- present, quiet, and unmistakably teal on the row you are on. */
+#nav-tree span.arrowhead {
+    border-color: var(--muted);
+}
+
+#nav-tree div.item:hover span.arrowhead,
+#nav-tree .selected span.arrowhead {
+    border-color: var(--teal-light);
+}
+
+/* An expanded entry and its subtree are bracketed by hairlines, top and bottom. Doxygen indents
+   the tree by padding each row's own arrow rather than the list that holds it, so the 16px step
+   is the only thing separating a child from the next entry at the parent's level -- and once a
+   subtree runs past a screenful, that step stops being enough to see. The rule closing the group
+   is the answer to "where does this end". */
+#nav-tree li:has(> div.item span.arrowhead.opened) {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: var(--space-xs);
+    margin-bottom: var(--space-xs);
+}
+
+#nav-tree li:has(> div.item span.arrowhead.opened) > div.item {
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-xs);
+    margin-top: var(--space-xs);
+}
+
+/* The outermost entry is the whole tree; bracketing it would only draw a box around everything. */
+#nav-tree > ul > li:first-child,
+#nav-tree > ul > li:first-child > div.item {
+    border: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+
+/* ── Links, tags and state ────────────────────────────────────────────────────────────── */
+
+/* Hover takes a link to the page's text colour and underlines it, rather than lightening it.
+   Scoped to the content: the tree and the tabs signal hover with a surface instead. */
+div.contents a:hover, #nav-path a:hover {
+    color: var(--text);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+/* The `static` / `constexpr` / `noexcept` chips are tags, which is purple's register. */
+span.mlabel {
+    background: color-mix(in srgb, var(--purple) 14%, var(--bg));
+    color: var(--purple-text);
+    border: 1px solid color-mix(in srgb, var(--purple) 35%, transparent);
+    border-radius: var(--radius-tag);
+    font-size: var(--text-label);
+    font-weight: 700;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    padding: 1px 8px;
+}
+
+/* Keyboard navigation is not an afterthought: 2px teal, offset from the target. */
+:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+}
+
+#MSearchField:focus-visible, input:focus-visible {
+    outline-offset: 0;
+}
+
+::selection {
+    /* The skill puts white on teal-light, which holds on the light page but not under the
+       brighter dark-page teal. The page background is within a hair of white and inverts
+       correctly, so it does the same job in both. */
+    background: var(--ring);
+    color: var(--ring-offset);
+}
+
+hr, .contents hr {
+    border: 0;
+    border-top: 1px solid var(--border);
+}
+
+
+/* ── Motion ───────────────────────────────────────────────────────────────────────────── */
+
+/* doxygen-awesome drives most transitions from --animation-duration, already retimed above.
+   These are the ones it leaves at their own value. */
+a, span.mlabel, doxygen-awesome-fragment-copy-button {
+    transition:
+        color            var(--dur-quick) var(--ease-out),
+        background-color var(--dur-quick) var(--ease-out),
+        border-color     var(--dur-quick) var(--ease-out),
+        opacity          var(--dur-quick) var(--ease-out);
+}
+
+#doc-content > div.contents {
+    animation: losnoco-rise-in var(--dur-slow) var(--ease-out) both;
+}
+
+@keyframes losnoco-rise-in {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 1ms !important;
+        animation-delay: 0ms !important;
+        transition-duration: 1ms !important;
+    }
+
+    #doc-content > div.contents {
+        animation: none !important;
+        opacity: 1 !important;
+        transform: none !important;
+    }
+}
+
+
+/* ── Diagrams ─────────────────────────────────────────────────────────────────────────── */
+
+/* Mermaid draws into the page with its own palette; losnoco-mermaid.js hands it this one.
+   The frame around the result is the page's, not the diagram's. */
+div.mermaidgraph {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    padding: var(--space-md) 0;
+    margin: var(--space-md) 0;
+}
+
+/* Doxygen's own inheritance diagrams are raster, drawn from HTML_COLORSTYLE_HUE rather than
+   from anything here, and doxygen-awesome inverts them for the dark page. Sitting them on the
+   page background keeps the seam invisible in light mode. */
+div.contents div.dyncontent img,
+div.contents center img {
+    background: var(--white);
+    border-radius: var(--radius-btn);
+}
