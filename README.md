@@ -102,10 +102,13 @@ The two players are not built by default, since they are the only things that pu
 backend and a UI toolkit:
 
 ```
-cmake --preset player && cmake --build --preset player
+cmake --preset player && cmake --build --preset player      # player-vs on Windows
 ```
 
-`tabula-sonora-play` is a one-line transport, and stays usable when stdin is a pipe.
+Both players build on Windows as well: ftxui carries its own console support, and the transport
+reads the console through `conio` — scan codes rather than escape sequences, with no terminal mode
+to take or restore. `tabula-sonora-play` is a one-line transport, and stays usable when stdin is a
+pipe.
 `tabula-sonora-tui` is a full-screen mixer over the *running* engine: sixteen parts with the tone
 each program resolved to, live volume, expression and pan, a per-channel voice count, and mute and
 solo that take effect on a note already sounding. Both drive the same `ts::audio` core, so the ring
