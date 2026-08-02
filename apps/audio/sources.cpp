@@ -37,6 +37,41 @@ StreamingSource::StreamingSource(NoteRenderer& notes,
 {
     length_ = player_.last_event_position()
               + static_cast<std::int64_t>(tail_seconds * ToneGenerator::sample_rate);
+    channels_ = options.channels;
+}
+
+void StreamingSource::capture(EngineSnapshot& into) const
+{
+    into.live = true;
+    into.position = player_.position();
+    into.active_voices = generator_.active_voices();
+    into.note_count = generator_.note_count();
+    into.drum_kit = generator_.drum_kit();
+
+    for (PartSnapshot& part : into.parts) {
+        part.voices = 0;
+    }
+
+    const VoicePool& pool = generator_.voices();
+    for (const Voice& voice : pool.active()) {
+        const int channel = voice.channel();
+        if (channel >= 0 && channel < static_cast<int>(into.parts.size())) {
+            ++into.parts[static_cast<std::size_t>(channel)].voices;
+        }
+    }
+
+    for (std::size_t i = 0; i < into.parts.size(); ++i) {
+        const Part& part = generator_.part(static_cast<int>(i));
+        PartSnapshot& slot = into.parts[i];
+
+        slot.program = part.program;
+        slot.bank = part.bank;
+        slot.volume = part.volume();
+        slot.expression = part.expression();
+        slot.pan = part.pan;
+        slot.muted = channels_ != nullptr && channels_->is_muted(static_cast<int>(i));
+        slot.soloed = channels_ != nullptr && channels_->is_soloed(static_cast<int>(i));
+    }
 }
 
 void StreamingSource::set_position(std::int64_t frame)

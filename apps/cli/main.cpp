@@ -1,5 +1,6 @@
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
+#include "tabulasonora/rom_locator.hpp"
 #include "tabulasonora/send_effects.hpp"
 #include "tabulasonora/sequence_player.hpp"
 #include "tabulasonora/sequence_renderer.hpp"
@@ -411,17 +412,25 @@ int main(int argc, char** argv)
     CLI::App app{"A native implementation of the Roland Sound Canvas VA synth voice.",
                  "tabula-sonora"};
     app.require_subcommand(1);
+    app.footer("The ROM is found from --dll, then $TS_SCCORE_DLL, then ./SCCore.dll.");
 
     CLI::App* manifest = app.add_subcommand("manifest", "Show the pinned DLL build and table map.");
 
+    // One option, added to every subcommand that needs a ROM. It is not a positional because it
+    // usually is not typed at all: TS_SCCORE_DLL pins it for the shell, and a command then names
+    // only its actual subject.
     std::string dll_path;
+    const auto add_dll = [&dll_path](CLI::App* command) {
+        command->add_option("--dll", dll_path, "Path to SCCore.dll; overrides TS_SCCORE_DLL");
+    };
+
     CLI::App* info = app.add_subcommand("info", "Verify an SCCore.dll and describe it.");
-    info->add_option("dll", dll_path, "Path to SCCore.dll")->required();
+    add_dll(info);
 
     fs::path output_directory;
     CLI::App* extract =
         app.add_subcommand("extract-tables", "Write every static table out as a .bin slice.");
-    extract->add_option("dll", dll_path, "Path to SCCore.dll")->required();
+    add_dll(extract);
     extract->add_option("output", output_directory, "Directory to write into")->required();
 
     int program = 0;
@@ -432,7 +441,7 @@ int main(int argc, char** argv)
     fs::path output_file;
     CLI::App* render_note =
         app.add_subcommand("render-note", "Render one note to raw interleaved float32.");
-    render_note->add_option("dll", dll_path, "Path to SCCore.dll")->required();
+    add_dll(render_note);
     render_note->add_option("program", program, "Program number, 0-127")->required();
     render_note->add_option("note", note, "MIDI note, 0-127")->required();
     render_note->add_option("velocity", velocity, "MIDI velocity, 1-127")->required();
@@ -447,7 +456,7 @@ int main(int argc, char** argv)
     bool no_delay = false;
     bool stream = false;
     CLI::App* render = app.add_subcommand("render", "Render a Standard MIDI File to a WAV.");
-    render->add_option("dll", dll_path, "Path to SCCore.dll")->required();
+    add_dll(render);
     render->add_option("midi", midi_path, "Input .mid path")->required();
     render->add_option("output", output_file, "Output .wav path")->required();
     render->add_option("--map", map, "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820");
@@ -478,21 +487,29 @@ int main(int argc, char** argv)
 
     int iterations = 3;
     CLI::App* bench = app.add_subcommand("bench", "Time the render path stage by stage.");
-    bench->add_option("dll", dll_path, "Path to SCCore.dll")->required();
+    add_dll(bench);
     bench->add_option("midi", midi_path, "A MIDI file, to also time the two sequence stages");
     bench->add_option("--iterations", iterations, "Runs per stage; the fastest is reported");
 
     CLI11_PARSE(app, argc, argv);
 
     try {
+        // Resolved once, after parsing, so every subcommand reports the same thing when nothing is
+        // pinned and nothing was passed.
+        const ts::RomLocation rom = ts::locate_rom(dll_path);
+        if (!rom.found() && !manifest->parsed() && !dump_effect->parsed()) {
+            throw std::runtime_error(ts::rom_not_found_message(rom));
+        }
+        const std::string dll = rom.path.string();
+
         if (manifest->parsed()) {
             return manifest_command();
         }
         if (info->parsed()) {
-            return info_command(dll_path);
+            return info_command(dll);
         }
         if (extract->parsed()) {
-            return extract_tables_command(dll_path, output_directory);
+            return extract_tables_command(dll, output_directory);
         }
         if (render->parsed()) {
             render_options.reverb = !no_reverb;
@@ -506,17 +523,17 @@ int main(int argc, char** argv)
                 render_options.channels = &mask;
             }
 
-            return render_command(dll_path, midi_path, output_file, map, render_options, stream);
+            return render_command(dll, midi_path, output_file, map, render_options, stream);
         }
         if (bench->parsed()) {
-            return bench_command(dll_path, midi_path, iterations);
+            return bench_command(dll, midi_path, iterations);
         }
         if (dump_effect->parsed()) {
             return dump_effect_command(effect_kind, effect_type, effect_samples, output_file);
         }
         if (render_note->parsed()) {
             return render_note_command(
-                dll_path, program, note, velocity, hold_seconds, output_file, map);
+                dll, program, note, velocity, hold_seconds, output_file, map);
         }
     } catch (const ts::RomIdentityError& error) {
         std::cerr << "tabula-sonora: " << error.what() << '\n';

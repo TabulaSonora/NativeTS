@@ -12,20 +12,28 @@ separate grant.
 
 **Status: it plays.** A Standard MIDI File renders to a WAV that is **byte-for-byte identical to the
 C# engine** — checked on a 123-second, 4,366-note file across all four tone maps and every effect and
-gain option. Faster, too: about 7 seconds against 10.5 for the same render. The real-time block loop
-and the terminal player are in as well.
+gain option. Faster, too: about 7 seconds against 10.5 for the same render. The real-time block loop,
+a terminal player and a full-screen mixer are in as well.
 
 ```
-tabula-sonora render <path>/SCCore.dll song.mid out.wav --map 4
-tabula-sonora render <path>/SCCore.dll song.mid out.wav --stream --solo 1,2
-tabula-sonora render-note <path>/SCCore.dll 48 60 100 1.0 note.f32 4
+tabula-sonora render song.mid out.wav --map 4
+tabula-sonora render song.mid out.wav --stream --solo 1,2
+tabula-sonora render-note 48 60 100 1.0 note.f32 4
 tabula-sonora dump-effect reverb 4 48000 impulse.f32
-tabula-sonora bench <path>/SCCore.dll song.mid    # time the render path stage by stage
-tabula-sonora info <path>/SCCore.dll              # verify a DLL and describe it
-tabula-sonora extract-tables <path>/SCCore.dll tables/
+tabula-sonora bench song.mid                      # time the render path stage by stage
+tabula-sonora info                                # verify a DLL and describe it
+tabula-sonora extract-tables tables/
 
-tabula-sonora-play <path>/SCCore.dll song.mid     # space, arrows, , / . , home, q
+tabula-sonora-play song.mid                       # space, arrows, , / . , home, q
+tabula-sonora-tui  song.mid                       # full-screen mixer
 tabula-sonora-play --list-devices
+```
+
+Every front end finds the ROM the same way: `--dll`, then `$TS_SCCORE_DLL`, then `./SCCore.dll`.
+Pin it once and the path stops appearing in commands:
+
+```
+export TS_SCCORE_DLL=~/roms/SCCore.dll
 ```
 
 `render --stream` drives the same block loop the player does, so the difference the architecture
@@ -80,11 +88,18 @@ arithmetic that is *supposed* to wrap. The `tsan` preset runs only the `ring` la
 that hands blocks to an audio callback is the only concurrent code here; the engine itself is
 single-threaded by contract.
 
-The player is not built by default, since it is the only thing that pulls in an audio backend:
+The two players are not built by default, since they are the only things that pull in an audio
+backend and a UI toolkit:
 
 ```
 cmake --preset player && cmake --build --preset player
 ```
+
+`tabula-sonora-play` is a one-line transport, and stays usable when stdin is a pipe.
+`tabula-sonora-tui` is a full-screen mixer over the *running* engine: sixteen parts with the tone
+each program resolved to, live volume, expression and pan, a per-channel voice count, and mute and
+solo that take effect on a note already sounding. Both drive the same `ts::audio` core, so the ring
+protocol and the transport exist once.
 
 ```
 ./build/release/apps/cli/tabula-sonora manifest
@@ -119,7 +134,7 @@ The wave ROM, the extracted tables and any rendered audio are gitignored. Regene
 your own DLL with the C# tool, which does this by reading the file and never by running it:
 
 ```
-tabula-sonora extract-tables <path>/SCCore.dll tables/
+tabula-sonora extract-tables tables/
 ```
 
 ## Licence

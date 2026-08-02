@@ -27,6 +27,14 @@
         "cli11",
         "miniaudio"
       ]
+    },
+    "tui": {
+      "description": "Build the tabula-sonora-tui full-screen mixer.",
+      "dependencies": [
+        "cli11",
+        "miniaudio",
+        "ftxui"
+      ]
     }
   }
 }

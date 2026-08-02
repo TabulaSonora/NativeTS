@@ -4,6 +4,7 @@
 
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/sequence_player.hpp"
+#include "tabulasonora/sequence_renderer.hpp"
 #include "tabulasonora/tone_generator.hpp"
 
 #include <filesystem>
@@ -53,6 +54,9 @@ private:
 /// reference to the engine and the engine keeps one to the note renderer, which the caller owns.
 class StreamingSource final : public PlaybackSource {
 public:
+    /// Creates a source over a file.
+    ///
+    /// Anything `options` points at -- a channel mask above all -- must outlive this.
     StreamingSource(NoteRenderer& notes,
                     const ToneGeneratorOptions& options,
                     const std::filesystem::path& midi,
@@ -68,7 +72,11 @@ public:
 
     std::size_t read(std::span<float> interleaved, float gain) override;
 
-    /// The engine being driven, so the display can report what it is doing.
+    void capture(EngineSnapshot& into) const override;
+
+    /// The engine being driven.
+    ///
+    /// Only the render thread may touch it: everything a UI needs comes through `capture`.
     [[nodiscard]] const ToneGenerator& generator() const noexcept { return generator_; }
 
 private:
@@ -77,6 +85,7 @@ private:
     std::int64_t length_ = 0;
     std::vector<float> left_;
     std::vector<float> right_;
+    const ChannelMask* channels_ = nullptr;
 };
 
 } // namespace ts::player

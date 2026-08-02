@@ -23,6 +23,7 @@ add_library(tabulasonora
     patches/tone.cpp
     dsp/sampler.cpp
     rom/rom_image.cpp
+    rom/rom_locator.cpp
     rom/table_set.cpp
     rom/wave_rom.cpp
     rom/sha256.cpp

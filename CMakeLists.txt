@@ -20,6 +20,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(TS_BUILD_TESTS  "Build the test suite"          ON)
 option(TS_BUILD_CLI    "Build the tabula-sonora CLI"   ON)
 option(TS_BUILD_PLAYER "Build the terminal player"     OFF)
+option(TS_BUILD_TUI    "Build the full-screen TUI"     OFF)
 
 # ---------------------------------------------------------------------------------------------
 # Numeric semantics. These are not tuning knobs -- they are correctness requirements.
@@ -72,8 +73,16 @@ if(TS_BUILD_CLI)
     add_subdirectory(apps/cli)
 endif()
 
+if(TS_BUILD_PLAYER OR TS_BUILD_TUI)
+    add_subdirectory(apps/audio)
+endif()
+
 if(TS_BUILD_PLAYER)
     add_subdirectory(apps/player)
+endif()
+
+if(TS_BUILD_TUI)
+    add_subdirectory(apps/tui)
 endif()
 
 if(TS_BUILD_TESTS)

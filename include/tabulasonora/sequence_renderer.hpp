@@ -3,7 +3,7 @@
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/sequence.hpp"
 
-#include <cstdint>
+#include <atomic>
 #include <filesystem>
 #include <optional>
 #include <vector>
@@ -14,6 +14,12 @@ namespace ts {
 ///
 /// Read live so a mixer can change it while sound is running; a render takes one snapshot for its
 /// whole duration, or some notes of a part would sound and others not.
+///
+/// The flags are atomic because this is the one place in the library where two threads meet: a UI
+/// thread sets them while the render thread reads them on every note-on. Relaxed ordering is enough
+/// -- each flag stands alone, nothing is published through it, and the only requirement is that a
+/// change is eventually seen and never seen half-written. That is what the reference build's
+/// `Volatile` bought too.
 class ChannelMask {
 public:
     static constexpr int channel_count = 16;
@@ -35,8 +41,8 @@ public:
     [[nodiscard]] bool is_default() const noexcept;
 
 private:
-    std::array<bool, channel_count> muted_{};
-    std::array<bool, channel_count> soloed_{};
+    std::array<std::atomic<bool>, channel_count> muted_{};
+    std::array<std::atomic<bool>, channel_count> soloed_{};
 };
 
 /// How a sequence should be rendered.

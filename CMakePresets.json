@@ -55,12 +55,13 @@
     },
     {
       "name": "player",
-      "displayName": "Release + terminal player",
+      "displayName": "Release + terminal player and TUI",
       "inherits": "release",
       "binaryDir": "${sourceDir}/build/player",
       "cacheVariables": {
         "TS_BUILD_PLAYER": "ON",
-        "VCPKG_MANIFEST_FEATURES": "tests;cli;player"
+        "TS_BUILD_TUI": "ON",
+        "VCPKG_MANIFEST_FEATURES": "tests;cli;player;tui"
       }
     }
   ],
