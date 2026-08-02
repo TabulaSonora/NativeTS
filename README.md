@@ -107,6 +107,45 @@ protocol and the transport exist once.
 
 reports the DLL build the embedded offset map is pinned to.
 
+## Embedding the engine
+
+The library is the deliverable here and the front ends are demonstrations of it, so `ts::tabulasonora`
+is packaged for import. Two ways in, both giving the same target name:
+
+```cmake
+find_package(TabulaSonora REQUIRED)          # against an installed tree
+add_subdirectory(NativeTS)                   # or FetchContent, in-tree
+
+target_link_libraries(host PRIVATE ts::tabulasonora)
+```
+
+```
+cmake --preset release
+cmake --build --preset release
+cmake --install build/release --prefix /usr/local
+```
+
+Installing puts the archive, the headers under `include/tabulasonora`, the package config and
+[`NOTICE.md`](NOTICE.md) in place — the notice travels with the binary because the reverb and chorus
+coefficients are compiled into it. The CLI and the players are not installed; they are built for
+working on the engine, not for shipping.
+
+An importing project needs nothing else. nlohmann_json is a *build* dependency — it parses the two
+embedded assets and is header-only, so it does not appear in the installed package, and neither do
+this project's warning flags. What does come through is `ts::numeric_semantics`, and deliberately:
+`-ffp-contract=off` is a correctness requirement for the inline DSP in the public headers, not a
+preference, so a consumer compiles those headers under it too. C++20 comes through the same way.
+
+Building the library out of tree gets only the library — the tests and the CLI default to off when
+this is not the top-level project, so no consumer is asked for Catch2 or CLI11. The archive is built
+position-independent, so a host can link it into a plugin bundle.
+
+`ctest -L package` is the check that all of the above is true: it installs the build into a scratch
+prefix and configures, builds and runs [`tests/package`](tests/package) against it as a project that
+has never heard of this source tree. The ways an export set breaks — an include directory still
+pointing into the source tree, a private dependency leaking into the interface, a missing standard
+requirement — are all silent here and fatal in somebody else's project.
+
 ## You need your own `SCCore.dll`
 
 The engine is inert without one, from a Sound Canvas VA installation you have licensed. The offsets

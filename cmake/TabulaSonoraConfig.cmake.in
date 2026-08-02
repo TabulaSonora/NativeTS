@@ -1,0 +1,14 @@
+@PACKAGE_INIT@
+
+# The engine has no runtime dependencies to pull in. nlohmann_json is header-only and used only to
+# parse the two embedded assets during the build, so it never reaches this file: the exported target
+# drops it, and a consumer needs nothing installed beyond this package.
+#
+# `ts::tabulasonora` links `ts::numeric_semantics` publicly, and that is deliberate rather than an
+# oversight of scope. Several public headers -- StateVariableFilter above all -- carry inline DSP
+# whose IEEE operation sequence is a correctness requirement, so a consumer compiling those headers
+# has to compile them with FMA contraction off, exactly as this project does.
+
+include("${CMAKE_CURRENT_LIST_DIR}/TabulaSonoraTargets.cmake")
+
+check_required_components(TabulaSonora)

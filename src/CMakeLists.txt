@@ -1,9 +1,11 @@
-include(${CMAKE_SOURCE_DIR}/cmake/EmbedAsset.cmake)
+# PROJECT_ rather than CMAKE_ throughout: under add_subdirectory or FetchContent the source root
+# belongs to the consuming project, and every one of these paths would resolve into their tree.
+include(${PROJECT_SOURCE_DIR}/cmake/EmbedAsset.cmake)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 
-ts_embed_asset(TS_MANIFEST_SOURCE "${CMAKE_SOURCE_DIR}/assets/manifest.json" manifest_json)
-ts_embed_asset(TS_PRESETS_SOURCE  "${CMAKE_SOURCE_DIR}/assets/presets.json"  presets_json)
+ts_embed_asset(TS_MANIFEST_SOURCE "${PROJECT_SOURCE_DIR}/assets/manifest.json" manifest_json)
+ts_embed_asset(TS_PRESETS_SOURCE  "${PROJECT_SOURCE_DIR}/assets/presets.json"  presets_json)
 
 add_library(tabulasonora
     dsp/envelope_machine.cpp
@@ -44,20 +46,50 @@ add_library(tabulasonora
 
 add_library(ts::tabulasonora ALIAS tabulasonora)
 
+# Static unless the consumer asks for shared, and position-independent either way -- a host that
+# links the engine into a plugin bundle needs the static archive to be relocatable.
+set_target_properties(tabulasonora PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}
+    POSITION_INDEPENDENT_CODE ON
+    WINDOWS_EXPORT_ALL_SYMBOLS ON)
+
+# CMAKE_CXX_STANDARD governs this project's own compilation and stops at its edge, so the standard
+# has to be stated as a usage requirement too. The public headers are C++20 on their face -- and the
+# reasons in the README are about semantics the older standards leave undefined, not about syntax --
+# so a consumer that compiled them as C++17 would be wrong even where it happened to build.
+target_compile_features(tabulasonora PUBLIC cxx_std_20)
+
 target_include_directories(tabulasonora
     PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
 
+# A static archive carries its PRIVATE link libraries into INTERFACE_LINK_LIBRARIES as
+# $<LINK_ONLY:...>, so without the $<BUILD_INTERFACE:> wrapping both of these would become
+# requirements of the installed package: importing the engine would demand a warnings target that is
+# nobody else's business, and an nlohmann_json that is header-only and already fully consumed at
+# build time. Wrapped, they apply while this library compiles and vanish from the export.
 target_link_libraries(tabulasonora
     PUBLIC
         ts::numeric_semantics
     PRIVATE
-        ts::warnings
-        nlohmann_json::nlohmann_json)
+        $<BUILD_INTERFACE:ts::warnings>
+        $<BUILD_INTERFACE:nlohmann_json::nlohmann_json>)
 
 # The generated asset sources are machine-written; holding them to the project's warning level
 # would fail the build on formatting nobody controls.
 set_source_files_properties(${TS_MANIFEST_SOURCE} ${TS_PRESETS_SOURCE}
     PROPERTIES COMPILE_OPTIONS "-Wno-everything")
+
+# The rest of the package -- the headers, the config file, the export set this joins -- is in the
+# top-level CMakeLists.txt.
+if(TS_INSTALL)
+    install(TARGETS tabulasonora
+        EXPORT TabulaSonoraTargets
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+endif()

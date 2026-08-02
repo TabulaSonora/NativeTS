@@ -34,6 +34,16 @@
       }
     },
     {
+      "name": "cog",
+      "displayName": "CogRelease",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64;arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "10.15"
+      }
+    },
+    {
       "name": "asan",
       "displayName": "AddressSanitizer + UBSan",
       "inherits": "base",
@@ -70,7 +80,8 @@
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" },
-    { "name": "player", "configurePreset": "player" }
+    { "name": "player", "configurePreset": "player" },
+    { "name": "cog", "configurePreset": "cog" }
   ],
   "testPresets": [
     {
