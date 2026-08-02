@@ -49,6 +49,7 @@ option(TS_BUILD_CLI    "Build the tabula-sonora CLI"   ${PROJECT_IS_TOP_LEVEL})
 option(TS_BUILD_PLAYER "Build the terminal player"     OFF)
 option(TS_BUILD_TUI    "Build the full-screen TUI"     OFF)
 option(TS_BUILD_WEB    "Build the Emscripten web engine module" OFF)
+option(TS_BUILD_DOCS   "Add the Doxygen documentation target"   OFF)
 option(TS_INSTALL      "Generate the install and package rules" ${PROJECT_IS_TOP_LEVEL})
 
 # ---------------------------------------------------------------------------------------------
@@ -141,6 +142,27 @@ endif()
 if(TS_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+# ---------------------------------------------------------------------------------------------
+# Documentation.
+#
+# The docs do not really belong to the build: `doxygen docs/Doxyfile`, run from the source root, is
+# the canonical way to produce them, and it needs neither a compiler, nor vcpkg, nor SCCore.dll --
+# which is what lets CI render the site from a clean clone. This target only spares an editor the
+# trouble of knowing that, so it shells out to exactly the same command.
+#
+# The output therefore lands in <source>/build/docs/html as the Doxyfile says, not under this
+# preset's binary directory.
+# ---------------------------------------------------------------------------------------------
+if(TS_BUILD_DOCS)
+    find_package(Doxygen 1.9.8 REQUIRED)
+
+    add_custom_target(docs
+        COMMAND Doxygen::doxygen "${CMAKE_CURRENT_SOURCE_DIR}/docs/Doxyfile"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMENT "Doxygen -> build/docs/html"
+        VERBATIM)
 endif()
 
 # ---------------------------------------------------------------------------------------------

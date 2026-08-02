@@ -1,0 +1,147 @@
+# Doxygen configuration for Tabula Sonora.
+#
+# Run it from the repository root, not from this directory:
+#
+#     doxygen docs/Doxyfile
+#
+# Every path below is relative to that working directory, and the output lands in build/docs/html
+# whatever preset you last configured -- the docs do not go through CMake at all. That is
+# deliberate: the top-level CMakeLists.txt refuses to configure without a vcpkg toolchain, and
+# rendering HTML should not need a compiler, a toolchain or SCCore.dll. `cmake -DTS_BUILD_DOCS=ON`
+# adds a `docs` target that shells out to exactly this command, for editors that want one.
+
+DOXYFILE_ENCODING      = UTF-8
+PROJECT_NAME           = "Tabula Sonora"
+PROJECT_BRIEF          = "A native C++20 implementation of the Roland Sound Canvas VA synth voice"
+PROJECT_NUMBER         = 0.1.0
+OUTPUT_DIRECTORY       = build/docs
+OUTPUT_LANGUAGE        = English
+
+# ---------------------------------------------------------------------------------------------
+# Input. The order here is the order the pages appear in the sidebar, so the narrative comes
+# first, then the specification, then the API reference Doxygen builds from the headers.
+
+INPUT                  = docs/index.md \
+                         docs/articles/getting-started.md \
+                         docs/articles/architecture.md \
+                         docs/articles/web.md \
+                         docs/articles/verification.md \
+                         docs/spec/index.md \
+                         docs/spec/signal-flow.md \
+                         docs/spec/dll-layout.md \
+                         docs/spec/glossary.md \
+                         include/tabulasonora
+INPUT_ENCODING         = UTF-8
+FILE_PATTERNS          = *.hpp *.md
+RECURSIVE              = NO
+USE_MDFILE_AS_MAINPAGE = docs/index.md
+
+# ---------------------------------------------------------------------------------------------
+# Extraction.
+#
+# EXTRACT_ALL is on because a handful of struct fields are self-evident and carry no comment --
+# the three send levels on ToneGeneratorOptions and RenderOptions, the MultisampleZone fields,
+# the RenderResult buffers, and the ~50 filename constants in TableSet::names. Documenting each
+# would be noise. EXTRACT_ALL also disables WARN_IF_UNDOCUMENTED, so the warning gate below is
+# about real defects -- broken references, unknown commands, malformed markup -- rather than
+# coverage. EXTRACT_PRIVATE stays off so the pimpl `struct Impl;` declarations stay hidden.
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = NO
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+INTERNAL_DOCS          = NO
+CASE_SENSE_NAMES       = SYSTEM
+HIDE_SCOPE_NAMES       = NO
+SHOW_INCLUDE_FILES     = YES
+STRIP_FROM_INC_PATH    = include
+SORT_MEMBER_DOCS       = NO
+SORT_BRIEF_DOCS        = NO
+SORT_MEMBERS_CTORS_1ST = YES
+
+# ---------------------------------------------------------------------------------------------
+# Comment style. The headers were written as prose -- a one-line summary, a blank /// line, then
+# paragraphs with markdown backticks -- with no @brief/@param tags anywhere. JAVADOC_AUTOBRIEF
+# turns that first line into the brief; MARKDOWN_SUPPORT renders the rest as written.
+
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = NO
+MULTILINE_CPP_IS_BRIEF = NO
+MARKDOWN_SUPPORT       = YES
+TOC_INCLUDE_HEADINGS   = 3
+MARKDOWN_ID_STYLE      = DOXYGEN
+AUTOLINK_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+TAB_SIZE               = 4
+DISTRIBUTE_GROUP_DOC   = NO
+INHERIT_DOCS           = YES
+
+# ---------------------------------------------------------------------------------------------
+# Warnings. FAIL_ON_WARNINGS is the gate: it is what the archived C# repository got from
+# `docfx --warningsAsErrors`, and it lives here rather than in CI so a local build enforces the
+# same thing. WARN_NO_PARAMDOC stays off -- this codebase documents parameters in prose, and
+# demanding @param tags would mean rewriting every header for no gain.
+
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_IF_INCOMPLETE_DOC = YES
+WARN_NO_PARAMDOC       = NO
+WARN_AS_ERROR          = FAIL_ON_WARNINGS
+WARN_FORMAT            = "$file:$line: $text"
+
+# ---------------------------------------------------------------------------------------------
+# HTML output. The theme is doxygen-awesome, vendored under docs/doxygen/ and pinned to a release
+# that matches the Doxygen version in .github/workflows/docs.yml -- a mismatch between the two is
+# the usual cause of broken styling. GENERATE_TREEVIEW and HTML_COLORSTYLE=LIGHT are both
+# requirements of the sidebar-only variant, not preferences.
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_FILE_EXTENSION    = .html
+HTML_HEADER            = docs/doxygen/header.html
+HTML_EXTRA_STYLESHEET  = docs/doxygen/doxygen-awesome/doxygen-awesome.css \
+                         docs/doxygen/doxygen-awesome/doxygen-awesome-sidebar-only.css
+HTML_EXTRA_FILES       = docs/doxygen/doxygen-awesome/doxygen-awesome-darkmode-toggle.js \
+                         docs/doxygen/doxygen-awesome/doxygen-awesome-fragment-copy-button.js \
+                         docs/doxygen/doxygen-awesome/doxygen-awesome-paragraph-link.js
+HTML_COLORSTYLE        = LIGHT
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+HTML_DYNAMIC_SECTIONS  = NO
+SEARCHENGINE           = YES
+SERVER_BASED_SEARCH    = NO
+
+# ---------------------------------------------------------------------------------------------
+# Diagrams. Doxygen 1.17 renders Mermaid natively, straight out of ```mermaid fences in the
+# markdown, so the diagrams live next to the prose that explains them rather than in a separate
+# directory. CLIENT_SIDE keeps the build free of Node and the mermaid CLI, at the cost of the
+# published pages fetching mermaid at view time. The URL is pinned rather than left on the
+# floating @11 default so a mermaid release cannot change how the diagrams draw. For an offline
+# build, drop mermaid.esm.min.mjs into the output directory and point MERMAID_JS_URL at
+# './mermaid.esm.min.mjs', or switch MERMAID_RENDER_MODE to CLI.
+#
+# HAVE_DOT is off: there is no \dot in the tree and the only inheritance to draw is Effect and
+# its three subclasses, which the text already says.
+
+MERMAID_RENDER_MODE    = CLIENT_SIDE
+MERMAID_JS_URL         = https://cdn.jsdelivr.net/npm/mermaid@11.12.0/dist/mermaid.esm.min.mjs
+HAVE_DOT               = NO
+CLASS_GRAPH            = YES
+COLLABORATION_GRAPH    = NO
+INCLUDE_GRAPH          = NO
+INCLUDED_BY_GRAPH      = NO
+
+# ---------------------------------------------------------------------------------------------
+# Everything else off. HTML is the deliverable.
+
+GENERATE_LATEX         = NO
+GENERATE_RTF           = NO
+GENERATE_MAN           = NO
+GENERATE_XML           = NO
+GENERATE_DOCBOOK       = NO
+GENERATE_AUTOGEN_DEF   = NO

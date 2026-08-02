@@ -1,0 +1,60 @@
+name: Documentation
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Allow one concurrent deployment; a newer commit supersedes an in-flight one.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+env:
+  # Pinned so the site is reproducible, and matched to the doxygen-awesome release vendored in
+  # docs/doxygen -- a mismatch between the two is the usual cause of silently broken styling.
+  DOXYGEN_VERSION: 1.17.0
+  DOXYGEN_SHA256: 75419ef4f446fc1c24ef12514b574e66e898ee6f527c6ae2ad84f91a905823c2
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ubuntu's own package is usually a release or two behind, and this project's pages rely on
+      # native Mermaid rendering, which is recent. Take the official binary and verify it.
+      - name: Install Doxygen
+        run: |
+          set -euo pipefail
+          url="https://github.com/doxygen/doxygen/releases/download/Release_${DOXYGEN_VERSION//./_}/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz"
+          curl -fsSL -o doxygen.tar.gz "$url"
+          echo "${DOXYGEN_SHA256}  doxygen.tar.gz" | sha256sum -c -
+          mkdir -p "${RUNNER_TEMP}/doxygen"
+          tar xzf doxygen.tar.gz -C "${RUNNER_TEMP}/doxygen" --strip-components=1
+          echo "${RUNNER_TEMP}/doxygen/bin" >> "$GITHUB_PATH"
+
+      # No compiler, no vcpkg and no SCCore.dll: the documentation is rendered from the headers and
+      # the markdown alone, so this works on a clean clone. The warning gate lives in the Doxyfile
+      # (WARN_AS_ERROR = FAIL_ON_WARNINGS) rather than here, so a local build enforces it too.
+      - name: Build the documentation
+        run: doxygen docs/Doxyfile
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/docs/html
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

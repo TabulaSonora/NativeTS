@@ -12,14 +12,14 @@ namespace ts {
 /// harvested values (tap 9118, coefficient 0.484375) finds nothing. They are all there — encoded.
 /// The engine's effect units are programmed through a register file (`param_set_msb` /
 /// `param_set_lsb` at `0x18008f340` / `0x18008f4e0`), and the programs are data: per-character rows
-/// of ring taps stored *relative to a base the loader adds* (`fx_load_dsp_preset` @ `0x18007f840`,
+/// of ring taps stored *relative to a base the loader adds* (`fx_load_dsp_preset` at `0x18007f840`,
 /// base `0x2000` for every GS macro), and coefficient rows in a signed-14-bit floating encoding
-/// (`fixed14_to_float` @ `0x180085170`). Add the base and decode the fixed point, and every
+/// (`fixed14_to_float` at `0x180085170`). Add the base and decode the fixed point, and every
 /// harvested number falls out — verified bit for bit against a live-engine harvest across all eight
 /// reverb macros, all eight chorus macros and both GM defaults, with no residual.
 ///
-/// The register program itself (`fx_apply_reverb_chorus_type` @ `0x18007f490`,
-/// `chorus_apply_params` @ `0x180004090`) contributes the handful of values that are computed
+/// The register program itself (`fx_apply_reverb_chorus_type` at `0x18007f490`,
+/// `chorus_apply_params` at `0x180004090`) contributes the handful of values that are computed
 /// rather than stored: the injection tap from the pre-delay byte, the damping pair from the pre-LPF
 /// ladder, the tank feedback gain from the reverb time, and the chorus tap geometry from the
 /// macro's delay, rate and depth bytes. Those laws are transcribed here with their `float`

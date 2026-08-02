@@ -1,0 +1,199 @@
+# In the browser {#web}
+
+`apps/web` compiles the whole engine to WebAssembly with Emscripten, and `web/` is the Vue 3
+application that serves it. Not a demo and not a thin remote control over a server: the same
+ts::ToneGenerator block loop the command line drives, running in the browser's sandbox.
+
+```sh
+cmake --preset web && cmake --build --preset web   # needs the emsdk on PATH
+cd web && npm install && npm run build
+netlify deploy --prod --dir=web/dist               # manual, replaces the live site
+```
+
+The `web` preset takes its toolchain file from `$EMSDK` and does not involve vcpkg. The built
+module lands in `web/src/engine/generated/`, which is gitignored.
+
+## Three threads
+
+The architecture is the one thing to understand before reading the rest.
+
+```mermaid
+flowchart LR
+    W["Web Worker<br/><small>engine WASM, renders ahead</small>"]
+    R["AudioWorklet ring<br/><small>4 s capacity</small>"]
+    D["device"]
+    M["main thread<br/><small>UI, IndexedDB, Web MIDI</small>"]
+
+    W -->|"256-frame blocks<br/>over a MessagePort"| R
+    R -->|"128 frames<br/>per quantum"| D
+    R -.->|"queue depth,<br/>every 10 ms of audio"| W
+    M -.->|"commands"| W
+```
+
+The engine lives in a dedicated Web Worker, which renders ahead of playback and pushes 256-frame
+blocks straight to the worklet's ring. The worklet reports its queue depth every 10 ms **of
+audio**, and that report — not a timer the browser can delay — is what drives the pump. That is why
+a 30 ms lead holds: the queue only has to cover the render itself, not a missed wake-up.
+
+The main thread does UI, IndexedDB and Web MIDI, and nothing else.
+
+This also satisfies the engine's own contract for free. ts::ToneGenerator documents that events and
+rendering must come from one thread; the worker owns the engine and is that thread. ts::ChannelMask
+is the documented exception, and the mixer changes it live with no rebuild and no gap.
+
+The position shown is the audible one — the renderer's position less whatever is still queued.
+Driving a progress bar from the renderer would show the song finishing before it is heard to.
+
+## Two pages, one engine
+
+| | |
+|---|---|
+| `/` | the **player**: load a Standard MIDI File, drive the transport, mix it while it runs, export it to WAV |
+| `/live` | the **instrument**: a controller or the on-screen keyboard, every sound the ROM holds, and the drum maps |
+
+The split is not cosmetic: loading a file and driving a transport has nothing in common with
+connecting a controller and playing, and each was burying the other's panels. Navigating changes
+which panels are on screen and nothing else — the engine lives in the worker, so the ROM stays
+loaded, a playing song keeps playing, and a held note keeps sounding.
+
+**The one host requirement.** Two client-side routes and one file on disk: a reload on `/live`, or
+a link straight to it, asks the server for a path that was never published. Every static host needs
+a catch-all rewriting unknown paths to `index.html` with status **200** — `netlify.toml` carries
+one, and `python3 -m http.server` does not, so a local deep-link check needs a host that does.
+
+## No harvested presets
+
+The Blazor deployment this replaces had to ship a `presets.json`: the reverb and chorus
+coefficients were believed to exist nowhere in the DLL, and harvesting them meant executing a
+64-bit Windows binary, which a browser cannot do under any circumstances. So a Roland-derived file
+was committed and embedded in the web application.
+
+That file is gone. ts::EffectProgrammer decodes the coefficients from the user's own DLL, in the
+browser, like everywhere else. The web build now carries nothing of Roland's at all.
+
+## What the user has to supply
+
+The engine is inert without `SCCore.dll`, and a web page cannot ship it. The application asks for
+it once, verifies it against the pinned build, and keeps it in an IndexedDB database named
+`tabula-sonora`:
+
+| | |
+|---|---|
+| first visit | full verification — size, PE timestamp and the whole SHA-256 |
+| later visits | size and PE timestamp only, against the hash recorded when it was stored |
+
+Re-hashing 27 MB on every page load would be a second of nothing happening, and the file cannot
+have changed in storage without the record changing with it. The application also asks for
+`navigator.storage.persist()`, without which a record that size is best-effort and can be evicted
+under disk pressure — which would send the user back to the file picker with no explanation.
+
+The bytes go from the picked file into IndexedDB and reach the engine only inside the page. There
+is no upload path and no server to upload to.
+
+ts::RomImage::from_memory exists for this. A browser has no filesystem to give ts::RomImage::open a
+path to, so the image reads out of a span instead; nothing downstream can tell the difference, and
+the test suite asserts as much over every cached table and a slice of each wave-ROM bank.
+
+## The whole sound set
+
+The live page browses what the loaded ROM actually contains, per vintage. The engine sweeps all
+128 banks × 128 programs through ts::PatchDirectory — the same calls it makes on a program
+change, so there is no second lookup path to drift out of step — and reports each slot as one of
+four things:
+
+- **native**, defined by that bank, which a program change sounds;
+- **capital fallback**, empty in that bank, where the module sounds bank 0's tone rather than
+  falling silent, so it is playable but is not the bank's own sound;
+- **indirect-only**, carrying the `0x8000` marker;
+- **unassigned**.
+
+The browser is three columns that narrow — sound map, then instrument, then variant — and that
+order is the point. A bank is not a place a player goes to find a sound: most of its 128 slots are
+the capital tone showing through, so browsing bank 8 means reading 128 entries of which a handful
+are its own. The question worth asking is *which banks define a variation of this instrument*, and
+the answer is usually two or three lines. The instrument column is the capital bank, which is the
+only one every vintage fills completely, grouped by the sixteen General MIDI families — a layout of
+program numbers from the spec, not from the ROM, so the names in it are still the vintage's own.
+
+The bank counts are the vintages themselves: 15 for the SC-55, 24 for the SC-88, 45 for the
+SC-88Pro, 51 for the SC-8820.
+
+Banks **126 and 127** are not variations at all, and the first column lists them as sound maps of
+their own rather than as variants of a Sound Canvas instrument. They are the CM-64 compatibility
+map, so that a file written for Roland's older Computer Music modules plays: 127 is the LA half
+(MT-32 / CM-32L) and 126 the PCM half (CM-32P). Both are identical across all four vintages, as a
+map belonging to no generation should be.
+
+## Drums are not like that
+
+A program change on the drum part does not go through the three-level melodic lookup; it goes
+through ts::DrumKitTable's own pair, whose two map rows are the same whichever vintage is selected.
+The module chooses between those rows from the part's *internal* bank code, which is not reversed,
+so ts::ToneGenerator::drum_map_row is set by the host instead — without it the second map's kits
+cannot be sounded at all.
+
+The two rows are not abstract A and B. The set of programs row 0 defines is exactly the SC-8820's
+kit list and row 1's is exactly the SC-88Pro's, with one addition each row carries and neither list
+mentions: the CM-64/32L kit at program 128.
+
+Keys are named from the melodic tone table, because drum sounds *are* melodic tones. Kit names are
+a different matter: the DLL has none — it will tell you that program 9's key 36 is a `Room Kick 1`,
+but nothing in it says program 9 is `ROOM`. Those names are transcribed from the plugin's
+`SCVSC.drf` and declared in `NOTICE.md` as the one piece of Roland-derived text this repository
+carries. One kit is deliberately unnamed: the CM-64/32L set at program 128, which the ROM defines
+on both rows and neither module's list names.
+
+The reverse-cymbal and SFX kits work. 218 wave descriptors are marked to play backwards and the
+drum kits reach 167 of them; the wave is simply the ordinary data read from the far end back, which
+ts::Sampler does by turning the decoded buffer round — so both renderers get it at once, having
+only the one sampler between them.
+
+## Mixing while it plays
+
+The mixer is sixteen live channel strips, and the two kinds of control on them behave differently
+on purpose:
+
+- **Mute and solo** go to ts::ChannelMask, which sits at the mix where no MIDI message reaches.
+  They take effect on the next block, and nothing a file does can undo them.
+- **The faders send Control Changes** — volume, pan, and the reverb and chorus sends. The engine
+  has no other way in, and tracking the value behind its back would make a second source of truth
+  for something the file also writes. So a running sequence overwrites a fader at its next
+  controller event for that channel, exactly as it would on the module's own front panel.
+
+## Audio out
+
+The engine renders at 32 kHz and the application asks the browser for an `AudioContext` at 32 kHz.
+On a browser that agrees — and they generally do — **nothing resamples anywhere between the final
+mix and the device**, the same property the desktop player gets by opening its device at the
+engine's rate. Where the browser refuses, the transport says so.
+
+The 30 ms lead is a *default* rather than a constant: the Audio panel makes it settable, with the
+queue depth, the realtime factor and the starved-frame count beside it, because where the floor
+actually is depends on the machine, the browser and how many voices are sounding. Anything above
+zero starved frames means the device ran out and invented some.
+
+## What the browser remembers
+
+Three preferences, all in `localStorage`, none derived from anything of Roland's: the colour theme
+under `tabula-sonora.theme`, the engine's vintage and three effect toggles under
+`tabula-sonora.engine`, and the output trim under `tabula-sonora.gain`. The trim has its own key
+because the engine entry's format is shared with the previous deployment of this page, and a fifth
+field would have invalidated every preference already stored there.
+
+**The default is the absence of an entry.** No key exists until the user chooses something other
+than the default, and a value that stops parsing falls back rather than failing. So a visitor who
+never opens either control leaves nothing behind, and a change to what the defaults are reaches
+everyone who never overrode them. Storage access *throws* where a browser has disabled it, and a
+remembered preference is not worth failing a page over, so both directions swallow that and the
+page opens at its defaults instead.
+
+## Exporting, and how the build is checked
+
+The WAV export uses the block loop — the same path as `render --stream` — and the same
+ts::wav::write. A file exported from the browser and one rendered on the command line with matching
+settings are therefore expected to be *byte-identical*, not merely similar, which makes the browser
+build checkable against the command line rather than only against itself.
+
+`apps/web/test/smoke.mjs` is that check, and it runs the module under node: full-hash ROM load,
+catalog sweeps, a real-time render, and a WAV export byte-compared against `tabula-sonora render
+--stream` of the same file — the same file, not a similar one.

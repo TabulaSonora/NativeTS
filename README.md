@@ -175,6 +175,27 @@ has never heard of this source tree. The ways an export set breaks — an includ
 pointing into the source tree, a private dependency leaking into the interface, a missing standard
 requirement — are all silent here and fatal in somebody else's project.
 
+## Documentation
+
+[**tabulasonora.github.io/NativeTS**](https://tabulasonora.github.io/NativeTS/) — the guides
+(getting started, architecture, the browser build, verification), the API reference for every
+public type, and the curated slice of the specification this engine is built to. The
+`.github/workflows/docs.yml` workflow publishes it on every push to `main`.
+
+Building it locally needs [Doxygen](https://www.doxygen.nl/) 1.9.8 or newer — 1.14+ for the Mermaid
+diagrams — and nothing else. No compiler, no vcpkg, no DLL:
+
+```
+doxygen docs/Doxyfile          # from the repository root
+```
+
+The site lands in `build/docs/html`. `cmake -DTS_BUILD_DOCS=ON` adds a `docs` target that runs the
+same command, for editors that want one.
+
+The reference is generated from the header comments, which are complete, and the build treats a
+broken cross-reference or an unknown command as an error rather than a warning. Diagrams are
+Mermaid, rendered by Doxygen itself.
+
 ## You need your own `SCCore.dll`
 
 The engine is inert without one, from a Sound Canvas VA installation you have licensed. The offsets
