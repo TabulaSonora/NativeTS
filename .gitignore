@@ -4,7 +4,7 @@
 # below is derived from that DLL -- its wave ROM, its tables, or its runtime effect state -- and
 # so is not ours to ship.
 #
-#   tabula-sonora extract-tables <SCCore.dll> tables/     -> tables/*.bin
+#   tabula-sonora extract-tables tables/     -> tables/*.bin  (DLL from --dll or $TS_SCCORE_DLL)
 #
 # assets/manifest.json IS tracked: it is the offset map, not the data.
 #
