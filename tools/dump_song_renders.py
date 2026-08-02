@@ -56,13 +56,14 @@ def render(csharp_root, dll, midi, out_path, tone_map, flags):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dll", type=pathlib.Path)
-    parser.add_argument("midi", type=pathlib.Path)
+    parser.add_argument("midi", type=pathlib.Path, nargs="+",
+                        help="one or more MIDI files; each is rendered through every variant")
     parser.add_argument("output", type=pathlib.Path)
     parser.add_argument("--csharp", type=pathlib.Path, default=pathlib.Path("../DotNetAdministravit"))
     arguments = parser.parse_args()
 
     dll = arguments.dll.resolve()
-    midi = arguments.midi.resolve()
+    midis = [m.resolve() for m in arguments.midi]
     csharp_root = arguments.csharp.resolve()
     if not (csharp_root / "src" / "TabulaSonora.Tools").is_dir():
         sys.exit(f"No C# checkout at {csharp_root}.")
@@ -71,7 +72,8 @@ def main():
     with tempfile.TemporaryDirectory() as scratch:
         out_path = pathlib.Path(scratch) / "song.wav"
 
-        for variant in VARIANTS:
+        for midi in midis:
+          for variant in VARIANTS:
             raw, stdout = render(csharp_root, dll, midi, out_path, variant["map"], variant["flags"])
 
             # The 44-byte RIFF header is ours to write; what is being compared is the audio.
@@ -81,9 +83,10 @@ def main():
             notes = int(re.search(r"(\d+) notes", stdout).group(1))
 
             if peak == 0.0:
-                sys.exit(f"map {variant['map']} {variant['flags']} rendered silence.")
+                sys.exit(f"{midi.name} map {variant['map']} {variant['flags']} rendered silence.")
 
             cases.append({
+                "midi": midi.name,
                 "map": variant["map"],
                 "flags": variant["flags"],
                 "frames": len(samples) // 2,
@@ -92,14 +95,15 @@ def main():
                 "sha256": hashlib.sha256(raw).hexdigest(),
                 "audioSha256": hashlib.sha256(audio).hexdigest(),
             })
-            print(f"  map {variant['map']} {' '.join(variant['flags']) or '(default)':38} "
+            print(f"  {midi.name:22} map {variant['map']} "
+                  f"{' '.join(variant['flags']) or '(default)':38} "
                   f"{notes:5} notes  peak {peak:.6f}")
 
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps({
         "_note": ("Reference whole-song renders from the C# engine. Roland-derived: generate "
                   "locally, do not redistribute."),
-        "source": midi.name,
+        "sources": [m.name for m in midis],
         "dllSha256": hashlib.sha256(dll.read_bytes()).hexdigest(),
         "cases": cases,
     }, indent=1), encoding="utf-8")

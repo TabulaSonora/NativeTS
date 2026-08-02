@@ -16,15 +16,20 @@ namespace fs = std::filesystem;
 
 namespace {
 
-[[nodiscard]] fs::path canyon_path()
-{
-    const fs::path path = testdata::repository_root() / "testdata" / "canyon.mid";
-    if (!fs::exists(path)) {
-        SKIP("No testdata/canyon.mid. Any Standard MIDI File will do; the fixture is generated "
-             "from whichever one is there.");
-    }
-    return path;
-}
+/// One file and the fixture recording what an independent reader made of it.
+struct Case {
+    const char* midi;
+    const char* fixture;
+    const char* shape;
+};
+
+/// Both SMF shapes. The format-1 file is the one that matters most here: only a multi-track file
+/// exercises the merge -- the (tick, order) sort and the tempo map walked across interleaved
+/// tracks -- and a single-track format 0 cannot reach that code at all.
+constexpr std::array<Case, 2> all_cases{{
+    {"canyon.mid", "canyon_sequence.json", "format 0, 1 track"},
+    {"canyon-format1.mid", "canyon_format1_sequence.json", "format 1, 8 tracks"},
+}};
 
 } // namespace
 
@@ -38,69 +43,81 @@ TEST_CASE("a MIDI file parses to the same events and notes as an independent rea
     // the final sort has to be stable -- an unstable one can put a note-on ahead of the program
     // change that selects its patch, which does not crash and does not look wrong in a diff of
     // positions. It sounds like the wrong instrument.
-    const fs::path fixture_path = testdata::repository_root() / "fixtures" / "canyon_sequence.json";
-    if (!fs::exists(fixture_path)) {
-        SKIP("No sequence fixture. Generate it with:\n"
-             "  python3 tools/dump_sequence.py testdata/canyon.mid fixtures/canyon_sequence.json");
-    }
+    std::size_t files = 0;
+    for (const Case& test_case : all_cases) {
+        const fs::path midi = testdata::repository_root() / "testdata" / test_case.midi;
+        const fs::path fixture_path = testdata::repository_root() / "fixtures" / test_case.fixture;
+        if (!fs::exists(midi) || !fs::exists(fixture_path)) {
+            continue;
+        }
+        INFO(test_case.midi << " (" << test_case.shape << ")");
+        ++files;
 
-    std::ifstream stream{fixture_path};
-    REQUIRE(stream);
-    const nlohmann::json document = nlohmann::json::parse(stream);
+        std::ifstream stream{fixture_path};
+        REQUIRE(stream);
+        const nlohmann::json document = nlohmann::json::parse(stream);
 
-    const std::vector<MidiEvent> events = smf::read(canyon_path());
-    const auto& expected_events = document.at("events");
+        const std::vector<MidiEvent> events = smf::read(midi);
+        const auto& expected_events = document.at("events");
 
-    REQUIRE(events.size() == expected_events.size());
-    REQUIRE(events.size() > 1000);
+        REQUIRE(events.size() == expected_events.size());
+        REQUIRE(events.size() > 1000);
 
-    for (std::size_t i = 0; i < events.size(); ++i) {
-        INFO("event " << i);
-        const auto& expected = expected_events[i];
-        REQUIRE(events[i].position == expected.at("position").get<std::int64_t>());
+        for (std::size_t i = 0; i < events.size(); ++i) {
+            INFO("event " << i);
+            const auto& expected = expected_events[i];
+            REQUIRE(events[i].position == expected.at("position").get<std::int64_t>());
 
-        if (expected.at("kind").get<std::string>() == "sysex") {
-            REQUIRE(events[i].kind == MidiEventKind::sysex);
-            const auto& bytes = expected.at("sysex");
-            REQUIRE(events[i].sysex.size() == bytes.size());
-            for (std::size_t b = 0; b < bytes.size(); ++b) {
-                REQUIRE(events[i].sysex[b] == bytes[b].get<int>());
+            if (expected.at("kind").get<std::string>() == "sysex") {
+                REQUIRE(events[i].kind == MidiEventKind::sysex);
+                const auto& bytes = expected.at("sysex");
+                REQUIRE(events[i].sysex.size() == bytes.size());
+                for (std::size_t b = 0; b < bytes.size(); ++b) {
+                    REQUIRE(events[i].sysex[b] == bytes[b].get<int>());
+                }
+            } else {
+                REQUIRE(events[i].kind == MidiEventKind::channel);
+                REQUIRE(events[i].status == expected.at("status").get<int>());
+                REQUIRE(events[i].data1 == expected.at("data1").get<int>());
+                REQUIRE(events[i].data2 == expected.at("data2").get<int>());
             }
-        } else {
-            REQUIRE(events[i].kind == MidiEventKind::channel);
-            REQUIRE(events[i].status == expected.at("status").get<int>());
-            REQUIRE(events[i].data1 == expected.at("data1").get<int>());
-            REQUIRE(events[i].data2 == expected.at("data2").get<int>());
+        }
+
+        const Sequence sequence = sequence_builder::build(events);
+        const auto& expected_notes = document.at("notes");
+
+        REQUIRE(sequence.notes.size() == expected_notes.size());
+        REQUIRE(sequence.notes.size() > 1000);
+        CHECK(sequence.last_event_position == document.at("lastEventPosition").get<std::int64_t>());
+
+        for (std::size_t i = 0; i < sequence.notes.size(); ++i) {
+            const NoteRecord& note = sequence.notes[i];
+            const auto& expected = expected_notes[i];
+            INFO("note " << i << " channel " << note.channel << " note " << note.note);
+
+            REQUIRE(note.channel == expected.at("channel").get<int>());
+            REQUIRE(note.note == expected.at("note").get<int>());
+            REQUIRE(note.velocity == expected.at("velocity").get<int>());
+            REQUIRE(note.on == expected.at("on").get<std::int64_t>());
+            REQUIRE(note.off == expected.at("off").get<std::int64_t>());
+            REQUIRE(note.program == expected.at("program").get<int>());
+            REQUIRE(note.bank == expected.at("bank").get<int>());
+            REQUIRE(note.pan == expected.at("pan").get<int>());
+            REQUIRE(note.volume == expected.at("volume").get<int>());
+            REQUIRE(note.expression == expected.at("expression").get<int>());
+            REQUIRE(note.reverb_send == expected.at("reverbSend").get<int>());
+            REQUIRE(note.chorus_send == expected.at("chorusSend").get<int>());
+            REQUIRE(note.delay_send == expected.at("delaySend").get<int>());
+            REQUIRE(note.drum_pitch == expected.at("drumPitch").get<int>());
         }
     }
 
-    const Sequence sequence = sequence_builder::build(events);
-    const auto& expected_notes = document.at("notes");
-
-    REQUIRE(sequence.notes.size() == expected_notes.size());
-    REQUIRE(sequence.notes.size() > 1000);
-    CHECK(sequence.last_event_position == document.at("lastEventPosition").get<std::int64_t>());
-
-    for (std::size_t i = 0; i < sequence.notes.size(); ++i) {
-        const NoteRecord& note = sequence.notes[i];
-        const auto& expected = expected_notes[i];
-        INFO("note " << i << " channel " << note.channel << " note " << note.note);
-
-        REQUIRE(note.channel == expected.at("channel").get<int>());
-        REQUIRE(note.note == expected.at("note").get<int>());
-        REQUIRE(note.velocity == expected.at("velocity").get<int>());
-        REQUIRE(note.on == expected.at("on").get<std::int64_t>());
-        REQUIRE(note.off == expected.at("off").get<std::int64_t>());
-        REQUIRE(note.program == expected.at("program").get<int>());
-        REQUIRE(note.bank == expected.at("bank").get<int>());
-        REQUIRE(note.pan == expected.at("pan").get<int>());
-        REQUIRE(note.volume == expected.at("volume").get<int>());
-        REQUIRE(note.expression == expected.at("expression").get<int>());
-        REQUIRE(note.reverb_send == expected.at("reverbSend").get<int>());
-        REQUIRE(note.chorus_send == expected.at("chorusSend").get<int>());
-        REQUIRE(note.delay_send == expected.at("delaySend").get<int>());
-        REQUIRE(note.drum_pitch == expected.at("drumPitch").get<int>());
+    if (files == 0) {
+        SKIP("No sequence fixtures. Generate them with:\n"
+             "  python3 tools/dump_sequence.py testdata/canyon.mid fixtures/canyon_sequence.json");
     }
+    // Both shapes must actually be present, or the multi-track merge is untested.
+    CHECK(files == all_cases.size());
 }
 
 TEST_CASE("event positions land on the 32-sample render grid", "[midi]")

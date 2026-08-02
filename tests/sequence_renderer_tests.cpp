@@ -22,11 +22,11 @@ namespace fs = std::filesystem;
 
 namespace {
 
-[[nodiscard]] fs::path canyon_path()
+[[nodiscard]] fs::path midi_path(const std::string& name)
 {
-    const fs::path path = testdata::repository_root() / "testdata" / "canyon.mid";
+    const fs::path path = testdata::repository_root() / "testdata" / name;
     if (!fs::exists(path)) {
-        SKIP("No testdata/canyon.mid.");
+        SKIP("No testdata/" + name + ".");
     }
     return path;
 }
@@ -63,8 +63,13 @@ TEST_CASE("a whole song renders identically to the reference engine", "[song][sc
     // resolution, four envelopes, both LFOs, the filter, the drum path with its kits and choke
     // groups, three send effects and the final 16-bit quantisation all have to compose exactly.
     //
-    // Ten variants because the flags change which code paths run at all -- a render with the
-    // reverb disabled never enters the reverb, so a fault there would hide behind the default.
+    // Two files and ten variants each. The flags matter because they change which code paths run
+    // at all -- a render with the reverb disabled never enters the reverb, so a fault there would
+    // hide behind the default.
+    //
+    // The two files matter more. One is format 0, a single track; the other is format 1 with eight.
+    // Only the second exercises the multi-track merge -- the (tick, order) sort and the tempo map
+    // walked across interleaved tracks -- which a single-track file cannot reach at all.
     const fs::path fixture_path = testdata::repository_root() / "fixtures" / "song_renders.json";
     if (!fs::exists(fixture_path)) {
         SKIP("No song fixture. Generate it with:\n"
@@ -72,7 +77,6 @@ TEST_CASE("a whole song renders identically to the reference engine", "[song][sc
              "fixtures/song_renders.json");
     }
 
-    const fs::path midi = canyon_path();
     const RomImage rom =
         RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
 
@@ -82,7 +86,7 @@ TEST_CASE("a whole song renders identically to the reference engine", "[song][sc
     REQUIRE(document.at("dllSha256").get<std::string>() == rom.manifest().dll().sha256);
 
     const auto& cases = document.at("cases");
-    REQUIRE(cases.size() == 10);
+    REQUIRE(cases.size() == 20);
 
     // Each variant is a full 123-second render, so the whole set costs about a minute -- fine in a
     // release build and far too slow under a sanitizer. TS_SONG_GATE_VARIANTS trims it: the
@@ -101,7 +105,10 @@ TEST_CASE("a whole song renders identically to the reference engine", "[song][sc
         if (compared >= limit) {
             break;
         }
-        INFO("map " << entry.at("map").get<int>() << " flags " << entry.at("flags").dump());
+        INFO(entry.at("midi").get<std::string>()
+             << " map " << entry.at("map").get<int>() << " flags " << entry.at("flags").dump());
+
+        const fs::path midi = midi_path(entry.at("midi").get<std::string>());
 
         // A fresh renderer per variant: the wave cache is shared but the noise generator is not
         // meant to carry over, and a render must not depend on what was rendered before it.
