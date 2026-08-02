@@ -1,14 +1,17 @@
 #include "tabulasonora/effect_presets.hpp"
 
-#include "rom/embedded_assets.hpp"
+#include "tabulasonora/effect_programmer.hpp"
 
 #include <nlohmann/json.hpp>
 
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <utility>
 
 namespace ts {
 namespace {
@@ -119,7 +122,89 @@ using nlohmann::json;
     return std::string{std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
 }
 
+std::mutex& gate()
+{
+    static std::mutex instance;
+    return instance;
+}
+
+/// The presets in force, or empty until one is supplied or computed.
+///
+/// A pointer rather than a value so "not set yet" is distinguishable from a default-constructed
+/// set. `defaults` hands out a reference into whichever set is current, so a set that has ever been
+/// current is never destroyed -- `retired` keeps it alive. That is a bounded cost: nothing replaces
+/// the presets in normal use, and a host that pins its own does so once at start-up.
+std::shared_ptr<const EffectPresets>& current()
+{
+    static std::shared_ptr<const EffectPresets> instance;
+    return instance;
+}
+
+std::vector<std::shared_ptr<const EffectPresets>>& retired()
+{
+    static std::vector<std::shared_ptr<const EffectPresets>> instance;
+    return instance;
+}
+
+/// Installs a set, keeping any previous one alive for references already handed out.
+void install(std::shared_ptr<const EffectPresets> presets)
+{
+    if (current()) {
+        retired().push_back(current());
+    }
+    current() = std::move(presets);
+}
+
+/// Resolves the overrides a host may have pinned, in precedence order.
+[[nodiscard]] std::shared_ptr<const EffectPresets> locate()
+{
+    if (const std::optional<std::string> external = presets_from_environment()) {
+        return std::make_shared<const EffectPresets>(EffectPresets::parse(*external));
+    }
+    return nullptr;
+}
+
 } // namespace
+
+EffectPresets
+EffectPresets::from_parts(ReverbPresets reverb, ChorusPresets chorus, DelayPresets delay)
+{
+    EffectPresets presets;
+    presets.reverb_ = std::move(reverb);
+    presets.chorus_ = std::move(chorus);
+    presets.delay_ = std::move(delay);
+    return presets;
+}
+
+void EffectPresets::use(EffectPresets presets)
+{
+    const std::lock_guard<std::mutex> lock{gate()};
+    install(std::make_shared<const EffectPresets>(std::move(presets)));
+}
+
+void EffectPresets::ensure_from(const RomImage& rom)
+{
+    const std::lock_guard<std::mutex> lock{gate()};
+    if (current()) {
+        return;
+    }
+    if (std::shared_ptr<const EffectPresets> pinned = locate()) {
+        install(std::move(pinned));
+        return;
+    }
+    install(std::make_shared<const EffectPresets>(EffectProgrammer::compute(rom)));
+}
+
+bool EffectPresets::available()
+{
+    const std::lock_guard<std::mutex> lock{gate()};
+    if (!current()) {
+        if (std::shared_ptr<const EffectPresets> pinned = locate()) {
+            install(std::move(pinned));
+        }
+    }
+    return current() != nullptr;
+}
 
 EffectPresets EffectPresets::parse(std::string_view text)
 {
@@ -161,15 +246,23 @@ EffectPresets EffectPresets::parse(std::string_view text)
 
 const EffectPresets& EffectPresets::defaults()
 {
-    // The compiled-in set is what makes the engine work out of the box; the environment variable is
-    // for regenerating from a different DLL and checking the two agree.
-    static const EffectPresets instance = [] {
-        if (const std::optional<std::string> external = presets_from_environment()) {
-            return parse(*external);
+    const std::lock_guard<std::mutex> lock{gate()};
+    if (!current()) {
+        if (std::shared_ptr<const EffectPresets> pinned = locate()) {
+            install(std::move(pinned));
         }
-        return parse(assets::presets_json());
-    }();
-    return instance;
+    }
+    if (!current()) {
+        throw std::runtime_error(
+            "Effect presets are not set. They are computed from SCCore.dll when a NoteRenderer "
+            "opens it, so build the renderer before the first effect render -- or call "
+            "EffectPresets::ensure_from(rom), point TABULASONORA_PRESETS at a baked file, or call "
+            "EffectPresets::use().");
+    }
+
+    // Safe to hand out: `install` retires rather than destroys, so this reference outlives any
+    // later replacement.
+    return *current();
 }
 
 } // namespace ts

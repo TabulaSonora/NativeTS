@@ -5,7 +5,6 @@ include(${PROJECT_SOURCE_DIR}/cmake/EmbedAsset.cmake)
 find_package(nlohmann_json CONFIG REQUIRED)
 
 ts_embed_asset(TS_MANIFEST_SOURCE "${PROJECT_SOURCE_DIR}/assets/manifest.json" manifest_json)
-ts_embed_asset(TS_PRESETS_SOURCE  "${PROJECT_SOURCE_DIR}/assets/presets.json"  presets_json)
 
 add_library(tabulasonora
     dsp/envelope_machine.cpp
@@ -16,6 +15,7 @@ add_library(tabulasonora
     dsp/tva_chain.cpp
     dsp/tvf_chain.cpp
     effects/effect_presets.cpp
+    effects/effect_programmer.cpp
     effects/send_effects.cpp
     midi/sequence.cpp
     midi/smf_reader.cpp
@@ -41,7 +41,6 @@ add_library(tabulasonora
     render/sequence_renderer.cpp
     render/wav_writer.cpp
     ${TS_MANIFEST_SOURCE}
-    ${TS_PRESETS_SOURCE}
 )
 
 add_library(ts::tabulasonora ALIAS tabulasonora)
@@ -79,7 +78,7 @@ target_link_libraries(tabulasonora
         $<BUILD_INTERFACE:ts::warnings>
         $<BUILD_INTERFACE:nlohmann_json::nlohmann_json>)
 
-# The generated asset sources are machine-written; holding them to the project's warning level
+# The generated asset source is machine-written; holding them to the project's warning level
 # would fail the build on formatting nobody controls.
 set_source_files_properties(${TS_MANIFEST_SOURCE} ${TS_PRESETS_SOURCE}
     PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")

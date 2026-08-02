@@ -1,6 +1,7 @@
 find_package(Catch2 3 CONFIG REQUIRED)
 
 add_executable(ts_tests
+    effect_programmer_tests.cpp
     effects_tests.cpp
     fixed_tests.cpp
     frame_ring_tests.cpp

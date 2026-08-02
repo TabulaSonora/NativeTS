@@ -18,29 +18,24 @@ for. That file — and everything derived from it — remains Roland Corporation
 
 - the 24 MB wave ROM embedded in it, which is the literal Sound Canvas hardware mask ROM
 - the synth curve, key-follow and patch-directory tables
-- the reverb and chorus coefficients read out of the running engine
+- the reverb and chorus coefficients the engine derives from it
 - any audio decoded or rendered from the above
 
-With one exception, stated below, none of that is committed here and none of it is redistributed.
-`.gitignore` excludes each category. `assets/manifest.json` is tracked because it is a map of
-*where* those tables live, not the tables themselves — the same distinction the upstream
+None of that is committed here and none of it is redistributed. `.gitignore` excludes each
+category. `assets/manifest.json` is tracked because it is a map of *where* those tables live, not
+the tables themselves — the same distinction the upstream
 [TabulaSonora spec](https://github.com/TabulaSonora/spec) draws.
 
-## The exception: `assets/presets.json`
+## No committed coefficient file
 
-`assets/presets.json` — about 27 KB of reverb and chorus coefficients, plus the delay preset table —
-**is** committed, and it is Roland-derived. That is a deliberate departure from the rule above, and
-the reason is that no rule-abiding alternative exists for every host.
-
-Those coefficients are not stored in the DLL. The engine computes them at start-up from the GS macro
-parameters, so the only way to obtain them is to run `SCCore.dll` — a 64-bit Windows binary — and
-read its state. Anyone on a machine that is not Windows x64 cannot do it without borrowing one.
-Shipping the file is what lets the engine have its effects at all on those hosts.
-
-Nothing else changes. The wave ROM, the tables and any rendered audio remain excluded, and the
-engine is still inert without a DLL you supply yourself. If you are redistributing this repository
-and would rather not carry that file, delete it: the engine treats missing presets as a run-time
-condition with instructions attached.
+Earlier versions shipped `assets/presets.json`, ~27 KB of Roland-derived reverb and chorus
+coefficients, because those numbers were believed to be obtainable only by running the DLL — a
+64-bit Windows binary — and reading the engine's start-up state. They are not. The coefficients are
+encoded in the file: per-character tap rows stored relative to a ring base the loader adds, and
+coefficient rows in a signed-14-bit float encoding. `EffectProgrammer` decodes them straight from
+the DLL on any platform, matching a live harvest field for field, so nothing Roland-derived is
+committed. The engine reads its coefficients out of the DLL you supply, exactly as it reads the wave
+ROM and the tables.
 
 ## Obtaining the DLL
 

@@ -161,8 +161,16 @@ int render_note_command(const std::string& path,
 /// directly. Twelve of these comparisons were once green upstream while testing nothing at all --
 /// the fixture windows were shorter than the delays, so both sides were silent and agreed
 /// perfectly. Ask for enough samples to hear something.
-int dump_effect_command(const std::string& kind, int type, int samples, const fs::path& output)
+int dump_effect_command(const std::string& dll,
+                        const std::string& kind,
+                        int type,
+                        int samples,
+                        const fs::path& output)
 {
+    // The coefficients come out of the DLL, so this needs it open even though no note sounds.
+    const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
+    ts::EffectPresets::ensure_from(rom);
+
     std::vector<float> input(static_cast<std::size_t>(samples), 0.0F);
     if (!input.empty()) {
         input[0] = 1.0F;
@@ -497,7 +505,10 @@ int main(int argc, char** argv)
         // Resolved once, after parsing, so every subcommand reports the same thing when nothing is
         // pinned and nothing was passed.
         const ts::RomLocation rom = ts::locate_rom(dll_path);
-        if (!rom.found() && !manifest->parsed() && !dump_effect->parsed()) {
+        // Only `manifest` works without the DLL: it prints the offset map, which is this project's
+        // own. Everything else -- `dump-effect` included, now that the effect coefficients are
+        // computed from the DLL rather than shipped -- needs the file.
+        if (!rom.found() && !manifest->parsed()) {
             throw std::runtime_error(ts::rom_not_found_message(rom));
         }
         const std::string dll = rom.path.string();
@@ -529,7 +540,8 @@ int main(int argc, char** argv)
             return bench_command(dll, midi_path, iterations);
         }
         if (dump_effect->parsed()) {
-            return dump_effect_command(effect_kind, effect_type, effect_samples, output_file);
+            return dump_effect_command(
+                dll, effect_kind, effect_type, effect_samples, output_file);
         }
         if (render_note->parsed()) {
             return render_note_command(

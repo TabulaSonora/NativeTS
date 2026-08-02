@@ -118,19 +118,42 @@ struct DelayPresets {
     std::vector<std::array<int, 10>> raw_presets;
 };
 
+class RomImage;
+
 /// The coefficient sets for the three GS send effects.
 ///
-/// Read out of the live engine rather than fitted to audio: the reverb and chorus coefficients come
-/// from its own runtime-computed state, and the delay presets from its preset table. Within each
-/// effect the topology is identical across all types — only these numbers change, which is why one
-/// implementation runs every type unchanged.
+/// Computed from the DLL rather than fitted to audio: `EffectProgrammer` decodes the reverb and
+/// chorus coefficients out of the engine's own preset tables, and the delay presets come straight
+/// from its preset table. Within each effect the topology is identical across all types — only
+/// these numbers change, which is why one implementation runs every type unchanged.
 class EffectPresets {
 public:
     /// Environment variable that overrides where presets are read from.
     static constexpr std::string_view path_variable = "TABULASONORA_PRESETS";
 
-    /// The presets compiled into this library. Parsed once, on first use.
+    /// The presets in use.
+    ///
+    /// Throws `std::runtime_error` if none have been supplied and none could be found. Ordinarily
+    /// nothing needs to be done: opening a `NoteRenderer` computes them from its ROM.
     [[nodiscard]] static const EffectPresets& defaults();
+
+    /// Computes the presets from the DLL, unless a set is already in force.
+    ///
+    /// An explicit `use`, an environment override and a file beside the executable all take
+    /// precedence — they exist so a host can pin a harvested set, and a computed set must not
+    /// silently replace one. In the ordinary case none of those is present and this fills in the
+    /// computed presets, which match a live harvest bit for bit — see `EffectProgrammer`.
+    static void ensure_from(const RomImage& rom);
+
+    /// Supplies presets explicitly, for a host that manages its own data files.
+    static void use(EffectPresets presets);
+
+    /// Whether presets are available, without throwing.
+    [[nodiscard]] static bool available();
+
+    /// Assembles a preset set from computed parts.
+    [[nodiscard]] static EffectPresets
+    from_parts(ReverbPresets reverb, ChorusPresets chorus, DelayPresets delay);
 
     /// Parses presets from a JSON document.
     ///

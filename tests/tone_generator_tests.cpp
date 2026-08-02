@@ -607,9 +607,9 @@ TEST_CASE("the NRPN-dropped crash still sounds on the SC-55 map", "[stream][scco
 
         int count = 0;
         for (std::size_t i = 1; i < left.size(); ++i) {
-            const double previous = left[i - 1] + right[i - 1];
-            const double current = left[i] + right[i];
-            if ((previous < 0.0) != (current < 0.0)) {
+            const float previous = left[i - 1] + right[i - 1];
+            const float current = left[i] + right[i];
+            if ((previous < 0.0F) != (current < 0.0F)) {
                 ++count;
             }
         }

@@ -31,6 +31,13 @@ namespace ts::testdata {
 /// Skips the current test unless the extracted tables are present. Returns the directory.
 [[nodiscard]] std::filesystem::path require_tables();
 
+/// Skips the current test unless effect presets can be had, computing them from the DLL when it is
+/// present — the same wiring a `NoteRenderer` performs on construction.
+///
+/// Needed because the presets are no longer a compiled-in file: a test that reaches for them
+/// without ever opening a ROM would otherwise depend on some earlier test having opened one.
+void require_effect_presets();
+
 /// The repository root, as baked in at configure time. Fixtures are resolved relative to it.
 [[nodiscard]] const std::filesystem::path& repository_root();
 

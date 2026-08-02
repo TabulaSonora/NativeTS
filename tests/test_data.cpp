@@ -1,6 +1,8 @@
 #include "test_data.hpp"
 
 #include "rom/sha256.hpp"
+#include "tabulasonora/effect_presets.hpp"
+#include "tabulasonora/rom_image.hpp"
 
 #include <catch2/catch_test_macros.hpp>
 
@@ -113,6 +115,21 @@ fs::path require_tables()
              "'tabula-sonora extract-tables <SCCore.dll> tables/'.");
     }
     return *directory;
+}
+
+void require_effect_presets()
+{
+    if (!EffectPresets::available()) {
+        if (const auto path = sccore()) {
+            const RomImage rom = RomImage::open(path->string(), RomVerification::quick);
+            EffectPresets::ensure_from(rom);
+        }
+    }
+
+    if (!EffectPresets::available()) {
+        SKIP("Effect presets unavailable: no SCCore.dll to compute them from and nothing pinned "
+             "through TABULASONORA_PRESETS.");
+    }
 }
 
 } // namespace ts::testdata

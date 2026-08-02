@@ -1,5 +1,7 @@
 #include "tabulasonora/note_renderer.hpp"
 
+#include "tabulasonora/effect_presets.hpp"
+
 #include "tabulasonora/sequence.hpp"
 
 #include "dsp/simd.hpp"
@@ -30,6 +32,9 @@ struct NoteRenderer::Impl {
           lfo(tables),
           pan(tables)
     {
+        // The effect coefficients come out of the same file as everything else, so opening the
+        // renderer is what makes the send effects available -- there is no preset file to find.
+        EffectPresets::ensure_from(rom);
     }
 
     TableSet tables;

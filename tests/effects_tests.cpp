@@ -88,6 +88,8 @@ struct Response {
 
 TEST_CASE("every send-effect network matches the reference by impulse response", "[effects][gate]")
 {
+    testdata::require_effect_presets();
+
     // The Phase 6 gate: all 26 GS networks -- 8 reverb, 8 chorus, 10 delay -- against the reference
     // build's own impulse responses.
     //
@@ -142,6 +144,8 @@ TEST_CASE("every send-effect network matches the reference by impulse response",
 
 TEST_CASE("the presets carry all 26 networks", "[effects]")
 {
+    testdata::require_effect_presets();
+
     const EffectPresets& presets = EffectPresets::defaults();
 
     CHECK(presets.reverb().types.size() == 8);
@@ -194,6 +198,8 @@ TEST_CASE("send gains are linear in the controller", "[effects]")
 
 TEST_CASE("a delay preset compiles to tap lengths and gains", "[effects]")
 {
+    testdata::require_effect_presets();
+
     // This is where round-half-to-even actually matters: no grid follows it, so a tap really can
     // land one sample either side of where the reference put it.
     const DelayPresets& presets = EffectPresets::defaults().delay();
@@ -216,6 +222,8 @@ TEST_CASE("a delay preset compiles to tap lengths and gains", "[effects]")
 
 TEST_CASE("an out-of-range effect type is refused", "[effects]")
 {
+    testdata::require_effect_presets();
+
     CHECK_THROWS_AS(Reverb::for_type(8), std::out_of_range);
     CHECK_THROWS_AS(Chorus::for_type(8), std::out_of_range);
     CHECK_THROWS_AS(SystemDelay::for_type(10), std::out_of_range);
@@ -228,6 +236,8 @@ TEST_CASE("an out-of-range effect type is refused", "[effects]")
 
 TEST_CASE("resetting a network returns it to silence", "[effects]")
 {
+    testdata::require_effect_presets();
+
     // A stale ring would leak the previous song's tail into the next one.
     Reverb reverb = Reverb::for_type(4);
 
