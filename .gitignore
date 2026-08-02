@@ -59,3 +59,6 @@ compile_commands.json
 # Python tooling
 __pycache__/
 *.pyc
+
+# TypeScript incremental build state
+web/tsconfig.tsbuildinfo
