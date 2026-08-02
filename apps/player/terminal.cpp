@@ -1,11 +1,74 @@
 #include "terminal.hpp"
 
-#include <termios.h>
-#include <unistd.h>
-
 #include <cstdint>
 
+#ifdef _WIN32
+#    include <conio.h>
+#    include <io.h>
+#    include <stdio.h>
+#else
+#    include <termios.h>
+#    include <unistd.h>
+#endif
+
 namespace ts::player {
+
+#ifdef _WIN32
+
+// The console equivalent of raw mode comes for free: _kbhit and _getch talk to the console input
+// buffer directly, below stdin's line buffering and echo, so there is no terminal state to take
+// on the way in or restore on the way out.
+
+RawTerminal::RawTerminal()
+{
+    interactive_ = _isatty(_fileno(stdin)) != 0;
+}
+
+RawTerminal::~RawTerminal() = default;
+
+Key RawTerminal::poll() const
+{
+    if (!interactive_ || _kbhit() == 0) {
+        return Key::none;
+    }
+
+    const int byte = _getch();
+
+    // Arrow and navigation keys arrive as two _getch reads: a 0x00 or 0xE0 prefix, then a scan
+    // code. The scan codes are fixed by the console API, not by any terminal's escape dialect.
+    if (byte == 0x00 || byte == 0xE0) {
+        switch (_getch()) {
+        case 'K':
+            return Key::left;
+        case 'M':
+            return Key::right;
+        case 'G':
+            return Key::home;
+        default:
+            return Key::none;
+        }
+    }
+
+    switch (byte) {
+    case ' ':
+        return Key::space;
+    case ',':
+        return Key::comma;
+    case '.':
+        return Key::period;
+    case 'q':
+    case 'Q':
+    case 0x1B:
+        // Escape is a whole key here, never the start of a sequence -- the console reports
+        // sequences through the prefix path above.
+        return Key::quit;
+    default:
+        return Key::none;
+    }
+}
+
+#else
+
 namespace {
 
 /// The mode the terminal was in before the player took it, restored on the way out.
@@ -99,5 +162,7 @@ Key RawTerminal::poll() const
         return Key::none;
     }
 }
+
+#endif
 
 } // namespace ts::player

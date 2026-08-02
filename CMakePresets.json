@@ -91,7 +91,17 @@
       }
     },
     { "name": "debug-vs", "displayName": "Debug (VS)", "inherits": "vs" },
-    { "name": "release-vs", "displayName": "Release (VS)", "inherits": "vs" }
+    { "name": "release-vs", "displayName": "Release (VS)", "inherits": "vs" },
+    {
+      "name": "player-vs",
+      "displayName": "Player and TUI (VS)",
+      "inherits": "vs",
+      "cacheVariables": {
+        "TS_BUILD_PLAYER": "ON",
+        "TS_BUILD_TUI": "ON",
+        "VCPKG_MANIFEST_FEATURES": "tests;cli;player;tui"
+      }
+    }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
@@ -101,7 +111,8 @@
     { "name": "player", "configurePreset": "player" },
     { "name": "cog", "configurePreset": "cog" },
     { "name": "debug-vs", "configurePreset": "debug-vs", "configuration": "Debug" },
-    { "name": "release-vs", "configurePreset": "release-vs", "configuration": "RelWithDebInfo" }
+    { "name": "release-vs", "configurePreset": "release-vs", "configuration": "RelWithDebInfo" },
+    { "name": "player-vs", "configurePreset": "player-vs", "configuration": "RelWithDebInfo" }
   ],
   "testPresets": [
     {
