@@ -57,7 +57,11 @@ EXTRACT_LOCAL_CLASSES  = NO
 HIDE_UNDOC_MEMBERS     = NO
 HIDE_UNDOC_CLASSES     = NO
 INTERNAL_DOCS          = NO
-CASE_SENSE_NAMES       = SYSTEM
+# Pinned rather than left on SYSTEM, which decides from the filesystem and so renames every class
+# page depending on where the site was built: ts::ToneGenerator lands at classts_1_1ToneGenerator
+# on Linux and classts_1_1_tone_generator on Windows. NO is the portable half of that -- the same
+# URLs everywhere, and no collision on a filesystem that cannot tell two symbols apart by case.
+CASE_SENSE_NAMES       = NO
 HIDE_SCOPE_NAMES       = NO
 SHOW_INCLUDE_FILES     = YES
 STRIP_FROM_INC_PATH    = include
