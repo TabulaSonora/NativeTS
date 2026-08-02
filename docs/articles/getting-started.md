@@ -239,6 +239,59 @@ auto dry = renderer.render(sequence, options);
 
 Writing the result out is ts::wav::write.
 
+## Holding the engine {#holding-the-engine}
+
+The chain borrows downward. A ts::NoteRenderer keeps a reference to the image it was built over,
+ts::ToneGenerator and ts::SequenceRenderer keep one to the renderer, and ts::SequencePlayer keeps one
+to the engine — no layer owns anything below it, which is what every *must outlive it* in the headers
+is saying. The snippets above are stack locals in a single scope, and that is all a `main` needs.
+
+A host built the other way cannot do that. A plugin with `startup()` and `shutdown()`, or a session
+object that outlives any one call, holds the chain as members and fills them in later — and
+ts::RomImage has no default constructor and no copy. It exists only as the return of
+ts::RomImage::open or ts::RomImage::from_memory, so at the point the host itself is constructed there
+is nothing to construct a member from.
+
+`std::unique_ptr` is what to reach for, and `std::make_unique<const ts::RomImage>` is well formed: it
+move-constructs the heap object out of whatever the factory returned.
+
+```cpp
+std::unique_ptr<const ts::RomImage> rom;
+std::unique_ptr<ts::NoteRenderer> notes;
+std::unique_ptr<ts::ToneGenerator> engine;
+
+// startup(), in order — each layer needs the one below it to exist first.
+rom    = std::make_unique<const ts::RomImage>(
+             ts::RomImage::open(dll_path, ts::RomVerification::quick));
+notes  = std::make_unique<ts::NoteRenderer>(*rom);
+engine = std::make_unique<ts::ToneGenerator>(*notes, options);
+
+// shutdown(), in reverse — which is also what lets a host reopen against a different DLL.
+engine.reset();
+notes.reset();
+rom.reset();
+```
+
+The pointer rather than the value, because the pointee does not move when the host object does. Hold
+the chain by value in a struct that is later moved and the renderer's reference to the image, and the
+sequence renderer's pointer to the renderer, both go on addressing the moved-from shells. Nothing
+announces it. Behind a `std::unique_ptr` the addresses the layers above captured never change, so the
+question does not arise.
+
+`std::optional<ts::RomImage>` works too — `rom.emplace(ts::RomImage::open(dll_path))` — and is what
+this repository's own WebAssembly session uses, in `apps/web/src/web_session.hpp`. It is the lighter
+choice when the owner is pinned in place and never moved. The pointer is the safer default.
+
+The worked example is [Cog](https://github.com/losnoco/Cog/tree/sparkle/Plugins/MIDI/MIDI)'s MIDI
+plugin: its `TSPlayer` holds a `std::unique_ptr<const ts::RomImage>`, fills it with
+`std::make_unique` in `startup()` and calls `rom.reset()` in `shutdown()` — which is also what lets
+`setSCCore` point the player at a different DLL and rebuild the engine over it, without the player
+object itself going anywhere.
+
+\note ts::RomImage::from_memory adds a second lifetime. Nothing is copied — the bytes are read in
+place — so the buffer has to stay alive and unchanged for as long as the image is used, exactly as a
+file image needs its handle open. A host that supplies memory owns two things, not one.
+
 ## Rendering one note
 
 ts::NoteRenderer exposes the voice directly, which is useful for analysis or for driving your own

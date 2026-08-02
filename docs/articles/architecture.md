@@ -165,6 +165,10 @@ These are all asserted in the test suite, because each one is silent when wrong:
   table.
 - **The velocity level-scale is split** — one byte for the first two envelope segments, another for
   the rest. Sharing one makes later segments run about 1.45× too fast.
+- **Every layer borrows the one below it.** ts::NoteRenderer keeps a reference to the image and
+  ts::SequenceRenderer a raw pointer to the renderer, so a host that holds the chain by value and is
+  then moved leaves both addressing moved-from shells. `std::unique_ptr` members keep the addresses
+  the layers above captured — see \ref getting-started.
 
 ## Fixed-point
 

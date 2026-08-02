@@ -154,6 +154,13 @@ add_subdirectory(NativeTS)                   # or FetchContent, in-tree
 target_link_libraries(host PRIVATE ts::tabulasonora)
 ```
 
+The chain borrows downward — a `NoteRenderer` holds a reference to the `RomImage`, an engine one to
+the renderer — and `RomImage` is factory-only, with no default constructor and no copy. A host that
+outlives a function scope therefore holds the three as `std::unique_ptr` members, built with
+`std::make_unique` in order and reset in reverse, which is what
+[Holding the engine](https://tabulasonora.github.io/NativeTS/getting-started.html#holding-the-engine)
+sets out.
+
 ```
 cmake --preset release
 cmake --build --preset release
