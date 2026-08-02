@@ -1,5 +1,6 @@
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
+#include "tabulasonora/send_effects.hpp"
 #include "tabulasonora/table_manifest.hpp"
 #include "tabulasonora/wave_rom.hpp"
 
@@ -142,6 +143,45 @@ int render_note_command(const std::string& path,
     return 0;
 }
 
+/// Renders one send effect's impulse response to raw interleaved float32.
+///
+/// The A/B harness for the effect networks: an impulse in, the wet tail out, so the two builds diff
+/// directly. Twelve of these comparisons were once green upstream while testing nothing at all --
+/// the fixture windows were shorter than the delays, so both sides were silent and agreed
+/// perfectly. Ask for enough samples to hear something.
+int dump_effect_command(const std::string& kind, int type, int samples, const fs::path& output)
+{
+    std::vector<float> input(static_cast<std::size_t>(samples), 0.0F);
+    if (!input.empty()) {
+        input[0] = 1.0F;
+    }
+    std::vector<float> left(input.size(), 0.0F);
+    std::vector<float> right(input.size(), 0.0F);
+
+    if (kind == "reverb") {
+        ts::Reverb::for_type(type).process(input, left, right);
+    } else if (kind == "chorus") {
+        ts::Chorus::for_type(type).process(input, left, right);
+    } else if (kind == "delay") {
+        ts::SystemDelay::for_type(type).process(input, left, right);
+    } else {
+        throw std::runtime_error("Unknown effect '" + kind
+                                 + "'; expected reverb, chorus or delay.");
+    }
+
+    std::ofstream stream{output, std::ios::binary};
+    if (!stream) {
+        throw std::runtime_error("Cannot write '" + output.string() + "'.");
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        const float frame[2]{left[i], right[i]};
+        stream.write(reinterpret_cast<const char*>(frame), sizeof(frame));
+    }
+
+    std::cout << "wrote " << output.string() << ": " << samples << " stereo samples\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -178,6 +218,16 @@ int main(int argc, char** argv)
     render_note->add_option("output", output_file, "Output .f32 path")->required();
     render_note->add_option("map", map, "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820");
 
+    std::string effect_kind;
+    int effect_type = 0;
+    int effect_samples = 32000;
+    CLI::App* dump_effect =
+        app.add_subcommand("dump-effect", "Render a send effect's impulse response.");
+    dump_effect->add_option("kind", effect_kind, "reverb, chorus or delay")->required();
+    dump_effect->add_option("type", effect_type, "GS type number")->required();
+    dump_effect->add_option("samples", effect_samples, "How many samples to render")->required();
+    dump_effect->add_option("output", output_file, "Output .f32 path")->required();
+
     CLI11_PARSE(app, argc, argv);
 
     try {
@@ -189,6 +239,9 @@ int main(int argc, char** argv)
         }
         if (extract->parsed()) {
             return extract_tables_command(dll_path, output_directory);
+        }
+        if (dump_effect->parsed()) {
+            return dump_effect_command(effect_kind, effect_type, effect_samples, output_file);
         }
         if (render_note->parsed()) {
             return render_note_command(

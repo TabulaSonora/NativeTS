@@ -1,6 +1,7 @@
 find_package(Catch2 3 CONFIG REQUIRED)
 
 add_executable(ts_tests
+    effects_tests.cpp
     fixed_tests.cpp
     interpolator_tests.cpp
     modulation_tests.cpp
