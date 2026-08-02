@@ -122,6 +122,20 @@ protocol and the transport exist once.
 
 reports the DLL build the embedded offset map is pinned to.
 
+### In the browser
+
+The `web` preset compiles the whole engine to WebAssembly with Emscripten — the toolchain file
+comes from `$EMSDK`, and vcpkg is not involved — and `web/` holds the Vue app that serves it: the
+Player and Live pages the retired Blazor deployment had, fully client-side, with the user's own
+`SCCore.dll` cached in the browser. The engine runs in a Web Worker feeding an AudioWorklet, and a
+browser WAV export is byte-identical to `tabula-sonora render --stream` of the same song. See
+`web/README.md`.
+
+```
+cmake --preset web && cmake --build --preset web    # under the emsdk environment
+cd web && npm install && npm run build
+```
+
 ## Embedding the engine
 
 The library is the deliverable here and the front ends are demonstrations of it, so `ts::tabulasonora`

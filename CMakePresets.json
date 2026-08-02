@@ -93,6 +93,31 @@
     { "name": "debug-vs", "displayName": "Debug (VS)", "inherits": "vs" },
     { "name": "release-vs", "displayName": "Release (VS)", "inherits": "vs" },
     {
+      "name": "web",
+      "displayName": "Emscripten web engine",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/web",
+      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS": "-fwasm-exceptions",
+        "TS_BUILD_WEB": "ON",
+        "TS_BUILD_TESTS": "OFF",
+        "TS_BUILD_CLI": "OFF",
+        "TS_INSTALL": "OFF"
+      }
+    },
+    {
+      "name": "web-debug",
+      "displayName": "Emscripten web engine (debug)",
+      "inherits": "web",
+      "binaryDir": "${sourceDir}/build/web-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_CXX_FLAGS": "-fwasm-exceptions -O1 -g"
+      }
+    },
+    {
       "name": "player-vs",
       "displayName": "Player and TUI (VS)",
       "inherits": "vs",
@@ -110,6 +135,8 @@
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "player", "configurePreset": "player" },
     { "name": "cog", "configurePreset": "cog" },
+    { "name": "web", "configurePreset": "web" },
+    { "name": "web-debug", "configurePreset": "web-debug" },
     { "name": "debug-vs", "configurePreset": "debug-vs", "configuration": "Debug" },
     { "name": "release-vs", "configurePreset": "release-vs", "configuration": "RelWithDebInfo" },
     { "name": "player-vs", "configurePreset": "player-vs", "configuration": "RelWithDebInfo" }

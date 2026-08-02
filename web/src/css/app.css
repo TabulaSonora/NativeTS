@@ -1,0 +1,1067 @@
+/*
+    The application's own layer, on top of the LoSnoCo tokens in losnoco.css.
+
+    losnoco.css is a verbatim copy of the design system's colors_and_type.css and is not edited here.
+    Its values are not repeated either: everything below reaches for var(--…), so a change to the
+    system arrives by replacing that one file. What lives in this sheet is only what the system has
+    no opinion about -- a rack of synth panels, sixteen mixer strips and a piano keyboard.
+*/
+
+:root {
+    /*
+        losnoco.css sets color-scheme on its data-theme helpers, so a pinned theme is covered, but
+        the default path -- following prefers-color-scheme -- sets nothing. Without this the native
+        controls this page is built out of (select, range, progress, and the scrollbars) stay in
+        their light rendering over a dark palette.
+    */
+    color-scheme: light dark;
+
+    /*
+        The keyboard is a physical object rather than a UI surface, the same reasoning that leaves
+        the badge logo alone: keys are ivory and ebony in any room, so they do not track the theme
+        and these are not brand colours in disguise. Only the edges do, below, because that is what
+        has to separate a key from the panel behind it.
+    */
+    --key-white: #FAF9F7;
+    --key-white-ink: #8A8781;
+    --key-black: #16211F;
+
+    /*
+        In pixels, and mirrored as constants in Keyboard.razor and DrumKitBrowser.razor, because a
+        strike's velocity comes from where on the control the pointer landed and the browser gives
+        the component an offset without giving it the element's size. Change one, change the other --
+        the components name these variables in the comment that holds their copy.
+    */
+    --key-width: 34px;
+    --key-height: 128px;
+    --key-height-black: 80px;
+    --pad-width: 112px;
+
+    /* Light theme: the system's own values already read correctly. See the dark block below. */
+    --error-ink: var(--error);
+    --warning-ink: var(--warning);
+}
+
+/*
+    losnoco.css themes --success and --success-surface for dark but not the error or warning pair,
+    so on a dark page those would still be the light theme's pale pink and cream -- and #C0392B on a
+    dark chip is about 1.9:1, which is not readable.
+
+    Derived from the hue tokens rather than picked as new hexes, which keeps them in the system's
+    hands: if it ever ships dark values for these, deleting this block is the whole change. Mixing
+    the ink toward --text is what lightens it on dark and darkens it on light, from one expression.
+*/
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --error-surface: color-mix(in srgb, var(--error) 20%, var(--surface));
+        --warning-surface: color-mix(in srgb, var(--warning) 20%, var(--surface));
+        --error-border: color-mix(in srgb, var(--error) 45%, var(--surface));
+        --error-ink: color-mix(in srgb, var(--error) 55%, var(--text));
+        --warning-ink: color-mix(in srgb, var(--warning) 75%, var(--text));
+    }
+}
+
+/* Restated rather than folded into the selector list above, because a media query cannot be. */
+:root[data-theme="dark"] {
+    --error-surface: color-mix(in srgb, var(--error) 20%, var(--surface));
+    --warning-surface: color-mix(in srgb, var(--warning) 20%, var(--surface));
+    --error-border: color-mix(in srgb, var(--error) 45%, var(--surface));
+    --error-ink: color-mix(in srgb, var(--error) 55%, var(--text));
+    --warning-ink: color-mix(in srgb, var(--warning) 75%, var(--text));
+}
+
+/* ── Layout ─────────────────────────────────────────────────────────────────── */
+
+body {
+    margin: 0;
+    padding: var(--space-xl) var(--space-md) var(--space-2xl);
+}
+
+header, main, footer, .nav {
+    max-width: var(--content-width);
+    margin: 0 auto;
+}
+
+/* ── Page header ────────────────────────────────────────────────────────────── */
+
+.page-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-md);
+}
+
+/* The one orange marker on the page. Everything else that could reach for it -- panel headings,
+   status text -- is deliberately muted so this keeps its authority. */
+header .sec-label {
+    margin-bottom: var(--space-xs);
+}
+
+.lede {
+    font-size: var(--text-subheading);
+    line-height: var(--lh-subheading);
+    color: var(--muted);
+    max-width: 40rem;
+    margin: 0 0 var(--space-lg);
+}
+
+.lede code {
+    font-size: 0.8em;
+}
+
+/* ── Nav ────────────────────────────────────────────────────────────────────── */
+
+/*
+    The design system's LSNav, as two links. Sticky and translucent are its own doing; --nav-bg is the
+    token it defines for exactly this, so the blur has something to blur over in both themes.
+
+    NavLink writes aria-current="page" on the match, so the active link is styled from the DOM the
+    router already produces rather than from a flag this sheet would have to be told about.
+*/
+.nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    gap: 1.75rem;
+    /* auto, not 0: this rule comes after the one that centres header/main/footer/.nav and has the
+       same specificity, so a horizontal 0 here silently replaces that `margin: 0 auto` and leaves the
+       nav hard against the body padding while everything else stays centred. No vertical margin --
+       it is sticky, and a gap above it only shows the page sliding through on the way past. */
+    margin: 0 auto;
+    padding: 0.6rem 0;
+    background: var(--nav-bg);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+}
+
+.nav a {
+    font-family: var(--font-sans);
+    font-size: var(--text-label);
+    font-weight: 600;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    color: var(--muted);
+    text-decoration: none;
+    transition: color var(--dur-quick) var(--ease-out);
+}
+
+.nav a:hover,
+.nav a[aria-current] {
+    color: var(--text);
+}
+
+/* ── Theme toggle ───────────────────────────────────────────────────────────── */
+
+/* Hairline separators from a 1px gap over the container's background, rather than borders on each
+   segment, which is the same trick the mixer grid uses and avoids doubled edges. */
+.theme-toggle {
+    display: inline-flex;
+    flex: none;
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-btn);
+    overflow: hidden;
+}
+
+.theme-toggle button {
+    margin: 0;
+    padding: 0.35rem 0.55rem;
+    border: 0;
+    border-radius: 0;
+    background: var(--surface);
+    color: var(--muted);
+    font-family: var(--font-sans);
+    font-size: var(--text-label);
+    font-weight: 700;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    line-height: var(--lh-label);
+    cursor: pointer;
+}
+
+.theme-toggle button:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.theme-toggle button[aria-pressed="true"] {
+    background: var(--surface-3);
+    color: var(--text);
+}
+
+/* The segments sit flush inside a rounded container; an offset ring would be clipped by it. */
+.theme-toggle button:focus-visible {
+    outline-offset: -2px;
+}
+
+.theme-toggle button:active {
+    transform: none;
+}
+
+/* ── Panels ─────────────────────────────────────────────────────────────────── */
+
+.panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-container);
+    padding: var(--space-md) var(--space-lg) var(--space-lg);
+    margin: var(--space-md) 0;
+}
+
+/* Muted rather than orange: the page-level section label owns the single orange marker, and a
+   heading on every panel would spend the colour eight times over. */
+.panel > h2 {
+    font-size: var(--text-label);
+    font-weight: 700;
+    letter-spacing: var(--tracking-label);
+    line-height: var(--lh-label);
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 var(--space-md);
+}
+
+.row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-sm) var(--space-md);
+    margin: var(--space-sm) 0;
+}
+
+/* ── Buttons ────────────────────────────────────────────────────────────────── */
+
+.btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: 0.45rem 0.85rem;
+    border: 1px solid transparent;
+    border-radius: var(--radius-btn);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    font-weight: 600;
+    line-height: 1.2;
+    cursor: pointer;
+}
+
+/*
+    At most one of these is on screen at a time, which the two states of the page make natural: with
+    no ROM the file picker is the only thing worth pressing, and with one loaded it is Play. Every
+    other action on the page -- including Render to WAV -- is secondary or ghost.
+*/
+.btn-primary {
+    background: var(--orange);
+    border-color: var(--orange);
+    color: var(--white);
+}
+
+.btn-primary:hover:not(:disabled) {
+    filter: brightness(0.92);
+}
+
+.btn-secondary {
+    background: var(--bg);
+    border-color: var(--border);
+    color: var(--text);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+}
+
+.btn-ghost {
+    background: transparent;
+    color: var(--muted);
+}
+
+.btn-ghost:hover:not(:disabled) {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+.btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.btn-tiny {
+    padding: 0.15rem 0.4rem;
+    font-size: var(--text-label);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+}
+
+/* Purple is the system's selected state, and it is the one register that is neither the primary
+   action nor a health signal -- which is exactly what an engaged mute or solo is. */
+.btn-tiny[aria-pressed="true"],
+.btn-tiny[aria-pressed="true"]:hover:not(:disabled) {
+    background: var(--purple);
+    border-color: var(--purple);
+    color: var(--white);
+}
+
+/* Without the hover arm above, .btn-secondary:hover outranks the pressed state and an engaged mute
+   goes grey under the pointer -- which reads as having turned itself off. */
+.btn-tiny[aria-pressed="true"]:hover:not(:disabled) {
+    filter: brightness(0.92);
+}
+
+/* ── Form controls ──────────────────────────────────────────────────────────── */
+
+label {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    color: var(--muted);
+    font-size: var(--text-body);
+}
+
+select,
+input[type="file"],
+input[type="search"],
+input[type="range"] {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-input);
+    padding: 0.3rem 0.4rem;
+    font: inherit;
+    font-family: var(--font-sans);
+}
+
+select:hover,
+input[type="file"]:hover,
+input[type="search"]:hover {
+    border-color: var(--border-strong);
+}
+
+input[type="range"] {
+    padding: 0;
+    border: 0;
+    background: none;
+    accent-color: var(--ring);
+}
+
+input[type="checkbox"] {
+    accent-color: var(--ring);
+    width: 1rem;
+    height: 1rem;
+}
+
+/*
+    Both file inputs on the page are native -- the ROM picker and Blazor's InputFile -- so the button
+    variants are applied to the control's own button rather than to wrapper markup that would have to
+    fake the file dialog.
+*/
+input[type="file"]::file-selector-button {
+    margin-right: var(--space-sm);
+    padding: 0.35rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-btn);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    font-weight: 600;
+    cursor: pointer;
+    transition: background-color var(--dur-quick) var(--ease-out),
+                border-color var(--dur-quick) var(--ease-out);
+}
+
+input[type="file"]::file-selector-button:hover {
+    background: var(--surface-2);
+    border-color: var(--border-strong);
+}
+
+/*
+    The gate the whole page is behind, and with no ROM loaded the only primary action on it.
+
+    Qualified with input[type="file"] rather than left as a bare class: the generic rules above are
+    element-plus-attribute and would otherwise outrank a lone class and repaint this back to grey.
+*/
+input[type="file"].file-primary::file-selector-button {
+    background: var(--orange);
+    border-color: var(--orange);
+    color: var(--white);
+}
+
+input[type="file"].file-primary::file-selector-button:hover {
+    background: var(--orange);
+    border-color: var(--orange);
+    filter: brightness(0.92);
+}
+
+/* ── Tags ───────────────────────────────────────────────────────────────────── */
+
+/*
+    Readouts are status, not prose, so they take the pill register rather than coloured text. It also
+    keeps a warning from competing with the primary action: --warning is the brand orange, and as a
+    filled chip it reads as a state instead of as something to press.
+*/
+.tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.45rem;
+    border-radius: var(--radius-tag);
+    font-family: var(--font-mono-qp);
+    font-size: var(--text-caption);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.5;
+    white-space: nowrap;
+}
+
+.tag-muted {
+    background: var(--surface-2);
+    color: var(--muted);
+}
+
+.tag-success {
+    background: var(--success-surface);
+    color: var(--success);
+}
+
+.tag-warn {
+    background: var(--warning-surface);
+    color: var(--warning-ink);
+}
+
+.tag-error {
+    background: var(--error-surface);
+    color: var(--error-ink);
+}
+
+/* ── Technical text ─────────────────────────────────────────────────────────── */
+
+/* .technical and .hostname come from losnoco.css: Iosevka quasi-proportional with tabular figures.
+   The clock is the visible win -- it stops shifting width as the digits change. */
+.hash {
+    word-break: break-all;
+    font-size: var(--text-caption);
+}
+
+.clock {
+    font-size: var(--text-body);
+    color: var(--text);
+}
+
+.identity {
+    display: grid;
+    grid-template-columns: 7rem 1fr;
+    gap: var(--space-xs) var(--space-md);
+    margin: 0 0 var(--space-md);
+}
+
+.identity dt {
+    color: var(--muted);
+    font-size: var(--text-label);
+    font-weight: 700;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+    line-height: var(--lh-technical);
+}
+
+.identity dd {
+    margin: 0;
+}
+
+.note {
+    color: var(--muted);
+    font-size: var(--text-technical);
+}
+
+p.note {
+    line-height: var(--lh-technical);
+}
+
+.error {
+    color: var(--error-ink);
+}
+
+/* ── Transport ──────────────────────────────────────────────────────────────── */
+
+.scrub {
+    width: 100%;
+    margin: var(--space-sm) 0;
+}
+
+.readouts {
+    gap: var(--space-sm);
+}
+
+/* ── Mixer ──────────────────────────────────────────────────────────────────── */
+
+/*
+    Hairline separators from a 1px grid gap over the container's background. A strip now carries a
+    name and four faders as well as its two buttons, so the column count follows the width instead of
+    being pinned at eight: below about 9rem a fader stops being draggable with any precision.
+*/
+.strips {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+}
+
+.strip {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-xs);
+    padding: var(--space-sm);
+    background: var(--surface);
+}
+
+.strip.silent {
+    opacity: 0.45;
+}
+
+/* A channel the loaded song never addresses. Dimmed rather than hidden: it is still playable from a
+   keyboard, and sixteen strips that came and went with each file would be worse than a quiet one. */
+.strip.unused .sounding,
+.strip.unused .label {
+    opacity: 0.5;
+}
+
+.strip .label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-xs);
+    font-family: var(--font-mono-qp);
+    font-size: var(--text-caption);
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    white-space: nowrap;
+}
+
+/* The channel's live voice count. Purple because it is a state readout rather than a health signal --
+   voices in use are neither good nor bad, and the 64-voice ceiling is the transport's business. */
+.strip .voices {
+    padding: 0 0.3rem;
+    border-radius: var(--radius-tag);
+    background: var(--purple);
+    color: var(--white);
+    font-size: var(--text-caption);
+}
+
+.strip .sounding {
+    font-size: var(--text-caption);
+    line-height: var(--lh-caption);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.strip .buttons {
+    display: flex;
+    gap: var(--space-xs);
+}
+
+.strip .faders {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+/* Label and slider on one line: four stacked rows have to fit in the height of a strip, and a label
+   above each would double it for four words nobody needs to read twice. */
+.fader {
+    display: grid;
+    grid-template-columns: 2rem 1fr;
+    align-items: center;
+    gap: var(--space-xs);
+    font-size: var(--text-caption);
+}
+
+.fader input[type="range"] {
+    width: 100%;
+    height: 0.9rem;
+}
+
+/* ── Catalog: banks, programs, kits, pads ───────────────────────────────────── */
+
+/*
+    Grids of the same cell, differing only in how wide the cell has to be to hold what is in it. All
+    of them are hairline-separated the way the mixer is, so the catalog reads as one instrument's
+    front panel rather than as unrelated lists.
+*/
+.hits,
+.kits {
+    display: grid;
+    gap: 1px;
+    margin: var(--space-sm) 0;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+}
+
+/*
+    The pads are the one grid whose cells must NOT stretch: a strike's velocity is where across the
+    pad it landed, and the component works that out from an offset and a width it cannot measure. So
+    the track is exactly --pad-width and the component holds the same number.
+
+    That leaves a ragged edge where the last row does not fill, which is why this one draws its
+    hairlines as a shadow on each cell instead of as a background showing through the gaps -- an
+    unfilled track would otherwise be a stripe of border colour.
+*/
+.pads {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, var(--pad-width));
+    gap: 1px;
+    margin: var(--space-sm) 0;
+    padding: 1px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+}
+
+.hits {
+    grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+}
+
+/* ── Miller columns ─────────────────────────────────────────────────────────── */
+
+/*
+    Vintage, then instrument, then variant: each column narrows what the next one shows. The three
+    scroll independently and share one height, which is what makes them read as one browser rather
+    than three stacked lists -- and the instrument column is the tall one, so that height is set by
+    what is comfortable to scan there.
+
+    Deliberately NOT auto-fitting the columns to their content. A column that resized as you moved
+    through it would shift the other two under the pointer.
+*/
+.miller {
+    display: grid;
+    grid-template-columns: minmax(8rem, 0.8fr) minmax(11rem, 1.4fr) minmax(9rem, 1fr);
+    gap: 1px;
+    height: 22rem;
+    margin: var(--space-sm) 0;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-card);
+    overflow: hidden;
+}
+
+/* Three columns do not survive a phone. Stacked, each keeps its own scroll and a third of the
+   height, so the relationship between them is still legible. */
+@media (max-width: 640px) {
+    .miller {
+        grid-template-columns: 1fr;
+        height: auto;
+    }
+
+    .miller > .column {
+        max-height: 14rem;
+    }
+}
+
+.column {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+    background: var(--surface);
+}
+
+/* Sticky so the column keeps saying what it is once it has been scrolled. Same register as a panel
+   heading, which is what it is. */
+.column-head {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    padding: 0.35rem var(--space-sm);
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: var(--text-label);
+    font-weight: 700;
+    letter-spacing: var(--tracking-label);
+    text-transform: uppercase;
+}
+
+/* The GM families. Sticky too, so scrolling the middle column always shows which family the rows
+   under the pointer belong to -- the grouping is only useful if it is visible from inside it. */
+.group {
+    position: sticky;
+    top: 1.75rem;
+    padding: 0.25rem var(--space-sm);
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    color: var(--muted);
+    font-size: var(--text-caption);
+    font-weight: 700;
+    letter-spacing: var(--tracking-caption);
+}
+
+.column > .group:first-of-type {
+    border-top: 0;
+}
+
+.item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-sm);
+    flex: none;
+    margin: 0;
+    padding: 0.25rem var(--space-sm);
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--text-caption);
+    text-align: left;
+    cursor: pointer;
+}
+
+.item:hover {
+    background: var(--surface-2);
+}
+
+.item.on,
+.item.on:hover {
+    background: var(--purple);
+    color: var(--white);
+}
+
+.item .technical {
+    color: var(--muted);
+    flex: none;
+}
+
+.item.on .technical {
+    color: var(--white);
+}
+
+.item .name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Flush inside the clipped, rounded browser; an offset ring would be cut off by it. */
+.item:focus-visible {
+    outline-offset: -2px;
+}
+
+/* Where a column has nothing to offer rather than nothing yet -- a compatibility set has no
+   variations -- it says so in its own space instead of leaving an empty rectangle. */
+.column-note {
+    margin: 0;
+    padding: var(--space-sm);
+}
+
+.kits {
+    grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+}
+
+.pad {
+    box-shadow: 0 0 0 1px var(--border);
+}
+
+/*
+    The pad's own children must not be hit targets. The offset a pointer event carries is relative to
+    whatever it landed on, so a click that hit the name span would measure across the span and read
+    as a much harder strike than it was.
+*/
+.pad > * {
+    pointer-events: none;
+}
+
+.hit,
+.kit,
+.pad {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-xs);
+    margin: 0;
+    padding: 0.3rem var(--space-sm);
+    border: 0;
+    border-radius: 0;
+    background: var(--surface);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: var(--text-caption);
+    text-align: left;
+    cursor: pointer;
+}
+
+.kit {
+    justify-content: space-between;
+}
+
+.hit:hover,
+.kit:hover,
+.pad:hover {
+    background: var(--surface-2);
+}
+
+/* Flush inside a rounded, clipped grid; an offset ring would be cut off by the container. */
+.hit:focus-visible,
+.kit:focus-visible,
+.pad:focus-visible {
+    outline-offset: -2px;
+}
+
+/* Same reasoning as the mixer's mute: purple is the system's selected state, and what is selected
+   here is neither an action nor a health signal. */
+.hit.on,
+.kit.on,
+.hit.on:hover,
+.kit.on:hover {
+    background: var(--purple);
+    color: var(--white);
+}
+
+.hit .technical,
+.kit .technical,
+.pad .technical {
+    color: var(--muted);
+    flex: none;
+}
+
+/* How many keys are in a kit. Right-aligned against the identifier by the space-between above, so
+   the two read as a label and its measurement rather than as two labels. */
+.kit .count {
+    color: var(--muted);
+    font-family: var(--font-mono-qp);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+}
+
+.hit.on .technical,
+.kit.on .technical,
+.kit.on .count {
+    color: var(--white);
+}
+
+.hit .name,
+.kit .name,
+.pad .name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* A pad is a fixed grid of one-shot triggers, so it does not carry a selected state; the kit above it
+   does. Pressed feedback is the button's own, which losnoco.css already gives it. */
+.pad {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+}
+
+/* ── Export ─────────────────────────────────────────────────────────────────── */
+
+progress {
+    width: 12rem;
+    accent-color: var(--ring);
+}
+
+/* ── Keyboard ───────────────────────────────────────────────────────────────── */
+
+/* Absolutely positioned so the black keys can sit over the whites they fall between. */
+.keyboard {
+    position: relative;
+    height: var(--key-height);
+    margin-top: var(--space-md);
+    user-select: none;
+    touch-action: none;
+}
+
+.key {
+    position: absolute;
+    top: 0;
+    padding: 0;
+    border-radius: 0 0 var(--radius-code) var(--radius-code);
+    cursor: pointer;
+}
+
+/*
+    losnoco.css nudges every button down a pixel while it is held. On a key that is wrong twice over:
+    the keys are dragged across to glissando, and moving the element out from under the pointer
+    mid-drag fights the hit testing that makes that work.
+*/
+.key:active {
+    transform: none;
+}
+
+.key.white {
+    width: var(--key-width);
+    height: var(--key-height);
+    background: var(--key-white);
+    border: 1px solid var(--border-strong);
+    color: var(--key-white-ink);
+    font-family: var(--font-mono-qp);
+    font-size: var(--text-caption);
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    padding-bottom: var(--space-xs);
+    z-index: 1;
+}
+
+.key.black {
+    width: calc(var(--key-width) * 0.6);
+    height: var(--key-height-black);
+    background: var(--key-black);
+    border: 1px solid var(--key-black);
+    z-index: 2;
+}
+
+/* Teal rather than orange: a held key is an interactive state, not the page's primary action, and
+   the token already resolves to the readable teal on each theme. */
+.key.down,
+.key.white.down,
+.key.black.down {
+    background: var(--teal-light);
+    border-color: var(--teal-light);
+}
+
+/* ── Footer ─────────────────────────────────────────────────────────────────── */
+
+footer {
+    margin-top: var(--space-xl);
+    padding-top: var(--space-md);
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: var(--text-technical);
+}
+
+/* The element rule in losnoco.css sets p to body size, so the footer's own size has to be restated
+   on the paragraphs rather than inherited from the footer. */
+footer p {
+    max-width: 44rem;
+    font-size: var(--text-technical);
+    line-height: var(--lh-technical);
+}
+
+.colophon {
+    margin-bottom: 0;
+}
+
+/* ── Boot screen ────────────────────────────────────────────────────────────── */
+
+/* Painted before Blazor exists, which is why it is markup in index.html and styled here rather than
+   in a component. */
+.booting {
+    max-width: 26rem;
+    margin: 6rem auto;
+    padding: 0 var(--space-md);
+    text-align: center;
+    color: var(--muted);
+}
+
+.booting h1 {
+    font-size: var(--text-heading);
+    letter-spacing: var(--tracking-heading);
+    color: var(--text);
+    margin-bottom: var(--space-lg);
+}
+
+.boot-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin: var(--space-sm) 0 var(--space-xs);
+}
+
+/* Progress is the interactive register, not the primary-action one, so this is teal and not the
+   orange reserved for the button the user is meant to press. */
+.boot-bar > div {
+    width: 0;
+    height: 100%;
+    background: var(--teal-light);
+    transition: width var(--dur-medium) var(--ease-linear);
+}
+
+/* Until every response's size is known there is no honest fraction to draw, so the bar says
+   "working" rather than inventing one. */
+.boot-bar.indeterminate > div {
+    width: 30%;
+    transition: none;
+    animation: boot-sweep 1.1s var(--ease-in-out) infinite;
+}
+
+@keyframes boot-sweep {
+    0% { margin-left: -30%; }
+    100% { margin-left: 100%; }
+}
+
+.boot-detail {
+    font-family: var(--font-mono-qp);
+    font-size: var(--text-technical);
+    font-variant-numeric: tabular-nums;
+    min-height: 1.2em;
+    margin: 0;
+}
+
+/* ── Unhandled errors ───────────────────────────────────────────────────────── */
+
+#blazor-error-ui {
+    display: none;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: var(--space-sm) var(--space-md);
+    background: var(--error-surface);
+    color: var(--error-ink);
+    border-top: 1px solid var(--error-border);
+    font-size: var(--text-technical);
+    z-index: 1000;
+}
+
+#blazor-error-ui a {
+    color: var(--error-ink);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+
+#blazor-error-ui .dismiss {
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+    float: right;
+}
+
+/* ── Output trim ────────────────────────────────────────────────────────────── */
+
+/* Laid out along the row rather than stacked like the other labels, so the slider and its readout
+   read as one control instead of a caption above a bar. */
+.gain {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.gain input[type="range"] {
+    width: 12rem;
+    max-width: 100%;
+    accent-color: var(--accent);
+}
+
+/* Tabular figures and a fixed width, so the row does not jog sideways as the number changes. */
+.gain-readout {
+    font-family: var(--font-mono);
+    font-size: var(--text-label);
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+    min-width: 3.5ch;
+}

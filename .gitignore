@@ -35,6 +35,14 @@ build/
 out/
 cmake-build-*/
 
+# The Emscripten engine module the web app imports; built by the `web` preset.
+web/src/engine/generated/
+web/node_modules/
+web/dist/
+
+# Netlify CLI per-machine state
+.netlify/
+
 # vcpkg manifest-mode install tree
 vcpkg_installed/
 

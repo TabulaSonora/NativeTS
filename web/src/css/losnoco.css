@@ -1,0 +1,505 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+ * LoSnoCo Design System — Colors & Type
+ *
+ * Canonical CSS custom properties and semantic selectors for LoSnoCo output.
+ * The full spec lives in SKILL.md; this file is the portable, platform-neutral
+ * "drop-in" sheet for plain HTML prototypes.
+ *
+ * Load order:
+ *   1. fonts/losnoco-fonts.css   (self-hosted webfonts)
+ *   2. colors_and_type.css       (this file)
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+
+/* ─── Base design tokens (Light theme) ─────────────────────────────────────── */
+:root {
+  /* Brand */
+  --orange:      #F25E0D;  /* Kevin / "Lo"     — always this value */
+  --teal:        #0DF2C9;  /* Chris / "Sno"    — dark surfaces only */
+  --teal-light:  #00967F;  /* Chris / "Sno"    — light surfaces, links, focus */
+  --purple:      #7B41B9;  /* Accent           — tags, states, annotations */
+
+  /* Reserved — logo only, do not use as UI color */
+  --black:       #000000;
+  --white:       #FFFFFF;
+
+  /* UI surfaces */
+  --bg:             #F4F3F0;  /* page background — warm off-white */
+  --surface:        #ECEAE5;  /* cards, inset panels */
+  --surface-2:      #E4E2DC;  /* hover surface on surface */
+  --surface-3:      #D8D5CE;  /* pressed surface */
+  --border:         #D8D5CE;  /* hairlines, dividers, default input borders */
+  --border-strong:  #B8B5AE;  /* hover border */
+  --muted:          #888880;  /* secondary text, metadata */
+  --muted-2:        #ADABA5;  /* placeholder text */
+  --text:           #1A1917;  /* primary body text */
+
+  /* Code surfaces — always dark, even on light pages */
+  --code-bg:        #111C1A;
+  --code-inline-bg: #182926;
+  --code-border:    #2F524B;
+  --code-text:      #E5EFED;
+  --code-muted:     #7A9E98;
+
+  /* Owner / domain coding — per LoSnoCo spec */
+  --owner-kevin:  var(--orange);   /* Kevin / Vultr-hosted */
+  --owner-chris:  #22AA99;         /* Chris / TrueNAS-hosted — distinct from teal */
+  --owner-shared: var(--muted);
+
+  /* Semantic states */
+  --ring:             #00967F;
+  --ring-offset:      #F4F3F0;
+  --error:            #C0392B;
+  --error-surface:    #FDF0EE;
+  --error-border:     #E07060;
+  --success:          #22AA99;
+  --success-surface:  #EEF8F6;
+  --success-border:   #22AA99;
+  --warning:          #F25E0D;
+  --warning-surface:  #FEF3EB;
+
+  /* Nav backdrop */
+  --nav-bg: rgb(244 243 240 / 0.92);
+
+  /* ── Type families ──────────────────────────────────────────────────────── */
+  --font-sans:       'Inter LoSnoCo', ui-sans-serif, system-ui, sans-serif;
+  --font-mono:       'Iosevka LoSnoCo', 'Iosevka LoSnoCo Web', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-mono-nolig: 'Iosevka LoSnoCo NoLig', 'Iosevka LoSnoCo NoLig Web', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-mono-qp:    'Iosevka LoSnoCo NoLig QP', 'Iosevka LoSnoCo NoLig QP Web', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* ── Type scale (base = 15px) ───────────────────────────────────────────── */
+  --text-display:       2.8125rem;  /* ~45px  — hero headings */
+  --text-heading:       1.625rem;   /* ~26px  — section headers */
+  --text-subheading:    1.0625rem;  /* ~17px  — card titles */
+  --text-body:          0.9375rem;  /*  15px  — base body */
+  --text-technical:     0.8375rem;  /* ~13px  — hostnames, timestamps */
+  --text-label:         0.6875rem;  /* ~11px  — uppercase labels */
+  --text-caption:       0.6875rem;  /* ~11px  — metadata, credits */
+
+  --lh-display:    1;
+  --lh-heading:    1.25;
+  --lh-subheading: 1.4;
+  --lh-body:       1.7;
+  --lh-technical:  1.6;
+  --lh-label:      1.4;
+  --lh-caption:    1.5;
+
+  /* ── Letter spacing ─────────────────────────────────────────────────────── */
+  --tracking-display:    -0.03em;
+  --tracking-heading:    -0.02em;
+  --tracking-subheading: -0.01em;
+  --tracking-label:       0.20em;
+  --tracking-caption:     0.08em;
+
+  /* ── Spacing scale (1× = 15px) ──────────────────────────────────────────── */
+  --space-xs:  0.25rem;  /* ~4px */
+  --space-sm:  0.5rem;   /* ~8px */
+  --space-md:  1rem;     /* ~15px */
+  --space-lg:  1.5rem;   /* ~24px */
+  --space-xl:  2.5rem;   /* ~38px */
+  --space-2xl: 4rem;     /* ~60px */
+
+  /* ── Radii ──────────────────────────────────────────────────────────────── */
+  --radius-container: 10px;
+  --radius-card:       8px;
+  --radius-btn:        6px;
+  --radius-input:      6px;
+  --radius-control:    4px;
+  --radius-note:       6px;
+  --radius-code:       3px;
+  --radius-tag:       99px;
+
+  /* ── Content width ──────────────────────────────────────────────────────── */
+  --content-width: 820px;
+
+  /* ── Motion ─────────────────────────────────────────────────────────────── *
+   * Short, functional transitions. No spring physics, no bouncy easing.
+   * Three durations and three easings — everything composes from these.   */
+  --dur-fast:    100ms;   /* focus rings, tiny state flips */
+  --dur-quick:   160ms;   /* buttons, links, tag hovers */
+  --dur-medium:  240ms;   /* card hovers, popover fade, shadow bloom */
+  --dur-slow:    420ms;   /* page-level entrances, header reveals */
+
+  --ease-out:      cubic-bezier(0.2, 0.8, 0.2, 1);   /* default — decelerating */
+  --ease-in-out:   cubic-bezier(0.4, 0.1, 0.2, 1);   /* symmetric, for toggles */
+  --ease-linear:   linear;                            /* scrubbers, gradients */
+}
+
+
+/* ─── Dark theme ─── Cool teal-tinted near-black palette ───────────────────── */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:            #111C1A;
+    --surface:       #182926;
+    --surface-2:     #1E332F;
+    --surface-3:     #243D38;
+    --border:        #243D38;
+    --border-strong: #2F524B;
+    --muted:         #7A9E98;
+    --muted-2:       #567873;
+    --text:          #E5EFED;
+
+    /* On dark surfaces, full teal replaces teal-light for interactive UI */
+    --teal-light:    #0DF2C9;
+    --ring:          #0DF2C9;
+    --ring-offset:   #111C1A;
+
+    --owner-chris:   #0DF2C9;
+    --success:       #2ED9B8;
+    --success-surface:#14302B;
+
+    --nav-bg:        rgb(17 28 26 / 0.92);
+  }
+}
+
+/* Force-theme helpers (override the media query) */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #F4F3F0; --surface: #ECEAE5; --border: #D8D5CE; --muted: #888880; --text: #1A1917;
+  --teal-light: #00967F; --ring: #00967F; --ring-offset: #F4F3F0;
+  --owner-chris: #22AA99; --nav-bg: rgb(244 243 240 / 0.92);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111C1A; --surface: #182926; --border: #243D38; --muted: #7A9E98; --text: #E5EFED;
+  --teal-light: #0DF2C9; --ring: #0DF2C9; --ring-offset: #111C1A;
+  --owner-chris: #0DF2C9; --nav-bg: rgb(17 28 26 / 0.92);
+}
+
+
+/* ─── Base element styling ─────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;   /* base — all rem-based tokens scale from here */
+  line-height: var(--lh-body);
+  /* OpenType features are baked into Inter LoSnoCo — no font-feature-settings needed */
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: var(--lh-body);
+}
+
+
+/* ─── Semantic type roles ──────────────────────────────────────────────────── */
+h1, .h1, .display {
+  font-size: var(--text-display);
+  line-height: var(--lh-display);
+  letter-spacing: var(--tracking-display);
+  font-weight: 800;
+  color: var(--text);
+  margin: 0 0 var(--space-md);
+}
+
+h2, .h2, .heading {
+  font-size: var(--text-heading);
+  line-height: var(--lh-heading);
+  letter-spacing: var(--tracking-heading);
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 var(--space-sm);
+}
+
+h3, .h3, .subheading {
+  font-size: var(--text-subheading);
+  line-height: var(--lh-subheading);
+  letter-spacing: var(--tracking-subheading);
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 var(--space-sm);
+}
+
+p, .body {
+  font-size: var(--text-body);
+  line-height: var(--lh-body);
+  margin: 0 0 var(--space-md);
+  text-wrap: pretty;
+}
+
+small, .caption {
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  letter-spacing: var(--tracking-caption);
+  color: var(--muted);
+}
+
+.label, .sec-label {
+  font-size: var(--text-label);
+  line-height: var(--lh-label);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--orange);
+  display: block;
+  margin-bottom: 0.75rem;
+}
+
+.technical, .hostname, .meta, .path {
+  font-family: var(--font-mono-qp);
+  font-size: var(--text-technical);
+  line-height: var(--lh-technical);
+  font-variant-numeric: tabular-nums;
+}
+
+code, kbd {
+  font-family: var(--font-mono-nolig);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  background: var(--code-inline-bg, #182926);
+  color: var(--code-text, #E5EFED);
+  padding: 0.1em 0.4em;
+  border-radius: var(--radius-code);
+}
+
+pre {
+  font-family: var(--font-mono);
+  font-size: var(--text-technical);
+  line-height: var(--lh-technical);
+  background: var(--code-bg, #111C1A);
+  border: 2px solid var(--code-border, #2F524B);
+  border-radius: var(--radius-card);
+  padding: var(--space-md);
+  overflow-x: auto;
+  color: var(--code-text, #E5EFED);
+}
+pre code { background: none; color: inherit; padding: 0; border-radius: 0; font-size: inherit; }
+
+a {
+  color: var(--teal-light);
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+a:hover { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+
+hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+  margin: var(--space-lg) 0;
+}
+
+::selection {
+  background: var(--teal-light);
+  color: var(--white);
+}
+
+
+/* ─── Motion layer ─────────────────────────────────────────────────────────── *
+ *
+ * Subtle but deliberate animations across the design language. Every effect
+ * is short (≤ 240ms on interaction, ≤ 420ms on entrance), uses the --ease-out
+ * token by default, and is suppressed under prefers-reduced-motion.
+ *
+ * Interactive baselines
+ * ─────────────────────
+ *   Links                  → color shift        (already set above, upgraded)
+ *   Buttons                → bg/border/transform (resting → hover → pressed)
+ *   Inputs / selects       → border + focus ring
+ *   Tags & pills           → bg shift
+ *   Cards                  → border + subtle lift
+ *
+ * Entrance patterns
+ * ─────────────────
+ *   .enter-fade            → fades in
+ *   .enter-rise            → fades + rises 6px
+ *   .enter-reveal          → fades + rises + scales from 0.98
+ *   Auto-stagger via nth-child for lists marked .enter-stagger
+ *
+ * Popovers / dropdowns
+ * ────────────────────
+ *   [popover], details[open] summary, <dialog> open → scale + blur + fade
+ *   (See preview/form-controls.html for the native <select> variant.)
+ *
+ * Heading underline
+ * ─────────────────
+ *   h2 gains a hairline that scales in on view.
+ *
+ * ───────────────────────────────────────────────────────────────────────────── */
+
+/* Links — upgrade the earlier transition */
+a {
+  transition:
+    color var(--dur-quick) var(--ease-out),
+    text-decoration-color var(--dur-quick) var(--ease-out);
+}
+
+/* Heading hairline — grows on first paint + when revealed */
+h2, .heading {
+  position: relative;
+}
+h2::after, .heading::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -4px;
+  height: 1px;
+  width: 100%;
+  max-width: 2.5em;
+  background: var(--border-strong);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+/* Only decorate when explicitly opted in via .heading-rule */
+h2:not(.heading-rule)::after, .heading:not(.heading-rule)::after { display: none; }
+.heading-rule::after { transform: scaleX(1); }
+
+/* Focus rings — appear snappily, not animated (per spec) */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  transition: outline-color var(--dur-fast) var(--ease-out);
+}
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible { outline-offset: 0; }
+
+/* Generic interactive surfaces */
+button, .btn, [role="button"] {
+  transition:
+    background-color var(--dur-quick) var(--ease-out),
+    border-color     var(--dur-quick) var(--ease-out),
+    color            var(--dur-quick) var(--ease-out),
+    transform        var(--dur-quick) var(--ease-out),
+    box-shadow       var(--dur-quick) var(--ease-out);
+}
+button:active, .btn:active, [role="button"]:active {
+  transform: translateY(1px);
+}
+
+/* Form surfaces */
+input, textarea, select {
+  transition:
+    background-color var(--dur-quick) var(--ease-out),
+    border-color     var(--dur-quick) var(--ease-out),
+    box-shadow       var(--dur-quick) var(--ease-out),
+    color            var(--dur-quick) var(--ease-out);
+}
+
+/* Tags */
+.tag {
+  transition:
+    background-color var(--dur-quick) var(--ease-out),
+    color            var(--dur-quick) var(--ease-out);
+}
+
+/* Card-like surfaces with .card class get a hairline lift on hover */
+.card {
+  transition:
+    background-color var(--dur-medium) var(--ease-out),
+    border-color     var(--dur-medium) var(--ease-out),
+    box-shadow       var(--dur-medium) var(--ease-out),
+    transform        var(--dur-medium) var(--ease-out);
+}
+.card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 1px 0 rgb(0 0 0 / 0.03), 0 4px 12px rgb(0 0 0 / 0.04);
+  transform: translateY(-1px);
+}
+
+
+/* ── Entrance animations ─────────────────────────────────────────────────── */
+
+@keyframes losnoco-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes losnoco-rise-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes losnoco-reveal-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); filter: blur(3px); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    filter: blur(0);   }
+}
+@keyframes losnoco-scale-in {
+  from { opacity: 0; transform: scale(0.92); filter: blur(6px); }
+  to   { opacity: 1; transform: scale(1);    filter: blur(0);   }
+}
+
+.enter-fade   { animation: losnoco-fade-in   var(--dur-medium) var(--ease-out) both; }
+.enter-rise   { animation: losnoco-rise-in   var(--dur-slow)   var(--ease-out) both; }
+.enter-reveal { animation: losnoco-reveal-in var(--dur-slow)   var(--ease-out) both; }
+
+/* Stagger — direct children animate in sequence. Up to 12 steps, 40ms each. */
+.enter-stagger > *           { animation: losnoco-rise-in var(--dur-slow) var(--ease-out) both; }
+.enter-stagger > :nth-child(1)  { animation-delay:  0ms; }
+.enter-stagger > :nth-child(2)  { animation-delay: 40ms; }
+.enter-stagger > :nth-child(3)  { animation-delay: 80ms; }
+.enter-stagger > :nth-child(4)  { animation-delay: 120ms; }
+.enter-stagger > :nth-child(5)  { animation-delay: 160ms; }
+.enter-stagger > :nth-child(6)  { animation-delay: 200ms; }
+.enter-stagger > :nth-child(7)  { animation-delay: 240ms; }
+.enter-stagger > :nth-child(8)  { animation-delay: 280ms; }
+.enter-stagger > :nth-child(9)  { animation-delay: 320ms; }
+.enter-stagger > :nth-child(10) { animation-delay: 360ms; }
+.enter-stagger > :nth-child(11) { animation-delay: 400ms; }
+.enter-stagger > :nth-child(12) { animation-delay: 440ms; }
+
+
+/* ── Popovers, dropdowns, dialogs — scale + blur + fade ─────────────────── */
+[popover], dialog {
+  /* Resting / exit state */
+  opacity: 0;
+  transform: scale(0.94);
+  filter: blur(6px);
+  transition:
+    opacity   var(--dur-medium) var(--ease-out),
+    transform var(--dur-medium) var(--ease-out),
+    filter    var(--dur-medium) var(--ease-out),
+    overlay   var(--dur-medium) allow-discrete,
+    display   var(--dur-medium) allow-discrete;
+}
+[popover]:popover-open,
+dialog[open] {
+  opacity: 1;
+  transform: scale(1);
+  filter: blur(0);
+}
+@starting-style {
+  [popover]:popover-open,
+  dialog[open] {
+    opacity: 0;
+    transform: scale(0.94);
+    filter: blur(6px);
+  }
+}
+
+/* <details> disclosure — animate content in and rotate the marker */
+details > summary {
+  cursor: pointer;
+  list-style: none;
+  position: relative;
+  padding-left: 1.25rem;
+  transition: color var(--dur-quick) var(--ease-out);
+}
+details > summary::-webkit-details-marker { display: none; }
+details > summary::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.45em;
+  width: 8px;
+  height: 8px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3E%3Cpath fill='none' stroke='%23888880' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round' d='M2.5 1.5L5.5 4 2.5 6.5'/%3E%3C/svg%3E") center/contain no-repeat;
+  transition: transform var(--dur-quick) var(--ease-out);
+}
+details[open] > summary::before { transform: rotate(90deg); }
+details[open] > :not(summary) { animation: losnoco-rise-in var(--dur-medium) var(--ease-out) both; }
+
+
+/* ── Reduced motion — strip everything but opacity ──────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 1ms !important;
+  }
+  .enter-fade, .enter-rise, .enter-reveal,
+  .enter-stagger > * { animation: none !important; opacity: 1 !important; transform: none !important; filter: none !important; }
+}

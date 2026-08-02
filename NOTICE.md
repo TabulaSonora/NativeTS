@@ -37,6 +37,15 @@ the DLL on any platform, matching a live harvest field for field, so nothing Rol
 committed. The engine reads its coefficients out of the DLL you supply, exactly as it reads the wave
 ROM and the tables.
 
+## The drum kit name list
+
+`web/src/lib/drum-kit-names.ts` carries the one piece of Roland-derived data this repository ships:
+the names of the drum kits, transcribed from the kit-name half of the plugin's companion
+`SCVSC.drf`. The DLL itself names every drum *sound* — those come from the melodic tone table — but
+nothing in it says that program 9 selects "ROOM", so the web player carries the list. It lives in
+the web application rather than in the engine library deliberately, so a host that links
+`ts::tabulasonora` does not acquire it by accident.
+
 ## Obtaining the DLL
 
 Obtain the DLL from your own licensed installation. Sound Canvas VA was discontinued in September

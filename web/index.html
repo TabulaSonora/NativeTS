@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tabula Sonora</title>
+
+    <!--
+        The typefaces are served from LoSnoCo's own host rather than bundled, so the connection and
+        the stylesheets are worth starting before the parser reaches the links that need them.
+        Nothing here carries any of the user's data: these are font files, and the DLL is read and
+        cached locally exactly as the page says.
+    -->
+    <link rel="preconnect" href="https://assets.losno.co" crossorigin />
+    <link rel="preload" as="style" href="https://assets.losno.co/fonts/inter/stylesheet.css" />
+    <link rel="preload" as="style" href="https://assets.losno.co/fonts/IosevkaLoSnoCo/IosevkaLoSnoCo.css" />
+    <link rel="preload" as="style" href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLig/IosevkaLoSnoCoNoLig.css" />
+    <link rel="preload" as="style" href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLigQp/IosevkaLoSnoCoNoLigQp.css" />
+
+    <script>
+        // The theme has to be settled before the first paint, which is why this is inline and why it
+        // sits ABOVE the stylesheet links rather than below them: a script that follows a pending
+        // <link rel="stylesheet"> is blocked until that sheet loads, so putting it lower would park
+        // the decision behind a network fetch and paint the wrong palette in the meantime.
+        //
+        // It owns the storage key and the apply step, and the theme toggle calls back into it, so
+        // neither is written down twice. Same key as the previous deployment of this page, so a
+        // returning visitor's choice carries over.
+        (function () {
+            const KEY = 'tabula-sonora.theme';
+
+            function apply(choice) {
+                // No attribute is the third state rather than a missing one: the stylesheet themes
+                // the page from prefers-color-scheme by default, and only its data-theme helpers
+                // override that, so removing the attribute IS "follow the system".
+                if (choice === 'light' || choice === 'dark') {
+                    document.documentElement.setAttribute('data-theme', choice);
+                } else {
+                    document.documentElement.removeAttribute('data-theme');
+                }
+            }
+
+            globalThis.tabulaTheme = {
+                // Storage access throws rather than returning null where the browser has disabled
+                // it, and a colour preference is not worth failing the page over.
+                get() {
+                    try {
+                        return localStorage.getItem(KEY) || 'auto';
+                    } catch {
+                        return 'auto';
+                    }
+                },
+
+                set(choice) {
+                    apply(choice);
+
+                    try {
+                        if (choice === 'light' || choice === 'dark') {
+                            localStorage.setItem(KEY, choice);
+                        } else {
+                            localStorage.removeItem(KEY);
+                        }
+                    } catch {
+                        // The choice still holds for this page view; it just will not be remembered.
+                    }
+                },
+            };
+
+            apply(globalThis.tabulaTheme.get());
+        })();
+    </script>
+
+    <link rel="stylesheet" href="https://assets.losno.co/fonts/inter/stylesheet.css" />
+    <link rel="stylesheet" href="https://assets.losno.co/fonts/IosevkaLoSnoCo/IosevkaLoSnoCo.css" />
+    <link rel="stylesheet" href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLig/IosevkaLoSnoCoNoLig.css" />
+    <link rel="stylesheet" href="https://assets.losno.co/fonts/IosevkaLoSnoCoNoLigQp/IosevkaLoSnoCoNoLigQp.css" />
+</head>
+
+<body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+</body>
+
+</html>

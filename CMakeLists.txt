@@ -48,6 +48,7 @@ option(TS_BUILD_TESTS  "Build the test suite"          ${PROJECT_IS_TOP_LEVEL})
 option(TS_BUILD_CLI    "Build the tabula-sonora CLI"   ${PROJECT_IS_TOP_LEVEL})
 option(TS_BUILD_PLAYER "Build the terminal player"     OFF)
 option(TS_BUILD_TUI    "Build the full-screen TUI"     OFF)
+option(TS_BUILD_WEB    "Build the Emscripten web engine module" OFF)
 option(TS_INSTALL      "Generate the install and package rules" ${PROJECT_IS_TOP_LEVEL})
 
 # ---------------------------------------------------------------------------------------------
@@ -100,6 +101,18 @@ elseif(MSVC)
     target_compile_options(ts_warnings INTERFACE /W4 /permissive-)
 endif()
 
+# The web build runs under the Emscripten toolchain, where vcpkg is not in play. The one base
+# dependency is header-only, so it is fetched directly; OVERRIDE_FIND_PACKAGE satisfies the
+# find_package(nlohmann_json) in src/ without touching it.
+if(TS_BUILD_WEB AND EMSCRIPTEN)
+    include(FetchContent)
+    FetchContent_Declare(nlohmann_json
+        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+        URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
+        OVERRIDE_FIND_PACKAGE)
+    FetchContent_MakeAvailable(nlohmann_json)
+endif()
+
 add_subdirectory(src)
 
 if(TS_BUILD_CLI)
@@ -116,6 +129,13 @@ endif()
 
 if(TS_BUILD_TUI)
     add_subdirectory(apps/tui)
+endif()
+
+if(TS_BUILD_WEB)
+    if(NOT EMSCRIPTEN)
+        message(FATAL_ERROR "TS_BUILD_WEB requires the Emscripten toolchain; use the 'web' preset.")
+    endif()
+    add_subdirectory(apps/web)
 endif()
 
 if(TS_BUILD_TESTS)
