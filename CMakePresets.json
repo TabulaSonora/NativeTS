@@ -73,7 +73,25 @@
         "TS_BUILD_TUI": "ON",
         "VCPKG_MANIFEST_FEATURES": "tests;cli;player;tui"
       }
-    }
+    },
+    {
+      "name": "vs",
+      "hidden": true,
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "VCPKG_MANIFEST_FEATURES": "tests;cli"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      }
+    },
+    { "name": "debug-vs", "displayName": "Debug (VS)", "inherits": "vs" },
+    { "name": "release-vs", "displayName": "Release (VS)", "inherits": "vs" }
   ],
   "buildPresets": [
     { "name": "debug", "configurePreset": "debug" },
@@ -81,7 +99,9 @@
     { "name": "asan", "configurePreset": "asan" },
     { "name": "tsan", "configurePreset": "tsan" },
     { "name": "player", "configurePreset": "player" },
-    { "name": "cog", "configurePreset": "cog" }
+    { "name": "cog", "configurePreset": "cog" },
+    { "name": "debug-vs", "configurePreset": "debug-vs", "configuration": "Debug" },
+    { "name": "release-vs", "configurePreset": "release-vs", "configuration": "RelWithDebInfo" }
   ],
   "testPresets": [
     {
@@ -105,6 +125,8 @@
       "inherits": "base",
       "configurePreset": "tsan",
       "filter": { "include": { "label": "ring" } }
-    }
+    },
+    { "name": "debug-vs", "inherits": "base", "configurePreset": "debug-vs", "configuration": "Debug" },
+    { "name": "release-vs", "inherits": "base", "configurePreset": "release-vs", "configuration": "RelWithDebInfo" }
   ]
 }

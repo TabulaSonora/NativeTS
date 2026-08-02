@@ -79,9 +79,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         -fwrapv
         -ffp-contract=off)
 elseif(MSVC)
+    # No -ffp-contract=off equivalent needed: /fp:precise leaves contraction off unless /fp:contract
+    # is passed explicitly. Never add /fp:contract or /fp:fast here.
     target_compile_options(ts_numeric_semantics INTERFACE
-        /fp:precise
-        /fp:contract-)
+        /fp:precise)
 endif()
 
 add_library(ts_warnings INTERFACE)

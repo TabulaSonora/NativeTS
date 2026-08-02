@@ -82,7 +82,7 @@ target_link_libraries(tabulasonora
 # The generated asset sources are machine-written; holding them to the project's warning level
 # would fail the build on formatting nobody controls.
 set_source_files_properties(${TS_MANIFEST_SOURCE} ${TS_PRESETS_SOURCE}
-    PROPERTIES COMPILE_OPTIONS "-Wno-everything")
+    PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
 
 # The rest of the package -- the headers, the config file, the export set this joins -- is in the
 # top-level CMakeLists.txt.
