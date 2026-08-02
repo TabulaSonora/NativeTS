@@ -7,6 +7,9 @@ ts_embed_asset(TS_PRESETS_SOURCE  "${CMAKE_SOURCE_DIR}/assets/presets.json"  pre
 
 add_library(tabulasonora
     dsp/interpolator.cpp
+    patches/partial_parameters.cpp
+    patches/patch_directory.cpp
+    patches/tone.cpp
     dsp/sampler.cpp
     rom/rom_image.cpp
     rom/table_set.cpp
