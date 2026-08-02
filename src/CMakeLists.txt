@@ -6,7 +6,13 @@ ts_embed_asset(TS_MANIFEST_SOURCE "${CMAKE_SOURCE_DIR}/assets/manifest.json" man
 ts_embed_asset(TS_PRESETS_SOURCE  "${CMAKE_SOURCE_DIR}/assets/presets.json"  presets_json)
 
 add_library(tabulasonora
+    dsp/envelope_machine.cpp
     dsp/interpolator.cpp
+    dsp/lfo_engine.cpp
+    dsp/pitch_chain.cpp
+    dsp/segment_envelope.cpp
+    dsp/tva_chain.cpp
+    dsp/tvf_chain.cpp
     patches/partial_parameters.cpp
     patches/patch_directory.cpp
     patches/tone.cpp

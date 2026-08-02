@@ -1,0 +1,446 @@
+#include "tabulasonora/lfo_engine.hpp"
+#include "tabulasonora/patch_directory.hpp"
+#include "tabulasonora/pitch_chain.hpp"
+#include "tabulasonora/tva_chain.hpp"
+#include "tabulasonora/tvf_chain.hpp"
+
+#include "dsp/fixed.hpp"
+#include "test_data.hpp"
+
+#include <catch2/catch_test_macros.hpp>
+#include <catch2/matchers/catch_matchers_floating_point.hpp>
+
+#include <nlohmann/json.hpp>
+
+#include <algorithm>
+#include <cmath>
+#include <fstream>
+#include <set>
+
+using namespace ts;
+using Catch::Matchers::WithinAbs;
+namespace fs = std::filesystem;
+
+namespace {
+
+/// The control-rate objects, built once per test case.
+///
+/// Declaration order is load-bearing: the chains hold references to the tables and the machine.
+class Fixture {
+public:
+    static Fixture make()
+    {
+        return Fixture{TableSet::from_cache_directory(testdata::require_tables())};
+    }
+
+    [[nodiscard]] const TableSet& tables() const noexcept { return tables_; }
+
+    [[nodiscard]] const EnvelopeMachine& machine() const noexcept { return machine_; }
+
+    [[nodiscard]] const TvaChain& tva() const noexcept { return tva_; }
+
+    [[nodiscard]] const TvfChain& tvf() const noexcept { return tvf_; }
+
+    [[nodiscard]] const PitchChain& pitch() const noexcept { return pitch_; }
+
+    [[nodiscard]] const LfoEngine& lfo() const noexcept { return lfo_; }
+
+    [[nodiscard]] const PatchDirectory& directory() const noexcept { return directory_; }
+
+private:
+    explicit Fixture(TableSet&& tables)
+        : tables_(std::move(tables)),
+          machine_(tables_),
+          tva_(tables_, machine_),
+          tvf_(tables_, machine_),
+          pitch_(tables_, machine_),
+          lfo_(tables_),
+          directory_(tables_)
+    {
+    }
+
+    TableSet tables_;
+    EnvelopeMachine machine_;
+    TvaChain tva_;
+    TvfChain tvf_;
+    PitchChain pitch_;
+    LfoEngine lfo_;
+    PatchDirectory directory_;
+};
+
+} // namespace
+
+TEST_CASE("the fixed-point control path matches an independent implementation",
+          "[dsp][sccore][gate]")
+{
+    // The Phase 4 gate. Every sweep here lands on an expression that overflows 32 bits or truncates
+    // to 16 on purpose -- the places a port goes wrong silently. The fixture comes from
+    // tools/dump_modulation.py, which spells each wrap out with an explicit mask because Python's
+    // integers do not wrap on their own, so it cannot accidentally agree with a C++ bug.
+    const fs::path fixture_path = testdata::repository_root() / "fixtures" / "modulation.json";
+    if (!fs::exists(fixture_path)) {
+        SKIP("No modulation fixture. Generate it with:\n"
+             "  python3 tools/dump_modulation.py <SCCore.dll> fixtures/modulation.json");
+    }
+
+    Fixture fixture = Fixture::make();
+
+    std::ifstream stream{fixture_path};
+    REQUIRE(stream);
+    const nlohmann::json document = nlohmann::json::parse(stream);
+
+    SECTION("rate_scale")
+    {
+        const auto& expected = document.at("rateScale");
+        std::size_t at = 0;
+        for (int base = 0; base < 256; base += 3) {
+            for (int modifier = 0; modifier < 128; modifier += 5) {
+                INFO("base " << base << " modifier " << modifier);
+                REQUIRE(fixture.machine().rate_scale(base, modifier) == expected[at].get<int>());
+                ++at;
+            }
+        }
+        CHECK(at == expected.size());
+        CHECK(at == 2236);
+    }
+
+    SECTION("level_scale")
+    {
+        const auto& expected = document.at("levelScale");
+        std::size_t at = 0;
+        for (int level = 0; level < 128; level += 3) {
+            for (int modifier = 0; modifier < 128; modifier += 5) {
+                INFO("level " << level << " modifier " << modifier);
+                REQUIRE(fixture.machine().level_scale(level, modifier) == expected[at].get<int>());
+                ++at;
+            }
+        }
+        CHECK(at == expected.size());
+    }
+
+    SECTION("segment_milliseconds")
+    {
+        // Two 0xffff-scale products in a row. This is the expression most likely to be silently
+        // wrong, because widening it to 64 bits "to be safe" produces plausible timings.
+        const auto& expected = document.at("segmentMilliseconds");
+        std::size_t at = 0;
+        for (int rate = 0; rate < 256; rate += 7) {
+            for (int multiplier : {0x100, 0x1000, 0x8000, 0xFFFF}) {
+                for (int velocity : {0x100, 0x4000, 0xFFFF}) {
+                    INFO("rate " << rate << " multiplier " << multiplier << " velocity "
+                                 << velocity);
+                    REQUIRE(fixture.machine().segment_milliseconds(rate, multiplier, velocity)
+                            == expected[at].get<double>());
+                    ++at;
+                }
+            }
+        }
+        CHECK(at == expected.size());
+    }
+
+    SECTION("shift8")
+    {
+        const auto& expected = document.at("shift8");
+        std::size_t at = 0;
+        for (int v = -70000; v < 70000; v += 137) {
+            INFO("value " << v);
+            REQUIRE(fx::shift8(v) == expected[at].get<int>());
+            ++at;
+        }
+        CHECK(at == expected.size());
+    }
+
+    SECTION("lfo waveforms")
+    {
+        // Quadrants 1 and 3 of waveforms 6 and 7 depend on the 16-bit truncation of p*2.
+        const auto& expected = document.at("lfoWaveform");
+        std::size_t at = 0;
+        for (int wave : {0, 4, 5, 6, 7, 8, 12, 20, 31}) {
+            for (int phase = 0; phase < 0x10000; phase += 313) {
+                INFO("wave " << wave << " phase " << phase);
+                REQUIRE(fixture.lfo().waveform(phase, wave) == expected[at].get<int>());
+                ++at;
+            }
+        }
+        CHECK(at == expected.size());
+    }
+
+    SECTION("pitch envelopes across the whole tone table")
+    {
+        // Every present partial at three velocities: start, four targets, release, four segment
+        // times and the release time. The depth scale that feeds all of them reaches about 2.7e11
+        // and the engine keeps only the low word, so a 64-bit "fix" shows up here immediately.
+        const auto& expected = document.at("pitchEnvelopes");
+        REQUIRE(expected.size() > 10000);
+
+        std::size_t checked = 0;
+        std::size_t with_envelope = 0;
+
+        for (const auto& entry : expected) {
+            const int tone_number = entry.at("tone").get<int>();
+            const int slot = entry.at("slot").get<int>();
+            const int velocity = entry.at("velocity").get<int>();
+
+            const PartialParameters partial =
+                fixture.directory().partial_by_slot(tone_number, slot);
+            REQUIRE(partial.is_present());
+
+            const std::optional<PitchEnvelope> envelope =
+                fixture.pitch().envelope_offsets(partial, 60, velocity);
+
+            INFO("tone " << tone_number << " slot " << slot << " velocity " << velocity);
+
+            if (entry.at("envelope").is_null()) {
+                REQUIRE_FALSE(envelope.has_value());
+                ++checked;
+                continue;
+            }
+
+            REQUIRE(envelope.has_value());
+            const auto& reference = entry.at("envelope");
+
+            REQUIRE(envelope->start == reference.at("start").get<int>());
+            REQUIRE(envelope->release == reference.at("release").get<int>());
+            for (std::size_t i = 0; i < envelope->targets.size(); ++i) {
+                REQUIRE(envelope->targets[i] == reference.at("targets")[i].get<int>());
+            }
+            for (std::size_t i = 0; i < envelope->times.size(); ++i) {
+                REQUIRE(envelope->times[i] == reference.at("times")[i].get<double>());
+            }
+            REQUIRE(envelope->release_ms == reference.at("releaseMs").get<double>());
+
+            ++with_envelope;
+            ++checked;
+        }
+
+        CHECK(checked == expected.size());
+        // Guard against passing vacuously: most partials must actually have an envelope.
+        CHECK(with_envelope > 1000);
+    }
+}
+
+TEST_CASE("the state-variable filter is stable and orders its three lines", "[dsp]")
+{
+    // Needs no DLL. The order of the three lines and the grouping inside the middle one are both
+    // load-bearing; a reassociated version stays close for a few samples and then diverges.
+    StateVariableFilter filter;
+
+    // A lowpass at a gentle cutoff must settle on a DC input rather than ring or blow up.
+    double last = 0.0;
+    for (int i = 0; i < 4000; ++i) {
+        last = filter.process(1.0, 0.1, 1.0, FilterTap::low_pass);
+        REQUIRE(std::isfinite(last));
+    }
+    CHECK_THAT(last, WithinAbs(1.0, 0.02));
+
+    filter.reset();
+    CHECK(filter.low() == 0.0);
+    CHECK(filter.band() == 0.0);
+
+    // Bypass returns the input untouched and does not consult the integrators.
+    CHECK(filter.process(0.375, 0.5, 1.0, FilterTap::bypass) == 0.375);
+}
+
+TEST_CASE("a segment envelope is a pure function of position", "[dsp][sccore]")
+{
+    // This is what lets the offline renderer and the block loop share one envelope: evaluating it
+    // at a sample must not depend on having evaluated any earlier sample.
+    Fixture fixture = Fixture::make();
+
+    const std::array<double, 4> targets{1.0, 0.5, 0.25, 0.125};
+    const std::array<double, 4> spans{1000.0, 1000.0, 1000.0, 1000.0};
+    const std::array<bool, 4> linear{true, true, true, true};
+
+    SegmentEnvelope forward{fixture.machine(), targets, spans, linear, 0.0, 500.0, true, 0.0, 320};
+    SegmentEnvelope backward{fixture.machine(), targets, spans, linear, 0.0, 500.0, true, 0.0, 320};
+
+    // Walk one forwards and the other backwards; they must agree at every point.
+    for (std::int64_t n = 0; n < 4000; ++n) {
+        REQUIRE(forward.value_at(n) == backward.value_at(3999 - n + n - (3999 - n)));
+    }
+    for (std::int64_t n = 3999; n >= 0; --n) {
+        REQUIRE(forward.value_at(n) == backward.value_at(n));
+    }
+}
+
+TEST_CASE("note-off is deferred to the following control tick", "[dsp]")
+{
+    // Measured on the DLL: a note-off at 1010 ms, exactly a tick, released at 1020 ms, while one at
+    // 1008 ms released at 1010 ms. The deferral spans one full tick and is never zero.
+    constexpr std::int64_t tick = 320;
+
+    CHECK(SegmentEnvelope::defer_to_control_tick(0, tick) == 320);
+    CHECK(SegmentEnvelope::defer_to_control_tick(1, tick) == 320);
+    CHECK(SegmentEnvelope::defer_to_control_tick(319, tick) == 320);
+
+    // Landing exactly on a boundary still waits a full tick: that tick's update has already run.
+    CHECK(SegmentEnvelope::defer_to_control_tick(320, tick) == 640);
+    CHECK(SegmentEnvelope::defer_to_control_tick(321, tick) == 640);
+
+    CHECK(SegmentEnvelope::defer_to_control_tick(-5, tick) == 320);
+}
+
+TEST_CASE("the part volume scale is one at the reference", "[dsp]")
+{
+    // Needs no DLL. The intermediate exceeds 32 bits and is widened; the result is squared.
+    CHECK_THAT(TvaChain::part_volume_scale(127, 127, 127), WithinAbs(1.0, 1e-12));
+
+    // Volume and expression enter symmetrically, so swapping them cannot change the result.
+    CHECK_THAT(TvaChain::part_volume_scale(100, 60, 127),
+               WithinAbs(TvaChain::part_volume_scale(60, 100, 127), 1e-12));
+
+    // Silence at either input, and monotone in between.
+    CHECK(TvaChain::part_volume_scale(0, 127, 127) == 0.0);
+    CHECK(TvaChain::part_volume_scale(127, 0, 127) == 0.0);
+
+    double previous = -1.0;
+    for (int v = 0; v <= 127; ++v) {
+        const double value = TvaChain::part_volume_scale(v, 127, 127);
+        INFO("volume " << v << " -> " << value);
+        REQUIRE(value >= previous);
+        previous = value;
+    }
+}
+
+TEST_CASE("the amplitude curve floors at the table, not at zero", "[dsp][sccore]")
+{
+    // g_amp_curve_hi[0] is 4 rather than 0, so level zero is 4.6e-05 and not silence. A level that
+    // has decayed past the floor must therefore be forced to true silence by the caller rather than
+    // clamped into the table.
+    Fixture fixture = Fixture::make();
+
+    CHECK_THAT(fixture.tva().amp_of(0), WithinAbs(4.6e-05, 1e-6));
+    CHECK(fixture.tva().amp_of(0) > 0.0);
+
+    // Monotone, and the top of the range reaches unity.
+    double previous = -1.0;
+    for (int level = 0; level <= 0xFFFF; level += 97) {
+        const double value = fixture.tva().amp_of(level);
+        REQUIRE(value >= previous);
+        previous = value;
+    }
+    CHECK_THAT(fixture.tva().amp_of(0xFFFF), WithinAbs(1.0, 0.001));
+
+    // Out-of-range clamps rather than reading past the table.
+    CHECK(fixture.tva().amp_of(-1) == fixture.tva().amp_of(0));
+    CHECK(fixture.tva().amp_of(0x10000) == fixture.tva().amp_of(0xFFFF));
+}
+
+TEST_CASE("the neutral resonance byte gives exactly unity damping", "[dsp][sccore]")
+{
+    // Reciprocal-Q: smaller is more resonant, and 0x40 is exactly 1.0.
+    Fixture fixture = Fixture::make();
+
+    CHECK_THAT(fixture.tvf().damping_coefficient(0, 0x40, 1), WithinAbs(1.0, 1e-12));
+    CHECK(fixture.tvf().damping_coefficient(0, 0x20, 1) < 1.0);
+    CHECK(fixture.tvf().damping_coefficient(0, 0x60, 1) > 1.0);
+}
+
+TEST_CASE("the noise generator reproduces the engine's reset sequence", "[dsp]")
+{
+    // Needs no DLL. The sequence is deterministic from engine reset; what polyphony changes is only
+    // the order voices consume draws. A generator that drifted here would move every random pan and
+    // every pitch jitter in the song.
+    EngineNoise noise;
+
+    const std::uint16_t first = noise.next();
+    const std::uint16_t second = noise.next();
+    const std::uint16_t third = noise.next();
+
+    noise.reset();
+    CHECK(noise.next() == first);
+    CHECK(noise.next() == second);
+    CHECK(noise.next() == third);
+
+    // The draws must not collapse to a constant or a short cycle.
+    noise.reset();
+    std::set<std::uint16_t> seen;
+    for (int i = 0; i < 1000; ++i) {
+        seen.insert(noise.next());
+    }
+    CHECK(seen.size() > 900);
+
+    // next_pan takes the top seven bits, so it stays on CC#10's scale.
+    noise.reset();
+    for (int i = 0; i < 500; ++i) {
+        const int pan = noise.next_pan();
+        REQUIRE(pan >= 0);
+        REQUIRE(pan <= 127);
+    }
+}
+
+TEST_CASE("the pitch envelope is stepped, not evaluated", "[dsp][sccore]")
+{
+    // A segment completes when the 16-bit phase reaches 0xffff -- not exceeds it -- and the next
+    // starts with a fresh phase rather than carrying the remainder. The trajectory therefore
+    // depends on the accumulator's history, which is why it cannot be a pure function of time.
+    PitchEnvelope envelope;
+    envelope.start = -1000;
+    envelope.targets = {500, 0, 0, 0};
+    envelope.release = 0;
+    envelope.times = {100.0, 100.0, 0.0, 0.0};
+    envelope.release_ms = 50.0;
+
+    PitchEnvelopeRunner runner{envelope};
+    CHECK_THAT(runner.level(), WithinAbs(-1000.0, 1e-12));
+
+    double previous = runner.level();
+    for (int i = 0; i < 10; ++i) {
+        const double now = runner.tick(false);
+        REQUIRE(std::isfinite(now));
+        previous = now;
+    }
+    CHECK(previous > -1000.0);
+
+    // A constant runner holds its level regardless of note-off: that is the jitter-only case.
+    PitchEnvelopeRunner held = PitchEnvelopeRunner::constant(42.0);
+    CHECK_THAT(held.tick(false), WithinAbs(42.0, 1e-12));
+    CHECK_THAT(held.tick(true), WithinAbs(42.0, 1e-12));
+}
+
+TEST_CASE("start jitter's reachable range is narrower than documented", "[dsp]")
+{
+    // The upstream remark says the magnitude slice is 7 bits positive against 8 negative, "so the
+    // range is about [-10*d, +5*d]" -- for depth 10, [-100, +50].
+    //
+    // Swept over all 65536 draws it is not. The same bit that picks the sign, bit 14, also
+    // constrains which draws can reach the negative branch, so the wider negative slice is never
+    // fully used. Measured: depth 10 gives [-50, +50] and depth 5 gives [-30, +20].
+    //
+    // The asymmetry is real -- depth 5 is visibly lopsided -- it is just half the size the comment
+    // claims. Pinned here rather than restated, because the range is what a listener would notice
+    // if it ever moved.
+    const auto sweep = [](int depth) {
+        int lowest = 0;
+        int highest = 0;
+        for (std::uint32_t draw = 0; draw <= 0xFFFF; ++draw) {
+            const int jitter =
+                PitchChain::start_jitter_milli_semitones(depth, static_cast<std::uint16_t>(draw));
+            highest = std::max(highest, jitter);
+            lowest = std::min(lowest, jitter);
+        }
+        return std::pair{lowest, highest};
+    };
+
+    const auto [low10, high10] = sweep(10);
+    CHECK(low10 == -50);
+    CHECK(high10 == 50);
+
+    const auto [low5, high5] = sweep(5);
+    CHECK(low5 == -30);
+    CHECK(high5 == 20);
+
+    // A zero depth draws nothing and contributes nothing.
+    CHECK(PitchChain::start_jitter_milli_semitones(0, 0x1234) == 0);
+}
+
+TEST_CASE("the pitch accumulator clamps at 127 semitones", "[dsp]")
+{
+    // 127 * 1000 milli-semitones, which is what fixes the unit. Jetplane's first partial has a base
+    // of 24000 with an envelope starting at -24000, landing exactly on the floor.
+    CHECK(PitchChain::clamp(-1.0) == 0.0);
+    CHECK(PitchChain::clamp(0.0) == 0.0);
+    CHECK(PitchChain::clamp(1e9) == PitchChain::max_pitch_milli_semitones);
+    // 0x1f018 is exactly 127000; the hex spelling is what the engine uses.
+    CHECK(PitchChain::max_pitch_milli_semitones == 127 * 1000);
+}
