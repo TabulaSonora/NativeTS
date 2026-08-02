@@ -1,0 +1,32 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "native-tabula-sonora",
+  "version-string": "0.1.0",
+  "description": "A native C++ implementation of the Roland Sound Canvas VA synth voice.",
+  "homepage": "https://github.com/TabulaSonora/spec",
+  "license": "BSD-3-Clause",
+  "dependencies": [
+    "nlohmann-json"
+  ],
+  "features": {
+    "tests": {
+      "description": "Build the conformance and differential test suite.",
+      "dependencies": [
+        "catch2"
+      ]
+    },
+    "cli": {
+      "description": "Build the tabula-sonora command line renderer.",
+      "dependencies": [
+        "cli11"
+      ]
+    },
+    "player": {
+      "description": "Build the tabula-sonora-play terminal player.",
+      "dependencies": [
+        "cli11",
+        "miniaudio"
+      ]
+    }
+  }
+}

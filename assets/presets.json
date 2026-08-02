@@ -1,0 +1,1315 @@
+{
+  "_note": "Derived from a licensed SCCore.dll by \u0027tabula-sonora prepare\u0027. Roland-derived: generate locally, do not redistribute.",
+  "reverb": {
+    "typeNames": [
+      "Room1",
+      "Room2",
+      "Room3",
+      "Hall1",
+      "Hall2",
+      "Plate",
+      "Delay",
+      "PanDelay"
+    ],
+    "default": {
+      "diffusers": [
+        {
+          "writeTap": 8192,
+          "readTap": 9118,
+          "coefA": -0.5,
+          "coefB": 0.5
+        },
+        {
+          "writeTap": 9119,
+          "readTap": 9500,
+          "coefA": -0.5,
+          "coefB": 0.5
+        },
+        {
+          "writeTap": 9501,
+          "readTap": 9613,
+          "coefA": -0.5,
+          "coefB": 0.5
+        },
+        {
+          "writeTap": 9614,
+          "readTap": 9615,
+          "coefA": -0.5,
+          "coefB": 0.5
+        }
+      ],
+      "tankA": {
+        "taps": {
+          "tap10": 10391,
+          "tap14": 12618,
+          "tap18": 13570,
+          "tap1C": 16301,
+          "tap20": 12194,
+          "tap24": 10947,
+          "tap28": 15782,
+          "tap2C": 14252
+        },
+        "coefA": 0.484375,
+        "coefB": -0.28125
+      },
+      "tankB": {
+        "taps": {
+          "tap10": 17163,
+          "tap14": 19637,
+          "tap18": 20548,
+          "tap1C": 22537,
+          "tap20": 17781,
+          "tap24": 19166,
+          "tap28": 20932,
+          "tap2C": 22282
+        },
+        "coefA": 0.484375,
+        "coefB": -0.28125
+      },
+      "tankAllpasses": {
+        "A0": {
+          "writeTap": 9616,
+          "readTap": 10390,
+          "coefA": -0.5,
+          "coefB": 0.5
+        },
+        "A1": {
+          "writeTap": 12619,
+          "readTap": 13569,
+          "coefA": -0.5,
+          "coefB": 0.5
+        },
+        "B0": {
+          "writeTap": 16302,
+          "readTap": 17162,
+          "coefA": -0.5,
+          "coefB": 0.5
+        },
+        "B1": {
+          "writeTap": 19638,
+          "readTap": 20547,
+          "coefA": -0.5,
+          "coefB": 0.5
+        }
+      },
+      "injectionTap": 4096,
+      "dampFeedback": 9.999999747378752E-06,
+      "dampInput": 1,
+      "gainInput": 0.125,
+      "gainInjection": 1,
+      "gainFeedback": 0.87890625,
+      "gainOutput": 1
+    },
+    "types": [
+      {
+        "diffusers": [
+          {
+            "writeTap": 8192,
+            "readTap": 8515,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 8516,
+            "readTap": 8755,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 8756,
+            "readTap": 8899,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 8900,
+            "readTap": 8901,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          }
+        ],
+        "tankA": {
+          "taps": {
+            "tap10": 9150,
+            "tap14": 9977,
+            "tap18": 10485,
+            "tap1C": 12180,
+            "tap20": 8902,
+            "tap24": 8902,
+            "tap28": 11427,
+            "tap2C": 10768
+          },
+          "coefA": 0.25,
+          "coefB": -0.40625
+        },
+        "tankB": {
+          "taps": {
+            "tap10": 12449,
+            "tap14": 13344,
+            "tap18": 13813,
+            "tap1C": 15378,
+            "tap20": 12599,
+            "tap24": 12946,
+            "tap28": 14074,
+            "tap2C": 14682
+          },
+          "coefA": 0.484375,
+          "coefB": -0.28125
+        },
+        "tankAllpasses": {
+          "A0": {
+            "writeTap": 8902,
+            "readTap": 9149,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "A1": {
+            "writeTap": 9978,
+            "readTap": 10484,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B0": {
+            "writeTap": 12181,
+            "readTap": 12448,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B1": {
+            "writeTap": 13345,
+            "readTap": 13812,
+            "coefA": -0.5,
+            "coefB": 0.5
+          }
+        },
+        "injectionTap": 4096,
+        "dampFeedback": 0.375,
+        "dampInput": 0.609375,
+        "gainInput": 0.125,
+        "gainInjection": 1,
+        "gainFeedback": 1.09765625,
+        "gainOutput": 1
+      },
+      {
+        "diffusers": [
+          {
+            "writeTap": 8192,
+            "readTap": 9109,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9110,
+            "readTap": 9488,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9489,
+            "readTap": 9600,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9601,
+            "readTap": 9678,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          }
+        ],
+        "tankA": {
+          "taps": {
+            "tap10": 10346,
+            "tap14": 12260,
+            "tap18": 13076,
+            "tap1C": 15416,
+            "tap20": 9621,
+            "tap24": 9621,
+            "tap28": 13661,
+            "tap2C": 14971
+          },
+          "coefA": 0.125,
+          "coefB": -0.484375
+        },
+        "tankB": {
+          "taps": {
+            "tap10": 16161,
+            "tap14": 18298,
+            "tap18": 19082,
+            "tap1C": 21331,
+            "tap20": 16639,
+            "tap24": 17711,
+            "tap28": 19644,
+            "tap2C": 20903
+          },
+          "coefA": 0.484375,
+          "coefB": -0.28125
+        },
+        "tankAllpasses": {
+          "A0": {
+            "writeTap": 9679,
+            "readTap": 10345,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "A1": {
+            "writeTap": 12261,
+            "readTap": 13075,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B0": {
+            "writeTap": 15417,
+            "readTap": 16160,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B1": {
+            "writeTap": 18299,
+            "readTap": 19081,
+            "coefA": -0.5,
+            "coefB": 0.5
+          }
+        },
+        "injectionTap": 4096,
+        "dampFeedback": 0.5,
+        "dampInput": 0.484375,
+        "gainInput": 0.125,
+        "gainInjection": 1,
+        "gainFeedback": 0.76953125,
+        "gainOutput": 1
+      },
+      {
+        "diffusers": [
+          {
+            "writeTap": 8192,
+            "readTap": 9109,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9110,
+            "readTap": 9488,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9489,
+            "readTap": 9600,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9601,
+            "readTap": 9678,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          }
+        ],
+        "tankA": {
+          "taps": {
+            "tap10": 10346,
+            "tap14": 12260,
+            "tap18": 13076,
+            "tap1C": 15416,
+            "tap20": 9621,
+            "tap24": 9621,
+            "tap28": 13661,
+            "tap2C": 14971
+          },
+          "coefA": 0.484375,
+          "coefB": -0.28125
+        },
+        "tankB": {
+          "taps": {
+            "tap10": 16161,
+            "tap14": 18298,
+            "tap18": 19082,
+            "tap1C": 21331,
+            "tap20": 16639,
+            "tap24": 17711,
+            "tap28": 19644,
+            "tap2C": 20903
+          },
+          "coefA": 0.484375,
+          "coefB": -0.28125
+        },
+        "tankAllpasses": {
+          "A0": {
+            "writeTap": 9679,
+            "readTap": 10345,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "A1": {
+            "writeTap": 12261,
+            "readTap": 13075,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B0": {
+            "writeTap": 15417,
+            "readTap": 16160,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B1": {
+            "writeTap": 18299,
+            "readTap": 19081,
+            "coefA": -0.5,
+            "coefB": 0.5
+          }
+        },
+        "injectionTap": 4096,
+        "dampFeedback": 9.999999747378752E-06,
+        "dampInput": 1,
+        "gainInput": 0.125,
+        "gainInjection": 1,
+        "gainFeedback": 0.87890625,
+        "gainOutput": 1
+      },
+      {
+        "diffusers": [
+          {
+            "writeTap": 8192,
+            "readTap": 9109,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9110,
+            "readTap": 9488,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9489,
+            "readTap": 9600,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9601,
+            "readTap": 9678,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          }
+        ],
+        "tankA": {
+          "taps": {
+            "tap10": 10346,
+            "tap14": 12260,
+            "tap18": 13076,
+            "tap1C": 15416,
+            "tap20": 11896,
+            "tap24": 10824,
+            "tap28": 14971,
+            "tap2C": 13661
+          },
+          "coefA": 0.484375,
+          "coefB": -0.28125
+        },
+        "tankB": {
+          "taps": {
+            "tap10": 16161,
+            "tap14": 18298,
+            "tap18": 19082,
+            "tap1C": 21331,
+            "tap20": 16695,
+            "tap24": 17891,
+            "tap28": 19644,
+            "tap2C": 20903
+          },
+          "coefA": 0.484375,
+          "coefB": -0.28125
+        },
+        "tankAllpasses": {
+          "A0": {
+            "writeTap": 9679,
+            "readTap": 10345,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "A1": {
+            "writeTap": 12261,
+            "readTap": 13075,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B0": {
+            "writeTap": 15417,
+            "readTap": 16160,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B1": {
+            "writeTap": 18299,
+            "readTap": 19081,
+            "coefA": -0.5,
+            "coefB": 0.5
+          }
+        },
+        "injectionTap": 4096,
+        "dampFeedback": 0.5,
+        "dampInput": 0.484375,
+        "gainInput": 0.25,
+        "gainInjection": 1,
+        "gainFeedback": 0.98828125,
+        "gainOutput": 1
+      },
+      {
+        "diffusers": [
+          {
+            "writeTap": 8192,
+            "readTap": 9118,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9119,
+            "readTap": 9500,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9501,
+            "readTap": 9613,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 9614,
+            "readTap": 9615,
+            "coefA": -0.5,
+            "coefB": 0.5
+          }
+        ],
+        "tankA": {
+          "taps": {
+            "tap10": 10391,
+            "tap14": 12618,
+            "tap18": 13570,
+            "tap1C": 16301,
+            "tap20": 12194,
+            "tap24": 10947,
+            "tap28": 15782,
+            "tap2C": 14252
+          },
+          "coefA": 0.484375,
+          "coefB": -0.28125
+        },
+        "tankB": {
+          "taps": {
+            "tap10": 17163,
+            "tap14": 19637,
+            "tap18": 20548,
+            "tap1C": 22537,
+            "tap20": 17781,
+            "tap24": 19166,
+            "tap28": 20932,
+            "tap2C": 22282
+          },
+          "coefA": 0.484375,
+          "coefB": -0.28125
+        },
+        "tankAllpasses": {
+          "A0": {
+            "writeTap": 9616,
+            "readTap": 10390,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "A1": {
+            "writeTap": 12619,
+            "readTap": 13569,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B0": {
+            "writeTap": 16302,
+            "readTap": 17162,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B1": {
+            "writeTap": 19638,
+            "readTap": 20547,
+            "coefA": -0.5,
+            "coefB": 0.5
+          }
+        },
+        "injectionTap": 4096,
+        "dampFeedback": 9.999999747378752E-06,
+        "dampInput": 1,
+        "gainInput": 0.125,
+        "gainInjection": 1,
+        "gainFeedback": 0.87890625,
+        "gainOutput": 1
+      },
+      {
+        "diffusers": [
+          {
+            "writeTap": 8192,
+            "readTap": 8515,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 8516,
+            "readTap": 8755,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 8756,
+            "readTap": 8899,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          {
+            "writeTap": 8900,
+            "readTap": 8901,
+            "coefA": -0.5,
+            "coefB": 0.5
+          }
+        ],
+        "tankA": {
+          "taps": {
+            "tap10": 9150,
+            "tap14": 9977,
+            "tap18": 10485,
+            "tap1C": 12180,
+            "tap20": 9609,
+            "tap24": 9288,
+            "tap28": 11427,
+            "tap2C": 10768
+          },
+          "coefA": 0.125,
+          "coefB": -0.484375
+        },
+        "tankB": {
+          "taps": {
+            "tap10": 12449,
+            "tap14": 13344,
+            "tap18": 13813,
+            "tap1C": 15378,
+            "tap20": 12599,
+            "tap24": 12946,
+            "tap28": 14074,
+            "tap2C": 14682
+          },
+          "coefA": 0.25,
+          "coefB": -0.40625
+        },
+        "tankAllpasses": {
+          "A0": {
+            "writeTap": 8902,
+            "readTap": 9149,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "A1": {
+            "writeTap": 9978,
+            "readTap": 10484,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B0": {
+            "writeTap": 12181,
+            "readTap": 12448,
+            "coefA": -0.5,
+            "coefB": 0.5
+          },
+          "B1": {
+            "writeTap": 13345,
+            "readTap": 13812,
+            "coefA": -0.5,
+            "coefB": 0.5
+          }
+        },
+        "injectionTap": 4096,
+        "dampFeedback": 9.999999747378752E-06,
+        "dampInput": 1,
+        "gainInput": 0.125,
+        "gainInjection": 1,
+        "gainFeedback": 1.20703125,
+        "gainOutput": 1
+      },
+      {
+        "diffusers": [
+          {
+            "writeTap": 8193,
+            "readTap": 8194,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          {
+            "writeTap": 8195,
+            "readTap": 8196,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          {
+            "writeTap": 8197,
+            "readTap": 8198,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          {
+            "writeTap": 8199,
+            "readTap": 8200,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          }
+        ],
+        "tankA": {
+          "taps": {
+            "tap10": 8192,
+            "tap14": 8192,
+            "tap18": 8192,
+            "tap1C": 8192,
+            "tap20": 11798,
+            "tap24": 11798,
+            "tap28": 11798,
+            "tap2C": 11798
+          },
+          "coefA": 9.999999747378752E-06,
+          "coefB": 9.999999747378752E-06
+        },
+        "tankB": {
+          "taps": {
+            "tap10": 8192,
+            "tap14": 8192,
+            "tap18": 8192,
+            "tap1C": 11798,
+            "tap20": 11798,
+            "tap24": 11798,
+            "tap28": 11798,
+            "tap2C": 11798
+          },
+          "coefA": 0.015625,
+          "coefB": -0.484375
+        },
+        "tankAllpasses": {
+          "A0": {
+            "writeTap": 8192,
+            "readTap": 8192,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          "A1": {
+            "writeTap": 8192,
+            "readTap": 8192,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          "B0": {
+            "writeTap": 8201,
+            "readTap": 8192,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          "B1": {
+            "writeTap": 8192,
+            "readTap": 8192,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          }
+        },
+        "injectionTap": 4096,
+        "dampFeedback": 9.999999747378752E-06,
+        "dampInput": 1,
+        "gainInput": 0.25,
+        "gainInjection": 1,
+        "gainFeedback": 0.625,
+        "gainOutput": 1
+      },
+      {
+        "diffusers": [
+          {
+            "writeTap": 8193,
+            "readTap": 8194,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          {
+            "writeTap": 8195,
+            "readTap": 8196,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          {
+            "writeTap": 8197,
+            "readTap": 8198,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          {
+            "writeTap": 8199,
+            "readTap": 8200,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          }
+        ],
+        "tankA": {
+          "taps": {
+            "tap10": 8192,
+            "tap14": 8192,
+            "tap18": 8192,
+            "tap1C": 8192,
+            "tap20": 11798,
+            "tap24": 15382,
+            "tap28": 11798,
+            "tap2C": 15382
+          },
+          "coefA": 9.999999747378752E-06,
+          "coefB": 9.999999747378752E-06
+        },
+        "tankB": {
+          "taps": {
+            "tap10": 8192,
+            "tap14": 8192,
+            "tap18": 8192,
+            "tap1C": 15382,
+            "tap20": 11798,
+            "tap24": 15382,
+            "tap28": 11798,
+            "tap2C": 15382
+          },
+          "coefA": 0.015625,
+          "coefB": -0.484375
+        },
+        "tankAllpasses": {
+          "A0": {
+            "writeTap": 8192,
+            "readTap": 8192,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          "A1": {
+            "writeTap": 8192,
+            "readTap": 8192,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          "B0": {
+            "writeTap": 8201,
+            "readTap": 8192,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          },
+          "B1": {
+            "writeTap": 8192,
+            "readTap": 8192,
+            "coefA": 9.999999747378752E-06,
+            "coefB": 9.999999747378752E-06
+          }
+        },
+        "injectionTap": 4096,
+        "dampFeedback": 9.999999747378752E-06,
+        "dampInput": 1,
+        "gainInput": 0.25,
+        "gainInjection": 1,
+        "gainFeedback": 0.5,
+        "gainOutput": 1
+      }
+    ]
+  },
+  "chorus": {
+    "typeNames": [
+      "Chorus1",
+      "Chorus2",
+      "Chorus3",
+      "Chorus4",
+      "FeedbackChorus",
+      "Flanger",
+      "ShortDelay",
+      "ShortDelayFB"
+    ],
+    "default": {
+      "lfoIncrement": 192,
+      "lpfA": 9.999999747378752E-06,
+      "lpfB": 1,
+      "tap1Depth": 800,
+      "tap1Base": 1966080,
+      "tap2Depth": 800,
+      "tap2Base": 1966080,
+      "feedback": 0.0625,
+      "gainWrite": 1,
+      "gainTap": 1
+    },
+    "types": [
+      {
+        "lfoIncrement": 192,
+        "lpfA": 9.999999747378752E-06,
+        "lpfB": 1,
+        "tap1Depth": 240,
+        "tap1Base": 2752512,
+        "tap2Depth": 240,
+        "tap2Base": 2752512,
+        "feedback": 9.999999747378752E-06,
+        "gainWrite": 1,
+        "gainTap": 1
+      },
+      {
+        "lfoIncrement": 576,
+        "lpfA": 9.999999747378752E-06,
+        "lpfB": 1,
+        "tap1Depth": 800,
+        "tap1Base": 1966080,
+        "tap2Depth": 800,
+        "tap2Base": 1966080,
+        "feedback": 0.0390625,
+        "gainWrite": 1,
+        "gainTap": 1
+      },
+      {
+        "lfoIncrement": 192,
+        "lpfA": 9.999999747378752E-06,
+        "lpfB": 1,
+        "tap1Depth": 800,
+        "tap1Base": 1966080,
+        "tap2Depth": 800,
+        "tap2Base": 1966080,
+        "feedback": 0.0625,
+        "gainWrite": 1,
+        "gainTap": 1
+      },
+      {
+        "lfoIncrement": 576,
+        "lpfA": 9.999999747378752E-06,
+        "lpfB": 1,
+        "tap1Depth": 680,
+        "tap1Base": 1572864,
+        "tap2Depth": 680,
+        "tap2Base": 1572864,
+        "feedback": 0.125,
+        "gainWrite": 1,
+        "gainTap": 1
+      },
+      {
+        "lfoIncrement": 128,
+        "lpfA": 9.999999747378752E-06,
+        "lpfB": 1,
+        "tap1Depth": 1000,
+        "tap1Base": 3121152,
+        "tap2Depth": 1000,
+        "tap2Base": 3121152,
+        "feedback": 0.5,
+        "gainWrite": 1,
+        "gainTap": 1
+      },
+      {
+        "lfoIncrement": 64,
+        "lpfA": 9.999999747378752E-06,
+        "lpfB": 1,
+        "tap1Depth": 240,
+        "tap1Base": 3121152,
+        "tap2Depth": 240,
+        "tap2Base": 3121152,
+        "feedback": 0.875,
+        "gainWrite": 1,
+        "gainTap": 1
+      },
+      {
+        "lfoIncrement": 0,
+        "lpfA": 9.999999747378752E-06,
+        "lpfB": 1,
+        "tap1Depth": 5120,
+        "tap1Base": 3121152,
+        "tap2Depth": 5120,
+        "tap2Base": 3121152,
+        "feedback": 9.999999747378752E-06,
+        "gainWrite": 1,
+        "gainTap": 1
+      },
+      {
+        "lfoIncrement": 0,
+        "lpfA": 9.999999747378752E-06,
+        "lpfB": 1,
+        "tap1Depth": 5120,
+        "tap1Base": 3121152,
+        "tap2Depth": 5120,
+        "tap2Base": 3121152,
+        "feedback": 0.625,
+        "gainWrite": 1,
+        "gainTap": 1
+      }
+    ]
+  },
+  "delay": {
+    "typeNames": [
+      "Delay1",
+      "Delay2",
+      "Delay3",
+      "Delay4",
+      "PanDelay1",
+      "PanDelay2",
+      "PanDelay3",
+      "PanDelay4",
+      "DelayToReverb",
+      "PanRepeat"
+    ],
+    "timeMilliseconds": [
+      0.1,
+      0.2,
+      0.3,
+      0.4,
+      0.5,
+      0.6,
+      0.7,
+      0.8,
+      0.9,
+      1,
+      1.1,
+      1.2,
+      1.3,
+      1.4,
+      1.5,
+      1.6,
+      1.7,
+      1.8,
+      1.9,
+      2,
+      2.2,
+      2.4,
+      2.6,
+      2.8,
+      3,
+      3.2,
+      3.4,
+      3.6,
+      3.8,
+      4,
+      4.2,
+      4.4,
+      4.6,
+      4.8,
+      5,
+      5.5,
+      6,
+      6.5,
+      7,
+      7.5,
+      8,
+      8.5,
+      9,
+      9.5,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      22,
+      24,
+      26,
+      28,
+      30,
+      32,
+      34,
+      36,
+      38,
+      40,
+      42,
+      44,
+      46,
+      48,
+      50,
+      55,
+      60,
+      65,
+      70,
+      75,
+      80,
+      85,
+      90,
+      95,
+      100,
+      110,
+      120,
+      130,
+      140,
+      150,
+      160,
+      170,
+      180,
+      190,
+      200,
+      220,
+      240,
+      260,
+      280,
+      300,
+      320,
+      340,
+      360,
+      380,
+      400,
+      420,
+      440,
+      460,
+      480,
+      500,
+      550,
+      600,
+      650,
+      700,
+      750,
+      800,
+      850,
+      900,
+      950,
+      1000
+    ],
+    "ratioPercent": [
+      4,
+      8,
+      13,
+      17,
+      21,
+      25,
+      29,
+      33,
+      38,
+      42,
+      46,
+      50,
+      54,
+      58,
+      63,
+      67,
+      71,
+      75,
+      79,
+      83,
+      88,
+      92,
+      96,
+      100,
+      104,
+      108,
+      113,
+      117,
+      121,
+      125,
+      129,
+      133,
+      138,
+      142,
+      146,
+      150,
+      154,
+      158,
+      163,
+      167,
+      171,
+      175,
+      179,
+      183,
+      188,
+      192,
+      196,
+      200,
+      204,
+      208,
+      213,
+      217,
+      221,
+      225,
+      229,
+      233,
+      238,
+      242,
+      246,
+      250,
+      254,
+      258,
+      263,
+      267,
+      271,
+      275,
+      279,
+      283,
+      288,
+      292,
+      296,
+      300,
+      304,
+      308,
+      313,
+      317,
+      321,
+      325,
+      329,
+      333,
+      338,
+      342,
+      346,
+      350,
+      354,
+      358,
+      363,
+      367,
+      371,
+      375,
+      379,
+      383,
+      388,
+      392,
+      396,
+      400,
+      404,
+      408,
+      413,
+      417,
+      421,
+      425,
+      429,
+      433,
+      438,
+      442,
+      446,
+      450,
+      454,
+      458,
+      463,
+      467,
+      471,
+      475,
+      479,
+      483,
+      488,
+      492,
+      496,
+      500
+    ],
+    "rawPresets": [
+      [
+        0,
+        97,
+        1,
+        1,
+        127,
+        0,
+        0,
+        64,
+        80,
+        0
+      ],
+      [
+        0,
+        106,
+        1,
+        1,
+        127,
+        0,
+        0,
+        64,
+        80,
+        0
+      ],
+      [
+        0,
+        115,
+        1,
+        1,
+        127,
+        0,
+        0,
+        64,
+        72,
+        0
+      ],
+      [
+        0,
+        83,
+        1,
+        1,
+        127,
+        0,
+        0,
+        64,
+        72,
+        0
+      ],
+      [
+        0,
+        105,
+        12,
+        24,
+        0,
+        125,
+        60,
+        64,
+        74,
+        0
+      ],
+      [
+        0,
+        109,
+        12,
+        24,
+        0,
+        125,
+        60,
+        64,
+        71,
+        0
+      ],
+      [
+        0,
+        115,
+        12,
+        24,
+        0,
+        120,
+        64,
+        64,
+        73,
+        0
+      ],
+      [
+        0,
+        93,
+        12,
+        24,
+        0,
+        120,
+        64,
+        64,
+        72,
+        0
+      ],
+      [
+        0,
+        109,
+        12,
+        24,
+        0,
+        114,
+        60,
+        64,
+        61,
+        36
+      ],
+      [
+        0,
+        110,
+        21,
+        32,
+        97,
+        127,
+        67,
+        64,
+        40,
+        0
+      ]
+    ]
+  }
+}
