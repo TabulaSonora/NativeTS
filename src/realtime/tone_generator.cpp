@@ -1263,9 +1263,8 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
 {
     Part& part = parts[static_cast<std::size_t>(channel)];
 
-    // The kit's own key is kept alongside the overridden one, because the envelope rate key-follow
-    // indexes off the stored plane rather than the plane the override has already doubled the NRPN
-    // offset into.
+    // The kit's own key is kept alongside the overridden one: `apply` also resolves the panpot,
+    // and the envelope rate key-follow takes the plane through its own clamp.
     DrumKey kit_key = notes->drums().key(
         note, drum_kit[static_cast<std::size_t>(channel / Sequence::channel_count)]);
 

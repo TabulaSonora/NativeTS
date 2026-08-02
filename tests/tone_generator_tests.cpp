@@ -577,3 +577,53 @@ TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
     generator.send_sysex(dt1({0x41, 0x03, 40, 7}));
     CHECK(generator.part(9).drum_keys.group(40) == 4);
 }
+
+TEST_CASE("the NRPN-dropped crash still sounds on the SC-55 map", "[stream][sccore]")
+{
+    // WATRWLD1.MID drops its crash (key 55) forty steps with the drum pitch NRPN. On the SC-55
+    // map the Standard kit's crash tone follows pitch at 100%, so the old doubled, unclamped
+    // plane fell five octaves instead of the engine's 2.3 and the crash disappeared into
+    // subsonics. The corrected plane -- offset added one-for-one, clamped at zero -- keeps it a
+    // deep but audible cymbal.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGeneratorOptions options;
+    options.map = ToneMap::sc55;
+    ToneGenerator generator{notes, options};
+
+    const auto crossings = [&](bool with_nrpn) {
+        generator.reset();
+        if (with_nrpn) {
+            generator.send_channel(0xB9, 99, 0x18);
+            generator.send_channel(0xB9, 98, 55);
+            generator.send_channel(0xB9, 6, 24);
+        }
+        generator.send_channel(0x99, 55, 127);
+
+        std::vector<float> left(ToneGenerator::sample_rate);
+        std::vector<float> right(left.size());
+        generator.render(left, right);
+
+        int count = 0;
+        for (std::size_t i = 1; i < left.size(); ++i) {
+            const double previous = left[i - 1] + right[i - 1];
+            const double current = left[i] + right[i];
+            if ((previous < 0.0) != (current < 0.0)) {
+                ++count;
+            }
+        }
+        return count;
+    };
+
+    const int plain = crossings(false);
+    const int dropped = crossings(true);
+
+    // The NRPN lowers the pitch, so the spectrum moves down -- but it must stay in hearing
+    // range. Measured: ~9900 crossings a second for the untouched key, ~3900 for the corrected
+    // drop, and only a few hundred for the five-octave fall this regression pins. The bounds sit
+    // well clear of all three.
+    CHECK(plain > 6000);
+    CHECK(dropped < plain);
+    CHECK(dropped > 2000);
+}

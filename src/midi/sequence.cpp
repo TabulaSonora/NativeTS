@@ -178,7 +178,14 @@ std::optional<int> DrumKeyOverrides::pan_for_hit(int note, EngineNoise& noise) c
 DrumKey
 DrumKeyOverrides::apply(DrumKey key, int pitch_offset_steps, std::optional<int> pan_value) noexcept
 {
-    key.pitch = key.pitch + (2 * pitch_offset_steps);
+    // The engine's own plane write (`nrpn_apply` case 0x18, confirmed by live plane reads): the
+    // offset lands on the kit plane unscaled, clamped to 0-0x7F. What a step is then worth is the
+    // tone's own pitch key-follow -- a 100%-follow tone moves a semitone per step, a 50% tone half
+    // of one. The doubling this used to do belonged to that key-follow, not to the plane, and it
+    // pushed 100%-follow keys twice as far as the engine does -- WATRWLD1.MID's NRPN-dropped crash
+    // (key 55, -40 steps) fell five octaves instead of the engine's 2.3 and vanished on the SC-55
+    // map, whose crash tone follows at 100%.
+    key.pitch = std::clamp(key.pitch + pitch_offset_steps, 0, 0x7F);
     key.pan = pan_value.value_or(key.pan);
     return key;
 }

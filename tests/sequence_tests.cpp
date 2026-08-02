@@ -298,3 +298,28 @@ TEST_CASE("data entry commits to whichever of RPN or NRPN was selected last", "[
     // ...and the bend range kept the value the RPN gave it.
     CHECK(sequence.parts[0].bend_range.value_at(320, 2) == 12);
 }
+
+TEST_CASE("the drum pitch NRPN lands on the plane unscaled and clamped", "[midi]")
+{
+    // The engine's plane write (`nrpn_apply` case 0x18), confirmed by live plane reads: the
+    // offset adds to the kit plane one-for-one -- entry +12 moves a plane of 60 to 72 on every
+    // map -- and the sum clamps to 0-0x7F. What a step is then worth in pitch is the tone's own
+    // key-follow, applied downstream.
+    DrumKey key{};
+    key.pitch = 60;
+    CHECK(DrumKeyOverrides::apply(key, 12, std::nullopt).pitch == 72);
+
+    // WATRWLD1.MID's crash: kit plane 69 on the SC-55 Standard kit, NRPN entry 24 = -40 steps.
+    // The doubled, unclamped form of this drove the plane to -11 and the crash five octaves down
+    // into inaudibility.
+    key.pitch = 69;
+    CHECK(DrumKeyOverrides::apply(key, 24 - 0x40, std::nullopt).pitch == 29);
+
+    // The clamp's bottom is the "absolute rate floor" of the earlier measurements: keys with
+    // different kit planes floor at different offsets, which made it look like a rate limit.
+    key.pitch = 60;
+    CHECK(DrumKeyOverrides::apply(key, -0x40, std::nullopt).pitch == 0);
+    CHECK(DrumKeyOverrides::apply(key, 0x3F, std::nullopt).pitch == 123);
+    key.pitch = 100;
+    CHECK(DrumKeyOverrides::apply(key, 0x3F, std::nullopt).pitch == 0x7F);
+}

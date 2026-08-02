@@ -89,7 +89,11 @@ public:
     void set_chorus(int note, int entry) noexcept;
     void set_delay(int note, int entry) noexcept;
 
-    /// The coarse-pitch offset held for a key, in NRPN steps of one semitone.
+    /// The coarse-pitch offset held for a key, in kit-plane steps.
+    ///
+    /// A step's worth in pitch is the tone's own key-follow: a semitone on a 100%-follow tone,
+    /// half of one at 50%. The famous "SC-55 mode doubles the NRPN's range" is exactly this --
+    /// the SC-55 kits use 100%-follow tones where the later standard kits use 50%.
     [[nodiscard]] int pitch_offset(int note) const noexcept;
 
     /// The panpot held for a key, or nothing when the key follows its kit record.
@@ -115,9 +119,11 @@ public:
 
     /// Layers a latched pair of overrides over a key read from the kit record.
     ///
-    /// The plane is deliberately left unclamped. The engine does not stop at zero — key 55 sits at
-    /// plane 60 and still changes pitch at entry 0, which drives the sum to -68 — so clamping here
-    /// would silently flatten the bottom of the range a file can actually use.
+    /// The offset lands on the plane unscaled and the sum clamps to 0-0x7F, which is the engine's
+    /// own plane write (`nrpn_apply` case 0x18, confirmed by live plane reads: entry +12 moves the
+    /// stored plane 60 to 72 on every map). The "absolute rate floor" measured but never located
+    /// in earlier work is this clamp's bottom: keys with different kit planes floor at different
+    /// offsets, which is what made it look like a rate limit rather than a pitch one.
     [[nodiscard]] static DrumKey
     apply(DrumKey key, int pitch_offset, std::optional<int> pan) noexcept;
 
