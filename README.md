@@ -10,9 +10,15 @@ It exists so that hosts which cannot take a .NET runtime can embed the engine di
 is GPL-compatible, so [Cog](https://github.com/losnoco/Cog) and its like can link it without a
 separate grant.
 
-**Status: early.** The build system, the fixed-point core and the table offset map are in place. The
-DSP is being ported subsystem by subsystem, each one held to a bit-exactness gate against the C#
-engine before the next begins. It does not yet render audio.
+**Status: early.** The ROM layer is done and verified — the engine reads `SCCore.dll`, verifies it is
+the pinned build, and extracts all 49 static tables **byte-identical to the C# tool**. The DSP is
+being ported subsystem by subsystem, each held to a bit-exactness gate against the C# engine before
+the next begins. It does not yet render audio.
+
+```
+tabula-sonora info <path>/SCCore.dll             # verify a DLL and describe it
+tabula-sonora extract-tables <path>/SCCore.dll tables/
+```
 
 ## What "faithful" means here
 

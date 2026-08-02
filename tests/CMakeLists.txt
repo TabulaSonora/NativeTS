@@ -2,8 +2,17 @@ find_package(Catch2 3 CONFIG REQUIRED)
 
 add_executable(ts_tests
     fixed_tests.cpp
+    rom_image_tests.cpp
+    sha256_tests.cpp
     table_manifest_tests.cpp
+    table_set_tests.cpp
+    test_data.cpp
+    wave_rom_tests.cpp
 )
+
+# Nothing Roland-derived is committed, so the tests resolve those assets at run time and skip when
+# they are absent. This is where they start looking.
+target_compile_definitions(ts_tests PRIVATE TS_REPOSITORY_ROOT="${CMAKE_SOURCE_DIR}")
 
 target_link_libraries(ts_tests
     PRIVATE

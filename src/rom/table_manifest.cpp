@@ -82,7 +82,8 @@ using nlohmann::json;
 
 TableManifest TableManifest::parse(std::string_view text)
 {
-    const auto root = json::parse(text, nullptr, /*allow_exceptions=*/true, /*ignore_comments=*/false);
+    const auto root =
+        json::parse(text, nullptr, /*allow_exceptions=*/true, /*ignore_comments=*/false);
 
     TableManifest manifest;
 
@@ -96,7 +97,8 @@ TableManifest TableManifest::parse(std::string_view text)
         .sha256 = require_hex_digest(dll, "sha256"),
         .sha1 = require_hex_digest(dll, "sha1"),
         .md5 = require_hex_digest(dll, "md5"),
-        .pe_timestamp = static_cast<std::uint32_t>(require(dll, "pe_timestamp").get<std::int64_t>()),
+        .pe_timestamp =
+            static_cast<std::uint32_t>(require(dll, "pe_timestamp").get<std::int64_t>()),
     };
 
     const auto image_base = hex_property(root, "image_base");
@@ -179,7 +181,8 @@ const TableEntry& TableManifest::table(std::string_view name) const
 {
     const auto found = by_name_.find(name);
     if (found == by_name_.end()) {
-        throw std::out_of_range("No cached table named '" + std::string{name} + "' in the manifest.");
+        throw std::out_of_range("No cached table named '" + std::string{name}
+                                + "' in the manifest.");
     }
     return tables_[found->second];
 }
@@ -188,7 +191,8 @@ const LiveRegion& TableManifest::region(std::string_view name) const
 {
     const auto found = regions_by_name_.find(name);
     if (found == regions_by_name_.end()) {
-        throw std::out_of_range("No live region named '" + std::string{name} + "' in the manifest.");
+        throw std::out_of_range("No live region named '" + std::string{name}
+                                + "' in the manifest.");
     }
     return regions_[found->second];
 }

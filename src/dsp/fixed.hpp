@@ -108,7 +108,8 @@ namespace ts::fx {
 [[nodiscard]] constexpr std::uint32_t read_u32le(const std::uint8_t* data) noexcept
 {
     return static_cast<std::uint32_t>(data[0]) | (static_cast<std::uint32_t>(data[1]) << 8)
-        | (static_cast<std::uint32_t>(data[2]) << 16) | (static_cast<std::uint32_t>(data[3]) << 24);
+           | (static_cast<std::uint32_t>(data[2]) << 16)
+           | (static_cast<std::uint32_t>(data[3]) << 24);
 }
 
 } // namespace ts::fx

@@ -134,6 +134,7 @@ private:
     /// dangle the moment the manifest is moved.
     struct StringHash {
         using is_transparent = void;
+
         [[nodiscard]] std::size_t operator()(std::string_view text) const noexcept
         {
             return std::hash<std::string_view>{}(text);
