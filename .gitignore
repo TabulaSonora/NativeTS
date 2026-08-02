@@ -17,8 +17,14 @@ SCCore.dll
 tables/
 
 # Differential fixtures: predictor streams and sampled outputs over the DLL's own data.
-#   python3 tools/dump_predictors.py <SCCore.dll> fixtures/predictors.json
+#   python3 tools/dump_predictors.py <SCCore.dll> fixtures/
+
+# Test MIDI supplied by the user; not ours to redistribute either.
+testdata/predictors.json
 fixtures/
+
+# Test MIDI supplied by the user; not ours to redistribute either.
+testdata/
 
 # Rendered audio and decoded samples: this is the wave ROM, one step removed.
 *.wav

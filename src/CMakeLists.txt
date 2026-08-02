@@ -13,6 +13,8 @@ add_library(tabulasonora
     dsp/segment_envelope.cpp
     dsp/tva_chain.cpp
     dsp/tvf_chain.cpp
+    midi/sequence.cpp
+    midi/smf_reader.cpp
     patches/drum_kit_table.cpp
     patches/partial_parameters.cpp
     patches/patch_directory.cpp
