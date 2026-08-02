@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
+#include <string>
 
 /// Locating the Roland-derived assets the conformance tests need.
 ///
@@ -27,5 +30,15 @@ namespace ts::testdata {
 
 /// Skips the current test unless the extracted tables are present. Returns the directory.
 [[nodiscard]] std::filesystem::path require_tables();
+
+/// The repository root, as baked in at configure time. Fixtures are resolved relative to it.
+[[nodiscard]] const std::filesystem::path& repository_root();
+
+/// SHA-256, as lower-case hex, of a run of 32-bit values serialised little-endian.
+///
+/// Comparing a whole predictor stream literally would mean a fixture the size of the wave ROM, so
+/// the differential fixtures record a digest instead. Little-endian because that is what the
+/// generator writes, and the two have to agree byte for byte or the digest means nothing.
+[[nodiscard]] std::string sha256_of_le32(std::span<const std::int32_t> values);
 
 } // namespace ts::testdata

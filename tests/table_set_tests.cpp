@@ -5,6 +5,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
@@ -89,9 +90,11 @@ TEST_CASE("the interpolator kernel is 128 phases of 4 taps summing to one", "[ta
                            + static_cast<double>(coefficients[phase * 4 + 1])
                            + static_cast<double>(coefficients[phase * 4 + 2])
                            + static_cast<double>(coefficients[phase * 4 + 3]);
+        // Measured: the row sums span 0.999999999970896 to 1.000009999999747, so the bound is
+        // exactly 1e-5 either side and not some loose window. Row 0's fourth tap is literally 1e-5,
+        // which is what sets the upper end.
         INFO("phase " << phase << " sums to " << sum);
-        REQUIRE(sum > 0.999);
-        REQUIRE(sum < 1.001);
+        REQUIRE(std::abs(sum - 1.0) <= 1e-5);
     }
 }
 

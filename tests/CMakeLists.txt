@@ -2,6 +2,9 @@ find_package(Catch2 3 CONFIG REQUIRED)
 
 add_executable(ts_tests
     fixed_tests.cpp
+    interpolator_tests.cpp
+    sampler_tests.cpp
+    wave_codec_tests.cpp
     rom_image_tests.cpp
     sha256_tests.cpp
     table_manifest_tests.cpp

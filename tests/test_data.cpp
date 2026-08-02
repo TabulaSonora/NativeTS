@@ -1,7 +1,10 @@
 #include "test_data.hpp"
 
+#include "rom/sha256.hpp"
+
 #include <catch2/catch_test_macros.hpp>
 
+#include <array>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -41,13 +44,30 @@ namespace fs = std::filesystem;
     return std::nullopt;
 }
 
-[[nodiscard]] const fs::path& repository_root()
+} // namespace
+
+const fs::path& repository_root()
 {
     static const fs::path root{TS_REPOSITORY_ROOT};
     return root;
 }
 
-} // namespace
+std::string sha256_of_le32(std::span<const std::int32_t> values)
+{
+    Sha256 hash;
+
+    std::array<std::uint8_t, 4> bytes{};
+    for (std::int32_t value : values) {
+        const auto word = static_cast<std::uint32_t>(value);
+        bytes[0] = static_cast<std::uint8_t>(word);
+        bytes[1] = static_cast<std::uint8_t>(word >> 8);
+        bytes[2] = static_cast<std::uint8_t>(word >> 16);
+        bytes[3] = static_cast<std::uint8_t>(word >> 24);
+        hash.update(bytes.data(), bytes.size());
+    }
+
+    return hash.finish_hex();
+}
 
 std::optional<fs::path> sccore()
 {

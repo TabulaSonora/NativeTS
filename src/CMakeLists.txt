@@ -6,6 +6,8 @@ ts_embed_asset(TS_MANIFEST_SOURCE "${CMAKE_SOURCE_DIR}/assets/manifest.json" man
 ts_embed_asset(TS_PRESETS_SOURCE  "${CMAKE_SOURCE_DIR}/assets/presets.json"  presets_json)
 
 add_library(tabulasonora
+    dsp/interpolator.cpp
+    dsp/sampler.cpp
     rom/rom_image.cpp
     rom/table_set.cpp
     rom/wave_rom.cpp
