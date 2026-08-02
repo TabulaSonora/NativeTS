@@ -10,6 +10,7 @@ add_executable(ts_tests
     sampler_tests.cpp
     wave_codec_tests.cpp
     rom_image_tests.cpp
+    sequence_renderer_tests.cpp
     sequence_tests.cpp
     sha256_tests.cpp
     table_manifest_tests.cpp

@@ -1,7 +1,9 @@
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/send_effects.hpp"
+#include "tabulasonora/sequence_renderer.hpp"
 #include "tabulasonora/table_manifest.hpp"
+#include "tabulasonora/wav_writer.hpp"
 #include "tabulasonora/wave_rom.hpp"
 
 #include <CLI/CLI.hpp>
@@ -9,6 +11,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <string>
 
@@ -182,6 +185,31 @@ int dump_effect_command(const std::string& kind, int type, int samples, const fs
     return 0;
 }
 
+/// Renders a Standard MIDI File to a WAV.
+int render_command(const std::string& dll,
+                   const fs::path& midi,
+                   const fs::path& output,
+                   int map,
+                   const ts::RenderOptions& base)
+{
+    const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
+    ts::NoteRenderer notes{rom};
+    ts::SequenceRenderer renderer{notes};
+
+    ts::RenderOptions options = base;
+    options.map = static_cast<ts::ToneMap>(map);
+
+    const ts::RenderResult result = renderer.render_file(midi, options);
+    ts::wav::write(output, result.left, result.right, result.sample_rate);
+
+    const double seconds = static_cast<double>(result.left.size()) / result.sample_rate;
+    std::cout << midi.filename().string() << ": " << result.note_count << " notes, " << std::fixed
+              << std::setprecision(2) << seconds << " s, peak " << std::setprecision(6)
+              << result.peak << "\n"
+              << "wrote " << output.string() << "\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -218,6 +246,25 @@ int main(int argc, char** argv)
     render_note->add_option("output", output_file, "Output .f32 path")->required();
     render_note->add_option("map", map, "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820");
 
+    fs::path midi_path;
+    ts::RenderOptions render_options;
+    bool no_reverb = false;
+    bool no_chorus = false;
+    bool no_delay = false;
+    CLI::App* render = app.add_subcommand("render", "Render a Standard MIDI File to a WAV.");
+    render->add_option("dll", dll_path, "Path to SCCore.dll")->required();
+    render->add_option("midi", midi_path, "Input .mid path")->required();
+    render->add_option("output", output_file, "Output .wav path")->required();
+    render->add_option("--map", map, "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820");
+    render->add_option(
+        "--tail", render_options.tail_seconds, "Seconds to render past the last note");
+    render->add_option("--end", render_options.end_seconds, "Stop at this many seconds");
+    render->add_option("--volume", render_options.output_gain, "Linear output gain");
+    render->add_option("--drum-map", render_options.drum_map_row, "Drum map row, 0-5");
+    render->add_flag("--no-reverb", no_reverb, "Disable the reverb send");
+    render->add_flag("--no-chorus", no_chorus, "Disable the chorus send");
+    render->add_flag("--no-delay", no_delay, "Disable the delay send");
+
     std::string effect_kind;
     int effect_type = 0;
     int effect_samples = 32000;
@@ -239,6 +286,12 @@ int main(int argc, char** argv)
         }
         if (extract->parsed()) {
             return extract_tables_command(dll_path, output_directory);
+        }
+        if (render->parsed()) {
+            render_options.reverb = !no_reverb;
+            render_options.chorus = !no_chorus;
+            render_options.delay = !no_delay;
+            return render_command(dll_path, midi_path, output_file, map, render_options);
         }
         if (dump_effect->parsed()) {
             return dump_effect_command(effect_kind, effect_type, effect_samples, output_file);

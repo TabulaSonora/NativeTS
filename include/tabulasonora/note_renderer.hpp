@@ -129,6 +129,34 @@ public:
                                            int part_pan = 0x40,
                                            const Controllers& controllers = {});
 
+    /// How much longer a hit needs than the nominal ring, given its coarse pitch.
+    ///
+    /// The ring exists because a drum ignores note-off, so the renderer has to decide for itself
+    /// how long to run. A fixed window is wrong once a key is pitched down: the sample plays
+    /// proportionally slower, so the hit outlasts it and is cut off mid-decay. Measured on the real
+    /// DLL, the splash at NRPN 18h = 24 takes 4.68 s to fall 40 dB against 1.15 s untouched — four
+    /// times the nominal 1.8 s ring. The envelope, not this window, is what should end the note.
+    [[nodiscard]] static double drum_ring_scale(const DrumKey& key) noexcept;
+
+    /// How much longer a hit needs than the nominal ring, before it is rendered.
+    ///
+    /// Lets a caller size its own buffers to the same window the render will use.
+    [[nodiscard]] double drum_ring_scale(int note, int kit, int drum_pitch) const;
+
+    /// Renders one drum hit.
+    ///
+    /// The note does not transpose the sample: the tone resolves at key 60 and the kit's
+    /// coarse-pitch plane supplies an offset at half strength. The kit level is not part of the
+    /// voice gain — it enters downstream, squared.
+    [[nodiscard]] RenderedNote render_drum_note(int note,
+                                                int velocity,
+                                                double ring_seconds,
+                                                double tail_seconds = 0.4,
+                                                int kit = 0,
+                                                std::span<const double> volume = {},
+                                                int drum_pitch = 0,
+                                                std::optional<int> drum_pan = std::nullopt);
+
     /// The key a drum hit's envelope rates are key-followed by.
     ///
     /// Not 60, and not the MIDI note. The engine keeps this at `voice+0x161`, filled by

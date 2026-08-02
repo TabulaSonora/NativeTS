@@ -28,6 +28,8 @@ add_library(tabulasonora
     rom/sha256.cpp
     rom/table_manifest.cpp
     render/note_renderer.cpp
+    render/sequence_renderer.cpp
+    render/wav_writer.cpp
     ${TS_MANIFEST_SOURCE}
     ${TS_PRESETS_SOURCE}
 )

@@ -1,5 +1,7 @@
 #include "tabulasonora/note_renderer.hpp"
 
+#include "tabulasonora/sequence.hpp"
+
 #include "dsp/simd.hpp"
 
 #include <algorithm>
@@ -163,6 +165,91 @@ const LfoEngine& NoteRenderer::lfo() const noexcept
 const PanLaw& NoteRenderer::pan() const noexcept
 {
     return impl_->pan;
+}
+
+double NoteRenderer::drum_ring_scale(const DrumKey& key) noexcept
+{
+    const double ratio = DrumKitTable::coarse_pitch_ratio(key.pitch);
+    return ratio <= 0 ? 1.0 : std::clamp(1.0 / ratio, 1.0, max_drum_ring_scale);
+}
+
+double NoteRenderer::drum_ring_scale(int note, int kit, int drum_pitch) const
+{
+    return drum_ring_scale(
+        DrumKeyOverrides::apply(impl_->drums.key(note, kit), drum_pitch, std::nullopt));
+}
+
+RenderedNote NoteRenderer::render_drum_note(int note,
+                                            int velocity,
+                                            double ring_seconds,
+                                            double tail_seconds,
+                                            int kit,
+                                            std::span<const double> volume,
+                                            int drum_pitch,
+                                            std::optional<int> drum_pan)
+{
+    // The kit's own key is kept alongside the overridden one: the envelope rate key-follow is
+    // indexed from the stored plane plus the NRPN offset in semitones, not from the plane after the
+    // override has doubled that offset into it.
+    const DrumKey kit_key = impl_->drums.key(note, kit);
+    const DrumKey key = DrumKeyOverrides::apply(kit_key, drum_pitch, drum_pan);
+
+    // The ring stretches with the coarse pitch, and the hold has to stretch with it: the hold is
+    // where note-off lands, and both the TVA and TVF envelopes are sized from it. Leaving it at the
+    // nominal ring builds envelopes shorter than the signal they gate.
+    const double ring = ring_seconds * drum_ring_scale(key);
+    const auto sample_count =
+        static_cast<std::size_t>(std::max(0.0, (ring + tail_seconds) * sample_rate));
+
+    // A drum sounds its tone at key 60; the plane, not the note, supplies the pitch.
+    const ResolvedTone resolved = impl_->directory.resolve(key.tone, /*note=*/60, velocity);
+
+    RenderedNote out;
+    out.left.assign(sample_count, 0.0F);
+    out.right.assign(sample_count, 0.0F);
+    out.mono.assign(sample_count, 0.0F);
+    out.name = resolved.name;
+
+    const std::optional<Tone> tone = impl_->directory.tone(key.tone);
+    if (sample_count == 0 || resolved.partials.empty() || !tone) {
+        return out;
+    }
+
+    for (const ResolvedPartial& sounding : resolved.partials) {
+        const PartialParameters& partial =
+            tone->partials()[static_cast<std::size_t>(sounding.partial_index)];
+
+        const std::optional<std::vector<float>> signal =
+            impl_->render_partial(key.tone,
+                                  partial,
+                                  sounding.descriptor,
+                                  /*note=*/60,
+                                  velocity,
+                                  ring,
+                                  tail_seconds,
+                                  sample_count,
+                                  {},
+                                  {},
+                                  key.pitch,
+                                  envelope_rate_key(kit_key, drum_pitch));
+
+        if (signal) {
+            simd::add(*signal, out.mono);
+        }
+    }
+
+    // The kit level acts as (level/127) squared, and pan is per drum key.
+    const double level_gain = DrumKitTable::level_gain(key.level);
+    const auto [gain_left, gain_right] = impl_->pan.gains(key.pan);
+
+    // Pan reads the levelled mono back after it has been narrowed to float, as the scalar loop did
+    // -- the kit level is not a second factor folded into the pan gain.
+    simd::scale(out.mono, level_gain);
+    simd::store_scaled(out.mono, gain_left, out.left);
+    simd::store_scaled(out.mono, gain_right, out.right);
+
+    apply_volume(out.left, out.right, out.mono, volume);
+    return out;
 }
 
 int NoteRenderer::envelope_rate_key(const DrumKey& key, int drum_pitch) noexcept

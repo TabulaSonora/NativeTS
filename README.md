@@ -10,15 +10,20 @@ It exists so that hosts which cannot take a .NET runtime can embed the engine di
 is GPL-compatible, so [Cog](https://github.com/losnoco/Cog) and its like can link it without a
 separate grant.
 
-**Status: early.** The ROM layer is done and verified — the engine reads `SCCore.dll`, verifies it is
-the pinned build, and extracts all 49 static tables **byte-identical to the C# tool**. The DSP is
-being ported subsystem by subsystem, each held to a bit-exactness gate against the C# engine before
-the next begins. It does not yet render audio.
+**Status: it renders.** A Standard MIDI File now renders to a WAV that is **byte-for-byte identical
+to the C# engine** — checked on a 123-second, 4,366-note file across all four tone maps and every
+effect and gain option. Faster, too: about 7 seconds against 10.5 for the same render.
 
 ```
+tabula-sonora render <path>/SCCore.dll song.mid out.wav --map 4
+tabula-sonora render-note <path>/SCCore.dll 48 60 100 1.0 note.f32 4
+tabula-sonora dump-effect reverb 4 48000 impulse.f32
 tabula-sonora info <path>/SCCore.dll             # verify a DLL and describe it
 tabula-sonora extract-tables <path>/SCCore.dll tables/
 ```
+
+What is not here yet: the real-time block loop with its 64-voice limit and voice stealing, and the
+terminal player. The offline path is complete.
 
 ## What "faithful" means here
 
