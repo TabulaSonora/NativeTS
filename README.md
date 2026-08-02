@@ -6,6 +6,8 @@ is portable and has no Windows dependency at all.
 
 This is a port of [TabulaSonora/DotNetAdministravit](https://github.com/TabulaSonora/DotNetAdministravit),
 the C# implementation, built to the specification in [TabulaSonora/spec](https://github.com/TabulaSonora/spec).
+This repository is now the reference reimplementation: the C# project is archived and stays as the
+oracle these phases were verified against, but new work happens here.
 It exists so that hosts which cannot take a .NET runtime can embed the engine directly — BSD 3-Clause
 is GPL-compatible, so [Cog](https://github.com/losnoco/Cog) and its like can link it without a
 separate grant.
