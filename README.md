@@ -189,8 +189,8 @@ diagrams — and nothing else. No compiler, no vcpkg, no DLL:
 doxygen docs/Doxyfile          # from the repository root
 ```
 
-The site lands in `build/docs/html`. `cmake -DTS_BUILD_DOCS=ON` adds a `docs` target that runs the
-same command, for editors that want one.
+The site lands in `build/docs`. `cmake -DTS_BUILD_DOCS=ON` adds a `docs` target that runs the same
+command, for editors that want one.
 
 The reference is generated from the header comments, which are complete, and the build treats a
 broken cross-reference or an unknown command as an error rather than a warning. Diagrams are

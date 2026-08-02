@@ -4,17 +4,21 @@
 #
 #     doxygen docs/Doxyfile
 #
-# Every path below is relative to that working directory, and the output lands in build/docs/html
+# Every path below is relative to that working directory, and the output lands in build/docs
 # whatever preset you last configured -- the docs do not go through CMake at all. That is
 # deliberate: the top-level CMakeLists.txt refuses to configure without a vcpkg toolchain, and
 # rendering HTML should not need a compiler, a toolchain or SCCore.dll. `cmake -DTS_BUILD_DOCS=ON`
 # adds a `docs` target that shells out to exactly this command, for editors that want one.
+#
+# OUTPUT_DIRECTORY and HTML_OUTPUT are one level each on purpose: Doxygen creates a single
+# directory level and gives up on the rest, so asking for build/docs/html up front fails on a
+# clean clone where build/ does not exist yet.
 
 DOXYFILE_ENCODING      = UTF-8
 PROJECT_NAME           = "Tabula Sonora"
 PROJECT_BRIEF          = "A native C++20 implementation of the Roland Sound Canvas VA synth voice"
 PROJECT_NUMBER         = 0.1.0
-OUTPUT_DIRECTORY       = build/docs
+OUTPUT_DIRECTORY       = build
 OUTPUT_LANGUAGE        = English
 
 # ---------------------------------------------------------------------------------------------
@@ -100,7 +104,7 @@ WARN_FORMAT            = "$file:$line: $text"
 # requirements of the sidebar-only variant, not preferences.
 
 GENERATE_HTML          = YES
-HTML_OUTPUT            = html
+HTML_OUTPUT            = docs
 HTML_FILE_EXTENSION    = .html
 HTML_HEADER            = docs/doxygen/header.html
 HTML_EXTRA_STYLESHEET  = docs/doxygen/doxygen-awesome/doxygen-awesome.css \

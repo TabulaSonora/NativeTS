@@ -152,8 +152,8 @@ endif()
 # which is what lets CI render the site from a clean clone. This target only spares an editor the
 # trouble of knowing that, so it shells out to exactly the same command.
 #
-# The output therefore lands in <source>/build/docs/html as the Doxyfile says, not under this
-# preset's binary directory.
+# The output therefore lands in <source>/build/docs as the Doxyfile says, not under this preset's
+# binary directory.
 # ---------------------------------------------------------------------------------------------
 if(TS_BUILD_DOCS)
     find_package(Doxygen 1.9.8 REQUIRED)
@@ -161,7 +161,7 @@ if(TS_BUILD_DOCS)
     add_custom_target(docs
         COMMAND Doxygen::doxygen "${CMAKE_CURRENT_SOURCE_DIR}/docs/Doxyfile"
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        COMMENT "Doxygen -> build/docs/html"
+        COMMENT "Doxygen -> build/docs"
         VERBATIM)
 endif()
 
