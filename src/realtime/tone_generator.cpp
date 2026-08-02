@@ -28,7 +28,7 @@ struct ToneGenerator::Impl {
     ToneGeneratorOptions options;
 
     VoicePool pool;
-    std::array<Part, Sequence::channel_count> parts;
+    std::array<Part, ToneGenerator::part_count> parts;
 
     /// One voice per slot, or empty. Recycled through `spare` rather than reallocated per note.
     std::array<std::unique_ptr<PartialVoice>, VoicePool::max_voices> slots;
@@ -64,7 +64,8 @@ struct ToneGenerator::Impl {
 
     double output_gain = 1.0;
     std::optional<int> drum_map_row;
-    int drum_kit = 0;
+    // One per port: each port's channel 10 is its own drum part, with its own kit.
+    std::array<int, ToneGenerator::port_count> drum_kit{};
     std::int64_t position = 0;
     int note_count = 0;
 
@@ -80,6 +81,18 @@ struct ToneGenerator::Impl {
     void steal(int index);
     void release_slot(int index);
     void recycle(int index);
+
+    // Parts are addressed the way the module addresses them: port times sixteen, plus channel.
+    [[nodiscard]] static constexpr int part_of(int port, int channel) noexcept
+    {
+        return ((port & (ToneGenerator::port_count - 1)) * Sequence::channel_count) + channel;
+    }
+
+    // Every port has its own drum part, on the same channel within that port.
+    [[nodiscard]] bool is_drum_part(int part) const noexcept
+    {
+        return part % Sequence::channel_count == options.drum_channel;
+    }
 
     void control_change(int channel, Part& part, int controller, int value);
     [[nodiscard]] bool any_voice_on(int channel) const;
@@ -150,9 +163,9 @@ int ToneGenerator::active_voices() const noexcept
     return count;
 }
 
-const Part& ToneGenerator::part(int channel) const noexcept
+const Part& ToneGenerator::part(int index) const noexcept
 {
-    return impl_->parts[static_cast<std::size_t>(channel)];
+    return impl_->parts[static_cast<std::size_t>(index)];
 }
 
 const VoicePool& ToneGenerator::voices() const noexcept
@@ -162,7 +175,12 @@ const VoicePool& ToneGenerator::voices() const noexcept
 
 int ToneGenerator::drum_kit() const noexcept
 {
-    return impl_->drum_kit;
+    return impl_->drum_kit[0];
+}
+
+int ToneGenerator::drum_kit_for(int port) const noexcept
+{
+    return impl_->drum_kit[static_cast<std::size_t>(port & (port_count - 1))];
 }
 
 std::optional<int> ToneGenerator::drum_map_row() const noexcept
@@ -207,7 +225,7 @@ void ToneGenerator::reset()
         impl_->delay->reset();
     }
 
-    impl_->drum_kit = 0;
+    impl_->drum_kit.fill(0);
     impl_->position = 0;
     impl_->block_offset = block_size;
     impl_->note_count = 0;
@@ -219,18 +237,28 @@ void ToneGenerator::reset()
 
 void ToneGenerator::send(const MidiEvent& message)
 {
+    send(0, message);
+}
+
+void ToneGenerator::send(int port, const MidiEvent& message)
+{
     if (message.kind == MidiEventKind::sysex) {
         if (!message.sysex.empty()) {
-            send_sysex(message.sysex);
+            send_sysex(port, message.sysex);
         }
         return;
     }
-    send_channel(message.status, message.data1, message.data2);
+    send_channel(port, message.status, message.data1, message.data2);
 }
 
 void ToneGenerator::send_channel(int status, int data1, int data2)
 {
-    const int channel = status & 0x0F;
+    send_channel(0, status, data1, data2);
+}
+
+void ToneGenerator::send_channel(int port, int status, int data1, int data2)
+{
+    const int channel = Impl::part_of(port, status & 0x0F);
     Part& part = impl_->parts[static_cast<std::size_t>(channel)];
 
     switch (status & 0xF0) {
@@ -268,13 +296,13 @@ void ToneGenerator::send_channel(int status, int data1, int data2)
 
     case 0xC0: {
         part.program = data1;
-        if (channel == impl_->options.drum_channel) {
+        if (impl_->is_drum_part(channel)) {
             const std::optional<int> kit =
                 impl_->notes->drums().kit_for_program(data1, impl_->effective_drum_map_row());
             if (kit) {
                 // An undefined program leaves the current kit in place rather than falling back to
                 // Standard.
-                impl_->drum_kit = *kit;
+                impl_->drum_kit[static_cast<std::size_t>(channel / Sequence::channel_count)] = *kit;
             }
         }
         break;
@@ -290,6 +318,11 @@ void ToneGenerator::send_channel(int status, int data1, int data2)
 }
 
 void ToneGenerator::send_sysex(std::span<const std::uint8_t> bytes)
+{
+    send_sysex(0, bytes);
+}
+
+void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
 {
     // Universal master volume: F0 7F 7F 04 01 ll mm F7.
     if (bytes.size() >= 8 && bytes[0] == 0xF0 && bytes[1] == 0x7F && bytes[3] == 0x04
@@ -323,9 +356,31 @@ void ToneGenerator::send_sysex(std::span<const std::uint8_t> bytes)
                 impl_->options.delay_type ? impl_->options.delay_type : std::optional{value};
         }
     } else if (a1 == 0x40 && (a2 & 0xF0) == 0x10 && a3 == 0x2C) {
-        impl_->parts[static_cast<std::size_t>(sequence_builder::channel_from_block(a2 & 0x0F))]
+        impl_
+            ->parts[static_cast<std::size_t>(
+                Impl::part_of(port, sequence_builder::channel_from_block(a2 & 0x0F)))]
             .delay_send = value;
     }
+}
+
+void ToneGenerator::send_packet(std::uint32_t packet)
+{
+    // The module's own mask, widened by one bit. It clears everything above the port's low bit, so
+    // the class nibble survives and ports 2-15 fold onto 0 and 1 rather than indexing parts that do
+    // not exist.
+    constexpr std::uint32_t port_mask = 0x1F;
+
+    const int header = static_cast<int>(packet & port_mask);
+    const int status = static_cast<int>((packet >> 8) & 0xFF);
+    if (status < 0x80 || status >= 0xF0) {
+        // System common and realtime carry no channel, so there is no part for them to reach.
+        return;
+    }
+
+    send_channel(header >> 4,
+                 status,
+                 static_cast<int>((packet >> 16) & 0x7F),
+                 static_cast<int>((packet >> 24) & 0x7F));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -410,7 +465,10 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
 
     // A silenced channel contributes nothing at all -- not to the dry mix and not to the sends
     // either, so muting a part also removes its tail. It keeps running, so unmuting is instant.
-    if (options.channels != nullptr && !options.channels->is_audible(voice.channel())) {
+    // The mask is sixteen wide and indexed by channel, so muting a channel silences it on both
+    // ports -- one mixer strip per channel rather than per part.
+    if (options.channels != nullptr
+        && !options.channels->is_audible(voice.channel() % Sequence::channel_count)) {
         return;
     }
 
@@ -587,7 +645,7 @@ ToneGenerator::Impl::Envelopes ToneGenerator::Impl::envelopes(int tone_number,
 
 void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
 {
-    if (channel == options.drum_channel) {
+    if (is_drum_part(channel)) {
         start_drum(channel, note, velocity);
         return;
     }
@@ -699,7 +757,8 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     // The kit's own key is kept alongside the overridden one, because the envelope rate key-follow
     // indexes off the stored plane rather than the plane the override has already doubled the NRPN
     // offset into.
-    const DrumKey kit_key = notes->drums().key(note, drum_kit);
+    const DrumKey kit_key = notes->drums().key(
+        note, drum_kit[static_cast<std::size_t>(channel / Sequence::channel_count)]);
     const DrumKey key = DrumKeyOverrides::apply(kit_key,
                                                 part.drum_keys.pitch_offset(note),
                                                 part.drum_keys.pan_for_hit(note, notes->noise()));

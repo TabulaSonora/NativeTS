@@ -8,6 +8,7 @@ add_executable(ts_tests
     modulation_tests.cpp
     note_renderer_tests.cpp
     patch_directory_tests.cpp
+    port_tests.cpp
     sampler_tests.cpp
     wave_codec_tests.cpp
     rom_image_tests.cpp

@@ -69,6 +69,19 @@ public:
     /// Samples per control tick, at 100 Hz.
     static constexpr int control_block = NoteRenderer::control_block;
 
+    /// How many MIDI ports the engine accepts input on.
+    ///
+    /// Two, because the module has thirty-two parts and addresses them as `port * 16 + channel`. It
+    /// allocates all thirty-two unconditionally — the part count global is initialised to `0x20`
+    /// and the second part array sits exactly sixteen strides on from the first — but
+    /// `midi_drain_ready_to_ports` masks the port field out of every incoming packet with
+    /// `and r8b,0Fh`, so nothing but port A can be reached. Widening that mask to `0x1f` admits the
+    /// second port and no more, which is what this engine implements.
+    static constexpr int port_count = 2;
+
+    /// How many parts the engine has: sixteen per port.
+    static constexpr int part_count = port_count * Sequence::channel_count;
+
     /// Creates an engine over a note renderer's loaded tables, which must outlive it.
     explicit ToneGenerator(NoteRenderer& notes, const ToneGeneratorOptions& options = {});
 
@@ -97,8 +110,11 @@ public:
     /// How many voices are currently sounding, including those fading after being stolen.
     [[nodiscard]] int active_voices() const noexcept;
 
-    /// The sixteen parts, indexed by MIDI channel.
-    [[nodiscard]] const Part& part(int channel) const noexcept;
+    /// The thirty-two parts, indexed by `port * 16 + channel`.
+    ///
+    /// The first sixteen are port A and are what a host that never names a port drives, so an
+    /// engine sent only port-A traffic behaves exactly as a sixteen-part one.
+    [[nodiscard]] const Part& part(int index) const noexcept;
 
     /// The voice allocator.
     [[nodiscard]] const VoicePool& voices() const noexcept;
@@ -109,6 +125,11 @@ public:
     /// it was, so `kit_for_program` over the part's current program does not always answer what is
     /// actually loaded.
     [[nodiscard]] int drum_kit() const noexcept;
+
+    /// The drum kit in force on one port, 0 or 1.
+    ///
+    /// Each port has its own drum part, so each carries its own kit. `drum_kit()` is port A's.
+    [[nodiscard]] int drum_kit_for(int port) const noexcept;
 
     /// Which drum map row a program change on the drum part resolves against.
     ///
@@ -127,14 +148,48 @@ public:
     /// Silences everything and returns every part to its power-on state.
     void reset();
 
-    /// Applies one MIDI event; its position is ignored, since it applies now.
+    /// Applies one MIDI event on port A; its position is ignored, since it applies now.
     void send(const MidiEvent& message);
 
-    /// Applies one channel voice message.
+    /// Applies one MIDI event on a port, 0 or 1. Anything wider folds onto those two.
+    void send(int port, const MidiEvent& message);
+
+    /// Applies one channel voice message on port A.
+    ///
+    /// The equivalent of the module's `TG_ShortMidiIn`, which builds a packet with the port field
+    /// hardwired to zero and so can only ever reach port A.
     void send_channel(int status, int data1, int data2);
 
-    /// Applies one system-exclusive message, including the leading `F0`.
+    /// Applies one channel voice message on a port, 0 or 1. Anything wider folds onto those two.
+    ///
+    /// The port travels with the message rather than being selected beforehand, which is how the
+    /// module works: it dispatches on the port field of each packet as that packet is drained, and
+    /// nothing carries the field over from one message to the next.
+    void send_channel(int port, int status, int data1, int data2);
+
+    /// Applies one system-exclusive message on port A, including the leading `F0`.
     void send_sysex(std::span<const std::uint8_t> bytes);
+
+    /// Applies one system-exclusive message on a port, 0 or 1.
+    ///
+    /// GS part addressing is port-relative: a `40 1n` block address names a part on whichever port
+    /// the message arrived on. The module does this by latching the arriving packet's port field
+    /// into the high nibble of its current-channel global and selecting the part array from it, so
+    /// the same address means a different part on each port.
+    void send_sysex(int port, std::span<const std::uint8_t> bytes);
+
+    /// Applies one USB-MIDI Event Packet: `(port << 4) | class` in the low byte, then the MIDI
+    /// message in the three above it, least-significant first.
+    ///
+    /// The equivalent of the module's `TG_PMidiIn`, which is the only one of its exports that can
+    /// name a port. The message length is taken from the status byte rather than the class nibble,
+    /// so a caller that leaves the class at zero still gets the right message.
+    ///
+    /// The port field is masked with `0x1f` — the class nibble plus the low bit of the port — so
+    /// ports 0 and 1 pass through and anything wider folds onto them by its low bit. That is the
+    /// module's own mask widened by one bit: it ships as `0x0f`, which discards the port outright
+    /// and is why the stock DLL reaches only sixteen of its thirty-two parts.
+    void send_packet(std::uint32_t packet);
 
     /// Renders audio into two equal-length channels.
     ///
