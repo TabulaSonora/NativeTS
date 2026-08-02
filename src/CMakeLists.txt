@@ -28,6 +28,7 @@ add_library(tabulasonora
     rom/sha256.cpp
     rom/table_manifest.cpp
     voices/voice_pool.cpp
+    realtime/frame_ring.cpp
     realtime/part.cpp
     realtime/partial_voice.cpp
     realtime/sequence_player.cpp

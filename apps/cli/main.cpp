@@ -3,18 +3,25 @@
 #include "tabulasonora/send_effects.hpp"
 #include "tabulasonora/sequence_player.hpp"
 #include "tabulasonora/sequence_renderer.hpp"
+#include "tabulasonora/smf_reader.hpp"
 #include "tabulasonora/table_manifest.hpp"
 #include "tabulasonora/wav_writer.hpp"
 #include "tabulasonora/wave_rom.hpp"
 
 #include <CLI/CLI.hpp>
 
+#include <algorithm>
+#include <chrono>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <sstream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -241,6 +248,162 @@ int render_command(const std::string& dll,
     return 0;
 }
 
+/// A deterministic broadband signal for the effect stages.
+///
+/// Not an impulse. A decaying impulse response falls into denormal range within a second or two,
+/// where the arithmetic is an order of magnitude slower, and the stage would then be measuring the
+/// denormal penalty rather than the algorithm. Keeping the rings excited keeps every sample normal.
+[[nodiscard]] std::vector<float> excitation(std::size_t count)
+{
+    std::vector<float> samples(count);
+    std::uint32_t state = 0x2545F491U;
+    for (float& sample : samples) {
+        // xorshift32, so the signal is identical on every machine and every run.
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        sample = (static_cast<float>(state >> 8) / static_cast<float>(0x800000)) - 1.0F;
+    }
+    return samples;
+}
+
+/// Times one stage and prints its row.
+///
+/// Best-of-N rather than the mean. Measurement noise is one-sided -- a scheduling preemption can
+/// only make an iteration slower -- so the minimum is the closest estimate of the work actually
+/// being done, and it is far more stable run to run than an average.
+void report(const std::string& name,
+            double audio_seconds,
+            int iterations,
+            const std::function<void()>& stage)
+{
+    // One untimed pass, so first-touch page faults and cache warming are not attributed to the
+    // work.
+    stage();
+
+    double best = std::numeric_limits<double>::max();
+    for (int i = 0; i < iterations; ++i) {
+        const auto started = std::chrono::steady_clock::now();
+        stage();
+        const std::chrono::duration<double, std::milli> elapsed =
+            std::chrono::steady_clock::now() - started;
+        best = std::min(best, elapsed.count());
+    }
+
+    std::ostringstream row;
+    row << std::left << std::setw(24) << name << std::right << std::fixed << std::setw(9)
+        << std::setprecision(1) << best << std::setw(9) << std::setprecision(1)
+        << (audio_seconds * 1000.0 / best);
+    std::cout << row.str() << '\n';
+}
+
+/// Times the render path stage by stage, so a performance change can be attributed rather than
+/// guessed at.
+///
+/// Stages are reported separately because they move independently: the effects are single-sample
+/// feedback loops, the block loop is dominated by the sampler and filter, and the offline renderer
+/// spends much of its time in elementwise mix loops that neither of the others runs.
+///
+/// There is no allocation column, unlike the reference build's. It had one because a managed
+/// renderer's allocation rate is a real cost the timing hides; here the per-note allocations are
+/// visible in the source and the pools that avoid them are explicit.
+int bench_command(const std::string& dll, const fs::path& midi, int iterations)
+{
+    iterations = std::max(1, iterations);
+
+    const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
+    ts::NoteRenderer notes{rom};
+
+    std::cout << std::thread::hardware_concurrency() << " cores, scalar kernels, best of "
+              << iterations << "\n\n"
+              << "stage                          ms      xrt\n"
+              << "-------------------------------------------\n";
+
+    // Effects first: they need no MIDI and no wave data, so they always report.
+    constexpr double effect_seconds = 10.0;
+    const auto effect_samples =
+        static_cast<std::size_t>(effect_seconds * ts::NoteRenderer::sample_rate);
+    const std::vector<float> input = excitation(effect_samples);
+    std::vector<float> wet_left(effect_samples);
+    std::vector<float> wet_right(effect_samples);
+
+    ts::Reverb reverb = ts::Reverb::for_type(std::nullopt);
+    report("reverb", effect_seconds, iterations, [&] {
+        reverb.reset();
+        reverb.process(input, wet_left, wet_right);
+    });
+
+    ts::Chorus chorus = ts::Chorus::for_type(std::nullopt);
+    report("chorus", effect_seconds, iterations, [&] {
+        chorus.reset();
+        chorus.process(input, wet_left, wet_right);
+    });
+
+    ts::SystemDelay delay = ts::SystemDelay::for_type(0);
+    report("delay", effect_seconds, iterations, [&] {
+        delay.reset();
+        delay.process(input, wet_left, wet_right);
+    });
+
+    // One voice, which isolates the sampler, the filter and the envelopes from the mix.
+    constexpr double note_hold_seconds = 1.0;
+    report("note (piano, 1s hold)", note_hold_seconds + 1.8, iterations, [&] {
+        (void)notes.render_note(/*program=*/0,
+                                /*note=*/60,
+                                /*velocity=*/100,
+                                note_hold_seconds,
+                                /*tail_seconds=*/1.8);
+    });
+
+    if (midi.empty()) {
+        std::cout << "\nPass a MIDI file to also time the offline renderer and the block loop.\n";
+        return 0;
+    }
+
+    // Parsed once: what is being timed is rendering, not the SMF reader.
+    const ts::Sequence sequence =
+        ts::sequence_builder::build(ts::smf::read(midi, ts::NoteRenderer::sample_rate));
+    const double seconds =
+        static_cast<double>(sequence.last_event_position) / ts::NoteRenderer::sample_rate;
+
+    ts::SequenceRenderer renderer{notes};
+    report("offline sequence", seconds, iterations, [&] { (void)renderer.render(sequence); });
+
+    report("block loop (stream)", seconds, iterations, [&] {
+        ts::ToneGenerator generator{notes};
+        ts::SequencePlayer player = ts::SequencePlayer::from_file(generator, midi);
+        (void)player.render_to_end(/*tail_seconds=*/2.2);
+    });
+
+    std::cout << '\n'
+              << midi.filename().string() << ": " << std::fixed << std::setprecision(1) << seconds
+              << " s, " << sequence.notes.size() << " notes\n";
+    return 0;
+}
+
+/// Applies a `1,2,5` channel list to a mask, as a mixer labels channels.
+void apply_channels(ts::ChannelMask& mask, const std::vector<std::string>& lists, bool mute)
+{
+    for (const std::string& list : lists) {
+        std::istringstream stream{list};
+        std::string item;
+        while (std::getline(stream, item, ',')) {
+            if (item.empty()) {
+                continue;
+            }
+            const int channel = std::stoi(item) - 1;
+            if (channel < 0 || channel >= ts::ChannelMask::channel_count) {
+                throw std::runtime_error("Channel '" + item + "' is outside 1-16.");
+            }
+            if (mute) {
+                mask.set_muted(channel, true);
+            } else {
+                mask.set_soloed(channel, true);
+            }
+        }
+    }
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -298,6 +461,11 @@ int main(int argc, char** argv)
     render->add_flag("--no-delay", no_delay, "Disable the delay send");
     render->add_flag("--stream", stream, "Render through the real-time block loop");
 
+    std::vector<std::string> muted;
+    std::vector<std::string> soloed;
+    render->add_option("--mute", muted, "Silence these channels, as a mixer labels them (1-16)");
+    render->add_option("--solo", soloed, "Hear only these channels");
+
     std::string effect_kind;
     int effect_type = 0;
     int effect_samples = 32000;
@@ -307,6 +475,12 @@ int main(int argc, char** argv)
     dump_effect->add_option("type", effect_type, "GS type number")->required();
     dump_effect->add_option("samples", effect_samples, "How many samples to render")->required();
     dump_effect->add_option("output", output_file, "Output .f32 path")->required();
+
+    int iterations = 3;
+    CLI::App* bench = app.add_subcommand("bench", "Time the render path stage by stage.");
+    bench->add_option("dll", dll_path, "Path to SCCore.dll")->required();
+    bench->add_option("midi", midi_path, "A MIDI file, to also time the two sequence stages");
+    bench->add_option("--iterations", iterations, "Runs per stage; the fastest is reported");
 
     CLI11_PARSE(app, argc, argv);
 
@@ -324,7 +498,18 @@ int main(int argc, char** argv)
             render_options.reverb = !no_reverb;
             render_options.chorus = !no_chorus;
             render_options.delay = !no_delay;
+
+            ts::ChannelMask mask;
+            apply_channels(mask, muted, /*mute=*/true);
+            apply_channels(mask, soloed, /*mute=*/false);
+            if (!mask.is_default()) {
+                render_options.channels = &mask;
+            }
+
             return render_command(dll_path, midi_path, output_file, map, render_options, stream);
+        }
+        if (bench->parsed()) {
+            return bench_command(dll_path, midi_path, iterations);
         }
         if (dump_effect->parsed()) {
             return dump_effect_command(effect_kind, effect_type, effect_samples, output_file);

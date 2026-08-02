@@ -44,6 +44,16 @@
       }
     },
     {
+      "name": "tsan",
+      "displayName": "ThreadSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_EXE_LINKER_FLAGS": "-fsanitize=thread"
+      }
+    },
+    {
       "name": "player",
       "displayName": "Release + terminal player",
       "inherits": "release",
@@ -58,6 +68,7 @@
     { "name": "debug", "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
     { "name": "asan", "configurePreset": "asan" },
+    { "name": "tsan", "configurePreset": "tsan" },
     { "name": "player", "configurePreset": "player" }
   ],
   "testPresets": [
@@ -76,6 +87,12 @@
       "environment": {
         "TS_SONG_GATE_VARIANTS": "1"
       }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "configurePreset": "tsan",
+      "filter": { "include": { "label": "ring" } }
     }
   ]
 }

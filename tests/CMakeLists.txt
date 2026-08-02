@@ -3,6 +3,7 @@ find_package(Catch2 3 CONFIG REQUIRED)
 add_executable(ts_tests
     effects_tests.cpp
     fixed_tests.cpp
+    frame_ring_tests.cpp
     interpolator_tests.cpp
     modulation_tests.cpp
     note_renderer_tests.cpp
@@ -37,4 +38,6 @@ target_link_libraries(ts_tests
 target_include_directories(ts_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 include(Catch)
-catch_discover_tests(ts_tests)
+# Tags become CTest labels, so a preset can select a subject rather than guess at test names --
+# `ctest -L ring` is how the ThreadSanitizer preset finds the concurrent tests and nothing else.
+catch_discover_tests(ts_tests ADD_TAGS_AS_LABELS)

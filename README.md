@@ -10,20 +10,27 @@ It exists so that hosts which cannot take a .NET runtime can embed the engine di
 is GPL-compatible, so [Cog](https://github.com/losnoco/Cog) and its like can link it without a
 separate grant.
 
-**Status: it renders.** A Standard MIDI File now renders to a WAV that is **byte-for-byte identical
-to the C# engine** — checked on a 123-second, 4,366-note file across all four tone maps and every
-effect and gain option. Faster, too: about 7 seconds against 10.5 for the same render.
+**Status: it plays.** A Standard MIDI File renders to a WAV that is **byte-for-byte identical to the
+C# engine** — checked on a 123-second, 4,366-note file across all four tone maps and every effect and
+gain option. Faster, too: about 7 seconds against 10.5 for the same render. The real-time block loop
+and the terminal player are in as well.
 
 ```
 tabula-sonora render <path>/SCCore.dll song.mid out.wav --map 4
+tabula-sonora render <path>/SCCore.dll song.mid out.wav --stream --solo 1,2
 tabula-sonora render-note <path>/SCCore.dll 48 60 100 1.0 note.f32 4
 tabula-sonora dump-effect reverb 4 48000 impulse.f32
-tabula-sonora info <path>/SCCore.dll             # verify a DLL and describe it
+tabula-sonora bench <path>/SCCore.dll song.mid    # time the render path stage by stage
+tabula-sonora info <path>/SCCore.dll              # verify a DLL and describe it
 tabula-sonora extract-tables <path>/SCCore.dll tables/
+
+tabula-sonora-play <path>/SCCore.dll song.mid     # space, arrows, , / . , home, q
+tabula-sonora-play --list-devices
 ```
 
-What is not here yet: the real-time block loop with its 64-voice limit and voice stealing, and the
-terminal player. The offline path is complete.
+`render --stream` drives the same block loop the player does, so the difference the architecture
+makes — a 64-voice limit that actually steals, live controllers, effect types that change mid-song —
+can be heard against the offline render of the same file.
 
 ## What "faithful" means here
 
@@ -67,9 +74,17 @@ cmake --build --preset release
 ctest --preset release
 ```
 
-Presets: `debug`, `release`, `asan` (ASan + UBSan), `player`. The `asan` preset deliberately
+Presets: `debug`, `release`, `asan` (ASan + UBSan), `tsan`, `player`. The `asan` preset deliberately
 excludes the `signed-integer-overflow` and `shift` checks — enabling them unaudited would fire on
-arithmetic that is *supposed* to wrap.
+arithmetic that is *supposed* to wrap. The `tsan` preset runs only the `ring` label, because the ring
+that hands blocks to an audio callback is the only concurrent code here; the engine itself is
+single-threaded by contract.
+
+The player is not built by default, since it is the only thing that pulls in an audio backend:
+
+```
+cmake --preset player && cmake --build --preset player
+```
 
 ```
 ./build/release/apps/cli/tabula-sonora manifest
