@@ -13,6 +13,7 @@ add_library(tabulasonora
     dsp/segment_envelope.cpp
     dsp/tva_chain.cpp
     dsp/tvf_chain.cpp
+    patches/drum_kit_table.cpp
     patches/partial_parameters.cpp
     patches/patch_directory.cpp
     patches/tone.cpp
@@ -22,6 +23,7 @@ add_library(tabulasonora
     rom/wave_rom.cpp
     rom/sha256.cpp
     rom/table_manifest.cpp
+    render/note_renderer.cpp
     ${TS_MANIFEST_SOURCE}
     ${TS_PRESETS_SOURCE}
 )

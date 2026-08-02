@@ -4,6 +4,7 @@ add_executable(ts_tests
     fixed_tests.cpp
     interpolator_tests.cpp
     modulation_tests.cpp
+    note_renderer_tests.cpp
     patch_directory_tests.cpp
     sampler_tests.cpp
     wave_codec_tests.cpp

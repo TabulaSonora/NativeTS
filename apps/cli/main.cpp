@@ -1,3 +1,4 @@
+#include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/table_manifest.hpp"
 #include "tabulasonora/wave_rom.hpp"
@@ -106,6 +107,41 @@ int extract_tables_command(const std::string& path, const fs::path& output)
     return 0;
 }
 
+/// Renders one note and writes interleaved raw float32 stereo.
+///
+/// The fastest way to A/B a single patch against the reference build: same arguments, same output
+/// format, so the two files diff directly.
+int render_note_command(const std::string& path,
+                        int program,
+                        int note,
+                        int velocity,
+                        double hold_seconds,
+                        const fs::path& output,
+                        int map)
+{
+    const ts::RomImage rom = ts::RomImage::open(path, ts::RomVerification::quick);
+    ts::NoteRenderer renderer{rom};
+
+    const ts::RenderedNote voice = renderer.render_note(
+        program, note, velocity, hold_seconds, /*tail_seconds=*/1.8, static_cast<ts::ToneMap>(map));
+
+    std::ofstream stream{output, std::ios::binary};
+    if (!stream) {
+        throw std::runtime_error("Cannot write '" + output.string() + "'.");
+    }
+
+    for (std::size_t i = 0; i < voice.left.size(); ++i) {
+        const float frame[2]{voice.left[i], voice.right[i]};
+        stream.write(reinterpret_cast<const char*>(frame), sizeof(frame));
+    }
+    if (!stream) {
+        throw std::runtime_error("Short write to '" + output.string() + "'.");
+    }
+
+    std::cout << voice.name << ": " << voice.left.size() << " frames\n";
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -126,6 +162,22 @@ int main(int argc, char** argv)
     extract->add_option("dll", dll_path, "Path to SCCore.dll")->required();
     extract->add_option("output", output_directory, "Directory to write into")->required();
 
+    int program = 0;
+    int note = 60;
+    int velocity = 100;
+    double hold_seconds = 1.0;
+    int map = 4;
+    fs::path output_file;
+    CLI::App* render_note =
+        app.add_subcommand("render-note", "Render one note to raw interleaved float32.");
+    render_note->add_option("dll", dll_path, "Path to SCCore.dll")->required();
+    render_note->add_option("program", program, "Program number, 0-127")->required();
+    render_note->add_option("note", note, "MIDI note, 0-127")->required();
+    render_note->add_option("velocity", velocity, "MIDI velocity, 1-127")->required();
+    render_note->add_option("hold", hold_seconds, "Seconds from note-on to note-off")->required();
+    render_note->add_option("output", output_file, "Output .f32 path")->required();
+    render_note->add_option("map", map, "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820");
+
     CLI11_PARSE(app, argc, argv);
 
     try {
@@ -137,6 +189,10 @@ int main(int argc, char** argv)
         }
         if (extract->parsed()) {
             return extract_tables_command(dll_path, output_directory);
+        }
+        if (render_note->parsed()) {
+            return render_note_command(
+                dll_path, program, note, velocity, hold_seconds, output_file, map);
         }
     } catch (const ts::RomIdentityError& error) {
         std::cerr << "tabula-sonora: " << error.what() << '\n';
