@@ -104,6 +104,10 @@ def parse(path):
         "programs": set(), "ccs": Counter(), "matrix": defaultdict(set),
         "gs_reset": False, "ports": set(), "drum_setup": False, "efx": False, "eq": False,
         "tempos": [],
+        # Which Control Changes the two assignable matrix sources listen to. They start at General
+        # Purpose 1 and 2 and `40 1x 1F`/`20` may point them elsewhere, so this is a set of every
+        # number either source was ever assigned in the file.
+        "cc1_numbers": {16}, "cc2_numbers": {17},
     }
 
     at = 14
@@ -155,6 +159,8 @@ def parse(path):
                         source, destination = a3 >> 4, a3 & 0x0F
                         if source < len(SOURCES) and destination < len(DESTINATIONS):
                             facts["matrix"][(source, destination)].add(value)
+                    elif a1 == 0x40 and (a2 & 0xF0) == 0x10 and a3 in (0x1F, 0x20):
+                        facts["cc1_numbers" if a3 == 0x1F else "cc2_numbers"].add(value)
                     elif a1 == 0x40 and (a2 & 0xF0) == 0x40 and a3 == 0x20:
                         facts["eq"] = True
                     elif a1 in (0x41, 0x51):
@@ -207,6 +213,12 @@ def parse(path):
         "chan_at": facts["chan_at"],
         "bend": facts["bend"],
         "cc1": facts["ccs"].get(1, 0),
+        # How often the assignable sources are actually *sent*, which is not the same question as
+        # whether the file assigns them a route. Three songs in this project's corpus set up CC1 or
+        # CC2 routes and never send the controller, so the routes are inert on the module too --
+        # and reading an assignment as exercise led to a wrong attribution once already.
+        "cc1_driven": sum(facts["ccs"].get(n, 0) for n in facts["cc1_numbers"]),
+        "cc2_driven": sum(facts["ccs"].get(n, 0) for n in facts["cc2_numbers"]),
         "sound_controllers": sum(facts["ccs"].get(n, 0) for n in range(70, 80)),
         "gs_reset": facts["gs_reset"],
         "drum_setup": facts["drum_setup"],
@@ -222,8 +234,16 @@ def parse(path):
 # ---------------------------------------------------------------------------------------------
 
 def features(entry):
-    """What a file is worth having in the corpus for."""
-    found = set(entry["matrix"])
+    """What a file is worth having in the corpus for.
+
+    A route the file assigns but never drives is dropped rather than counted. It looks like
+    coverage and is not: the controller never moves, so the route is as inert on the module as it
+    would be in an engine that had not implemented it, and a corpus picked on those is a corpus
+    that cannot tell the two apart.
+    """
+    driven = {"cc1": entry.get("cc1_driven", 0), "cc2": entry.get("cc2_driven", 0)}
+    found = {route for route in entry["matrix"]
+             if driven.get(route.split("->")[0], 1) > 0}
     if entry["poly_at"] > 50:
         found.add("*poly_aftertouch")
     if entry["chan_at"] > 50:

@@ -54,6 +54,11 @@ DESTINATIONS = [
 # channel pressure drives the same LFO's pitch depth flat out while the wheel moves the rate.
 COMPANION = {0x03: 0x24, 0x07: 0x28}
 
+# Which Control Change drives each source, and the high nibble its routes are addressed by. The two
+# assignable sources are pointed at General Purpose 1 and 2 by default, which is the only reason
+# those controllers do anything.
+SOURCE_CONTROLLER = {0: 1, 4: 16, 5: 17}
+
 STEPS = [0, 32, 64, 96, 127]
 STEP_SECONDS = 2.0
 TRACK_HOP = 256
@@ -82,7 +87,8 @@ def dt1(address, data):
     return bytes([0xF0]) + varlen(len(message)) + bytes(message)
 
 
-def build(path, destination, depth, program, note):
+def build(path, destination, depth, program, note, source=0, controller=None,
+          drive=None):
     ticks_per_beat = 480
     # 120 bpm, so a beat is half a second and a tick is 1/960 s.
     ticks_per_second = ticks_per_beat * 2
@@ -98,7 +104,13 @@ def build(path, destination, depth, program, note):
     event(ticks_per_second // 2, bytes([0xC0, program]))
 
     # Block 1 is channel 1: the address nibble is a block number, not a channel number.
-    event(0, dt1([0x40, 0x21, destination], [depth]))
+    # The destination's own high nibble picks the source.
+    event(0, dt1([0x40, 0x21, (source << 4) | destination], [depth]))
+
+    # Point an assignable source at a different Control Change than its default, so the probe tests
+    # the `40 1x 1F`/`20` handler rather than only the number it powers on with.
+    if controller is not None and source in (4, 5):
+        event(0, dt1([0x40, 0x11, 0x1F if source == 4 else 0x20], [controller]))
     companion = COMPANION.get(destination)
     if companion is not None:
         event(0, dt1([0x40, 0x21, companion], [0x7F]))
@@ -107,7 +119,9 @@ def build(path, destination, depth, program, note):
     event(0, bytes([0x90, note, 100]))
     for index, amount in enumerate(STEPS):
         delta = 0 if index == 0 else int(STEP_SECONDS * ticks_per_second)
-        event(delta, bytes([0xB0, 0x01, amount]))
+        driven = drive if drive is not None else (
+            controller if controller is not None else SOURCE_CONTROLLER.get(source, 1))
+        event(delta, bytes([0xB0, driven, amount]))
     event(int(STEP_SECONDS * ticks_per_second), bytes([0x80, note, 0]))
     event(0, b"\xff\x2f\x00")
 
@@ -304,6 +318,12 @@ def main():
     parser.add_argument("--note", type=int, default=60)
     parser.add_argument("--depth", type=lambda v: int(v, 0), default=0x7F)
     parser.add_argument("--only", default=None)
+    parser.add_argument("--source", type=int, default=0,
+                        help="matrix source: 0 mod wheel, 4 CC1, 5 CC2")
+    parser.add_argument("--controller", type=int, default=None,
+                        help="reassign the source to this Control Change number")
+    parser.add_argument("--drive", type=int, default=None,
+                        help="send this Control Change instead of the assigned one")
     parser.add_argument("--hop", type=int, default=TRACK_HOP)
     parser.add_argument("--span", type=int, default=TRACK_SPAN)
     arguments = parser.parse_args()
@@ -317,10 +337,11 @@ def main():
 
         results = {}
         for tag, depth in (("on", arguments.depth), ("off", off_value)):
-            midi = arguments.work / f"matrix-{name}-{tag}.mid"
-            build(midi, address, depth, arguments.program, arguments.note)
+            midi = arguments.work / f"matrix-s{arguments.source}-{name}-{tag}.mid"
+            build(midi, address, depth, arguments.program, arguments.note,
+                  arguments.source, arguments.controller, arguments.drive)
             for engine, is_oracle in (("oracle", True), ("ours", False)):
-                out = arguments.work / f"matrix-{name}-{tag}-{engine}.wav"
+                out = arguments.work / f"matrix-s{arguments.source}-{name}-{tag}-{engine}.wav"
                 try:
                     render(arguments, midi, out, is_oracle)
                 except RuntimeError as error:

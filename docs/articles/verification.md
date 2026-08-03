@@ -385,10 +385,22 @@ the low band 10 dB out and the level 4 dB down; pinning the gate to one port too
 
 What remains is recorded per song in `known_deviations`, as a ratchet: each bound is the measured
 deviation plus a little headroom, so nothing may get worse and closing one means tightening its
-row. Three of the fourteen are already attributed to one gap — the matrix's CC1 and CC2 sources are
-parsed and dropped, and those songs assign them and then drive them. The sharpest of the rest is
-`roland_sc88_y03`, which is about 6.5 dB light at 63 Hz and 5 dB at 125 Hz *by the same amount at
-every tone map*, so it is not patch resolution: some bass is not arriving.
+row. `TS_STRICT_SONGS=1` holds every song to the defaults, which is how a row's current deviation
+is measured when it is due to be tightened.
+
+**Three of those rows were mis-attributed, and the correction is the more useful lesson.**
+`shangai`, `macross2` and `ff5_1_16_harvest` all *assign* the matrix's CC1 or CC2 sources, so while
+those sources were unimplemented it looked obvious that this was why they deviated. Implementing
+them — correctly, and verified against the module — moved none of the three by a hundredth of a dB.
+Reading the files says why: `macross2` assigns both routes at depth 0x40, the neutral value, so the
+file switches them off itself; `shangai` points both at CC#2 and never sends it; and
+`ff5_1_16_harvest` does drive its route, 4,335 times, but on one channel where a cutoff sweep
+cannot reach the 63 and 125 Hz bands that are what deviates. Assigning a route is not driving it,
+driving it is not driving it *audibly*, and a scan that records the first is evidence of neither.
+`tools/scan_midi_archive.py` now reports whether the assigned controller is ever sent.
+
+The sharpest remaining lead is `roland_sc88_y03`, about 6.5 dB light at 63 Hz and 5 dB at 125 Hz
+*by the same amount at every tone map*, so it is not patch resolution: some bass is not arriving.
 
 That is the argument for coverage over taste. One file said 1.94 dB in the top octave. Eighteen say
 where to look.
@@ -446,10 +458,12 @@ Stated plainly, because they are not covered by the numbers above:
   the particular numbers are not, which is the intended side of the "audible fidelity, not bit
   accuracy" line: a random modulation that steps at the right moments to the right *sort* of value
   is the parameter working.
-- **Two of the control matrix's six sources go nowhere yet**, and the corpus now measures the cost.
-  Three songs in it assign CC1 or CC2 and then drive them; `shangai` puts both on amplitude and a
-  fifth of its spectrum's energy lands in the wrong octave as a result. All eleven destinations are
-  consumed, but only from four sources — the mod wheel, both aftertouches and bend. CC1 and CC2 need
+- **All six of the control matrix's sources are now consumed**, including the two assignable
+  controllers. Their numbers come from `40 1x 1F` and `20`, default to General Purpose 1 and 2, and
+  are clamped to 0-95 — measured, not assumed: assigning 100 and then sending CC#95 modulates on
+  the module while sending CC#16 does not, so it clamps rather than rejecting the assignment.
+  Pointing a source at a controller does not take that controller's other meaning away. All eleven
+  destinations are consumed, from all six sources — the mod wheel, both aftertouches and bend. CC1 and CC2 need
   their assignable controller numbers tracked first, so every destination's clamp sees a smaller
   total than the module's would with all six deflected at once. That difference only shows at the
   rail.
@@ -459,9 +473,8 @@ Stated plainly, because they are not covered by the numbers above:
   brightness under one. LFO2's pitch depth was in this list until the random waveforms were
   implemented, which is what made a patch that could demonstrate it available at all.
 - **Some GS part parameters are recognised and dropped**, each because nothing under them is
-  modelled: assign mode (`40 1x 14`, one voice-allocation policy here), the CC1/CC2 controller
-  numbers (`40 1x 1F`/`20`), and per-key Rx note-on/off in the drum setup (`40 2x 07`/`08`), whose
-  law is not recovered.
+  modelled: assign mode (`40 1x 14`, one voice-allocation policy here) and per-key Rx note-on/off
+  in the drum setup (`40 2x 07`/`08`), whose law is not recovered.
 
 ## Methodology worth borrowing
 

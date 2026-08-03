@@ -14,6 +14,10 @@ void Part::reset()
     soft = false;
     channel_pressure = 0;
     poly_pressure.fill(0);
+    cc1_number = 16;
+    cc2_number = 17;
+    cc1 = 0;
+    cc2 = 0;
     reverb_send = sequence_builder::default_reverb_send;
     chorus_send = sequence_builder::default_chorus_send;
     delay_send = 0;

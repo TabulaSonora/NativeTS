@@ -890,10 +890,15 @@ void ToneGenerator::Impl::gs_part_parameter(int part_index,
         part.key_high = value;
         break;
 
+    // Which Control Change each assignable matrix source listens to. GS documents the range as
+    // 0-95, which stops short of the data-entry and RPN/NRPN controllers and of the channel-mode
+    // messages -- pointing a matrix source at those would be pointing it at something that is not
+    // a continuous amount.
     case 0x1F:
+        part.cc1_number = std::clamp(value, 0, 95);
+        break;
     case 0x20:
-        // CC1/CC2 controller numbers for the assignable-controller matrix. Placeholder alongside
-        // the `40 2x` block.
+        part.cc2_number = std::clamp(value, 0, 95);
         break;
 
     case 0x21:
@@ -1745,6 +1750,20 @@ void ToneGenerator::Impl::control_change(int channel, Part& part, int controller
     // channel-mode messages (CC#120 up) bypass it.
     if (controller < 120 && !part.rx.control_change) {
         return;
+    }
+
+    // The two assignable matrix sources, before anything else and without an early return: a
+    // controller feeding one of them keeps whatever other meaning it has, because the number is a
+    // pointer to a message rather than a claim on it. Pointing CC1 at the mod wheel gives a part
+    // whose wheel drives both its own routes and CC1's.
+    //
+    // The default numbers, 16 and 17, are General Purpose 1 and 2 -- controllers nothing else in
+    // this engine reads. That is what they are for.
+    if (controller == part.cc1_number) {
+        part.cc1 = value;
+    }
+    if (controller == part.cc2_number) {
+        part.cc2 = value;
     }
 
     // What the controller means is decided once, in the decoder both front ends share; what it

@@ -111,6 +111,22 @@ public:
     /// Channel aftertouch, which reaches pitch through the control matrix.
     int channel_pressure = 0;
 
+    /// Which Control Change numbers this part's two assignable sources listen to (`40 1x 1F` and
+    /// `20`), and what those controllers currently read.
+    ///
+    /// The numbers default to 16 and 17 — General Purpose 1 and 2, which is what makes those two
+    /// controllers do anything on a GS module at all. Nothing else in the engine reads CC#16 or
+    /// CC#17; they exist to be pointed at the matrix.
+    ///
+    /// An assignable source is not a controller with a fixed meaning, so it is tracked as a pair:
+    /// the number decides which message feeds it, and the amount is what the matrix scales. Pointing
+    /// CC1 at a controller that already means something — the mod wheel, say — does not take that
+    /// meaning away; the message does both jobs.
+    int cc1_number = 16;
+    int cc2_number = 17;
+    int cc1 = 0;
+    int cc2 = 0;
+
     /// Polyphonic aftertouch, per key.
     ///
     /// One byte a note rather than one a part, which is the whole of what makes it polyphonic: the
@@ -306,10 +322,10 @@ public:
     /// function, computed on demand rather than cached behind a dirty mask — the mask is a way of
     /// not recomputing, not a difference in what is computed.
     ///
-    /// **Two of the six sources are missing.** CC1 and CC2 need their assignable controller numbers
-    /// tracked, which they are not, so the sum runs over the mod wheel, both aftertouches and bend
-    /// — and every clamp sees a smaller total than the engine's would when all six are deflected at
-    /// once. That is a real difference and it only shows at the rail.
+    /// All six sources reach it: the mod wheel, bend, both aftertouches, and the two assignable
+    /// controllers. Every one is summed raw before anything is clamped, which is why they are
+    /// gathered here rather than scaled separately and added up — clamping each in turn would let
+    /// the total escape the rail.
     ///
     /// `key_pressure` is the polyphonic aftertouch on the note being rendered, which is why this
     /// takes an argument at all: everything else here belongs to the part, and that one belongs to
@@ -322,6 +338,8 @@ public:
             control.applied_linear(ControlMatrix::Source::modulation, modulation);
         sums += control.applied_linear(ControlMatrix::Source::channel_pressure, channel_pressure);
         sums += control.applied_linear(ControlMatrix::Source::poly_pressure, key_pressure);
+        sums += control.applied_linear(ControlMatrix::Source::cc1, cc1);
+        sums += control.applied_linear(ControlMatrix::Source::cc2, cc2);
         sums += control.applied_bipolar(
             ControlMatrix::Source::bend, bend - 8192, bend_range + ControlMatrix::neutral);
         return ControlMatrix::scaled(sums);

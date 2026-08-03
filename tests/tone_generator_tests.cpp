@@ -870,3 +870,89 @@ TEST_CASE("the control matrix reaches amplitude, not only pitch", "[stream][scco
     CHECK(halfway > neutral);
     CHECK(halfway < lifted);
 }
+
+TEST_CASE("the assignable controllers reach the matrix", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // "CC1" here is the GS assignable source, not Control Change #1. The mod wheel is a different
+    // source with a fixed number; these two listen to whatever `40 1x 1F` and `20` name, and start
+    // pointed at General Purpose 1 and 2 -- controllers nothing else in this engine reads.
+    SECTION("the numbers default to General Purpose 1 and 2")
+    {
+        ToneGenerator generator{notes};
+        CHECK(generator.part(0).cc1_number == 16);
+        CHECK(generator.part(0).cc2_number == 17);
+
+        generator.send_channel(0xB0, 16, 100);
+        generator.send_channel(0xB0, 17, 40);
+        CHECK(generator.part(0).cc1 == 100);
+        CHECK(generator.part(0).cc2 == 40);
+    }
+
+    SECTION("a reassigned number moves which controller feeds the source")
+    {
+        ToneGenerator generator{notes};
+        generator.send_sysex(dt1({0x40, 0x11, 0x1F, 20}));
+        CHECK(generator.part(0).cc1_number == 20);
+
+        generator.send_channel(0xB0, 16, 90);
+        CHECK(generator.part(0).cc1 == 0);
+        generator.send_channel(0xB0, 20, 90);
+        CHECK(generator.part(0).cc1 == 90);
+    }
+
+    SECTION("the number is clamped to 95, which the module was asked about")
+    {
+        // Assigning 100 and then sending CC#95 modulates on the module, while sending CC#16 does
+        // not -- so it clamps rather than rejecting the assignment and leaving the default. That
+        // distinction is invisible from the assignment alone and was measured, not assumed.
+        ToneGenerator generator{notes};
+        generator.send_sysex(dt1({0x40, 0x11, 0x1F, 100}));
+        CHECK(generator.part(0).cc1_number == 95);
+
+        generator.send_channel(0xB0, 16, 70);
+        CHECK(generator.part(0).cc1 == 0);
+        generator.send_channel(0xB0, 95, 70);
+        CHECK(generator.part(0).cc1 == 70);
+    }
+
+    SECTION("pointing a source at a controller does not take its other meaning away")
+    {
+        // The number is a pointer to a message, not a claim on it. A part whose CC1 is pointed at
+        // the mod wheel has a wheel that drives both its own routes and CC1's.
+        ToneGenerator generator{notes};
+        generator.send_sysex(dt1({0x40, 0x11, 0x1F, 1}));
+        generator.send_channel(0xB0, 1, 64);
+        CHECK(generator.part(0).cc1 == 64);
+        CHECK(generator.part(0).modulation == 64);
+    }
+
+    SECTION("the source reaches a destination")
+    {
+        // `40 21 42` is source 4 (CC1) on destination 2 (amplitude), which the module was measured
+        // at +6.0 dB with the depth and the controller both at maximum.
+        const auto loudness = [&](int depth, int amount) {
+            ToneGenerator generator{notes};
+            generator.send_sysex(dt1({0x40, 0x21, 0x42, depth}));
+            generator.send_channel(0xB0, 16, amount);
+            generator.send_channel(0x90, 60, 100);
+
+            std::array<float, 32000> left{};
+            std::array<float, 32000> right{};
+            generator.render(left, right);
+            double energy = 0.0;
+            for (std::size_t i = 0; i < left.size(); ++i) {
+                energy += (left[i] * left[i]) + (right[i] * right[i]);
+            }
+            return std::sqrt(energy / left.size());
+        };
+
+        const double neutral = loudness(0x40, 127);
+        REQUIRE(neutral > 0.0);
+        CHECK(loudness(0x7F, 127) > neutral * 1.5);
+        CHECK(loudness(0x00, 127) < neutral * 0.75);
+    }
+}

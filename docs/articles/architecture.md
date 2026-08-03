@@ -166,10 +166,12 @@ recover it from. The generator is one shared sequence — ts::EngineNoise, which
 jitter and the random pan draw from too — so which voice draws when is part of what the sequence
 is.
 
-Four of the six sources reach them. CC1 and CC2 still need their assignable controller numbers
-(`40 1x 1F` and `20`) tracked before they can reach anything at all, so every clamp here sees a
-smaller total than the module's would with all six deflected at once. That difference only shows at
-the rail.
+**All six sources reach them**, including the two assignable controllers — which are not Control
+Change #1 and #2, a collision in the GS naming worth stating once. CC1 and CC2 are *sources* that
+listen to whatever Control Change number `40 1x 1F` and `20` name; they start on General Purpose 1
+and 2 because nothing else reads those, and the number is clamped to 0–95. Pointing one at a
+controller that already means something does not take that meaning away — the message does both
+jobs, so a part whose CC1 is aimed at the mod wheel has a wheel driving its own routes and CC1's.
 
 **The part modify offsets.** ts::PartModifiers is the eight 0x40-centred bytes behind CC#71–78 —
 vibrato rate, depth and delay, cutoff, and the envelope's attack, decay and release. Three writers

@@ -27,6 +27,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <numbers>
@@ -213,41 +214,56 @@ struct KnownDeviation {
 
 /// The songs that do not yet match, with what is known about why.
 ///
-/// The first three are one gap seen three times, which is the value of having attributed them: the
-/// control matrix's CC1 and CC2 sources are parsed and dropped, because the assignable controller
-/// numbers (`40 1x 1F` and `20`) are not tracked. These songs assign those sources and then drive
-/// them, so the module modulates and this engine does not. `shangai` is the clearest — it puts both
-/// on amplitude, and a fifth of the spectrum's energy ends up in the wrong octave.
+/// **Every row here is a lead rather than a diagnosis**, and three of them were mis-attributed in a
+/// way worth recording. `shangai`, `macross2` and `ff5_1_16_harvest` all *assign* the matrix's CC1
+/// or CC2 sources, so while those sources were unimplemented it looked obvious that this was why
+/// they deviated. Implementing the sources -- correctly, and verified against the module -- moved
+/// none of the three by a hundredth of a dB, and reading the files says why:
 ///
-/// The rest are leads. `roland_sc88_y03` is the sharpest of them: it is about 6.5 dB light at 63 Hz
-/// and 5 dB at 125 Hz, by the same amount at every tone map, so it is not patch resolution — some
-/// bass is not arriving. `roland_suplex` has one envelope window 14 dB out while its spectrum is
-/// close, which is the signature of a passage that plays differently rather than a timbre that is
-/// wrong.
+///  - `macross2` assigns both to pitch at depth **0x40**, which is the neutral value. The routes
+///    are switched off by the file itself.
+///  - `shangai` assigns both to amplitude at full depth and points them at CC#2, which it never
+///    sends. Inert on the module too.
+///  - `ff5_1_16_harvest` genuinely drives its route -- CC1 pointed at CC#11 and moved 4,335 times
+///    -- but only on channel 1, where a cutoff sweep cannot reach the 63 and 125 Hz bands that are
+///    what deviates.
+///
+/// Assigning a route is not driving it, driving it is not driving it *audibly*, and a scan that
+/// records the first is evidence of neither. `tools/scan_midi_archive.py` now reports whether the
+/// assigned controller is ever sent, so a corpus cannot be picked on inert routes again.
+///
+/// The sharpest lead is `roland_sc88_y03`: about 6.5 dB light at 63 Hz and 5 dB at 125 Hz, by the
+/// same amount at every tone map, so it is not patch resolution -- some bass is not arriving.
+/// `roland_suplex` has one envelope window 14 dB out while its spectrum stays close, which is the
+/// signature of a passage that plays differently rather than a timbre that is wrong.
 constexpr std::array<KnownDeviation, 14> known_deviations{{
-    {"shangai.mid", {2.0, 0.04, 22.0, 9.0}, "CC1/CC2 matrix sources not implemented"},
-    {"macross2.mid", {3.0, 0.05, 12.0, 8.0}, "CC1/CC2 matrix sources not implemented"},
-    {"ff5_1_16_harvest.mid", {1.0, 0.01, 5.0, 6.0}, "CC1 matrix source not implemented"},
+    {"shangai.mid", {2.0, 0.04, 22.0, 9.0}, "lead; CC1/CC2 pointed at a CC the file never sends"},
+    {"macross2.mid", {3.0, 0.05, 12.0, 8.0}, "lead; CC1/CC2 routes assigned at neutral depth"},
+    {"ff5_1_16_harvest.mid", {1.0, 0.01, 4.5, 6.0}, "lead; CC1 route is driven but not in the deviating bands"},
 
-    {"bigben.mid", {2.0, 0.09, 8.0, 6.0}, "unattributed"},
-    {"it_must_have_been_love.mid", {2.0, 0.02, 3.0, 6.0}, "unattributed"},
-    {"rainy.mid", {2.0, 0.03, 4.0, 6.0}, "unattributed"},
-    {"dreaming_i_was_dreaming.mid", {1.0, 0.02, 3.0, 6.0}, "unattributed"},
+    {"bigben.mid", {1.6, 0.09, 8.0, 6.0}, "lead"},
+    {"it_must_have_been_love.mid", {2.0, 0.02, 3.0, 6.0}, "lead"},
+    {"rainy.mid", {1.5, 0.03, 3.6, 6.0}, "lead"},
+    {"dreaming_i_was_dreaming.mid", {1.0, 0.02, 3.0, 6.0}, "lead"},
 
     {"roland_sc88_y03.mid", {5.5, 0.35, 10.5, 7.5}, "bass missing, same at every map"},
     {"roland_suplex.mid", {2.0, 0.28, 9.0, 15.0}, "one passage plays differently"},
-    {"roland_sc88_y05.mid", {1.5, 0.25, 3.0, 6.0}, "unattributed"},
-    {"roland_sc55_demo13.mid", {1.0, 0.08, 5.5, 6.0}, "unattributed"},
-    {"roland_sc55_demo03.mid", {2.0, 0.03, 3.0, 6.0}, "unattributed"},
-    {"roland_allstars.mid", {1.0, 0.02, 3.5, 6.0}, "unattributed"},
-    {"roland_deadend.mid", {1.0, 0.11, 3.0, 6.0}, "unattributed"},
+    {"roland_sc88_y05.mid", {1.5, 0.25, 3.0, 6.0}, "lead"},
+    {"roland_sc55_demo13.mid", {1.0, 0.08, 5.5, 6.0}, "lead"},
+    {"roland_sc55_demo03.mid", {2.0, 0.03, 3.0, 6.0}, "lead"},
+    {"roland_allstars.mid", {1.0, 0.02, 3.5, 6.0}, "lead"},
+    {"roland_deadend.mid", {1.0, 0.11, 3.0, 6.0}, "lead"},
 }};
 
 [[nodiscard]] Deviation deviation_for(const std::string& song)
 {
-    for (const KnownDeviation& entry : known_deviations) {
-        if (song == entry.song) {
-            return entry.allowed;
+    // `TS_STRICT_SONGS=1` holds every song to the defaults, which is how each row's current
+    // deviation is measured when it is due to be tightened. Not a test mode -- a ruler.
+    if (std::getenv("TS_STRICT_SONGS") == nullptr) {
+        for (const KnownDeviation& entry : known_deviations) {
+            if (song == entry.song) {
+                return entry.allowed;
+            }
         }
     }
     return Deviation{};
