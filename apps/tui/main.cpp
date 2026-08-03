@@ -257,7 +257,7 @@ struct Ui {
                        text("  exp") | dim,
                        text("  pan") | dim,
                        text("  voices  ") | dim,
-                       text("M S") | dim,
+                       text("  M S") | dim,
                    })
                    | bold);
 
