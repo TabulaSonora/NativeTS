@@ -147,6 +147,69 @@ struct ControlMatrix {
         };
     }
 
+    /// Scales this source's depths by a signed amount — `modmatrix_apply_bipolar`.
+    ///
+    /// Bend's law, and only bend's. It is not a variant of the linear apply: where that one shifts,
+    /// this one multiplies by a per-destination 16-bit constant and takes the high word, and its
+    /// amount is a signed 14-bit deflection rather than a 7-bit controller.
+    ///
+    /// The three constants turn out to be the same three-way split the linear apply makes. Against
+    /// the `<< 2` the magnitude already carries, `0xfe16` is ×1, `0x7f00` is ×½ and `0x3f81` is ×¼
+    /// — whole for pitch, halved for the continuous destinations and the LFO rates, quartered for
+    /// the six LFO depths. That the two functions agree on which destination gets which treatment,
+    /// by completely different arithmetic, is the check that neither has been misread.
+    ///
+    /// The sign is the product of two: the depth's side of centre and the amount's. A downward bend
+    /// through a negative depth pushes pitch *up*, which is the point of an inverted assignment.
+    [[nodiscard]] Modulation applied_bipolar(Source source, int amount) const noexcept
+    {
+        const auto& row = depth[static_cast<std::size_t>(source)];
+        const int magnitude = (amount < 0 ? -amount : amount) << 2;
+        const bool amount_negative = amount < 0;
+
+        // A destination measured from centre, whose sign combines with the amount's.
+        const auto centred = [magnitude, amount_negative](int value, int constant) {
+            const int offset = value - neutral;
+            if (offset == 0) {
+                return 0;
+            }
+            const int scaled =
+                static_cast<int>((static_cast<unsigned>(std::abs(offset) * magnitude) >> 8)
+                                     * static_cast<unsigned>(constant)
+                                 >> 16);
+            return (offset < 0) != amount_negative ? -scaled : scaled;
+        };
+
+        // A unipolar depth: zero means none, so only the amount carries a sign.
+        const auto amountwise = [magnitude, amount_negative](int value, int constant) {
+            if (value == 0) {
+                return 0;
+            }
+            const int scaled = static_cast<int>((static_cast<unsigned>(value * magnitude) >> 8)
+                                                    * static_cast<unsigned>(constant)
+                                                >> 16);
+            return amount_negative ? -scaled : scaled;
+        };
+
+        constexpr int whole = 0xFE16;
+        constexpr int half = 0x7F00;
+        constexpr int quarter = 0x3F81;
+
+        return Modulation{
+            .pitch = centred(row[0], whole),
+            .tvf_cutoff = centred(row[1], half),
+            .amplitude = centred(row[2], half),
+            .lfo1_rate = centred(row[3], half),
+            .lfo1_pitch = amountwise(row[4], quarter),
+            .lfo1_tvf = amountwise(row[5], quarter),
+            .lfo1_tva = amountwise(row[6], quarter),
+            .lfo2_rate = centred(row[7], half),
+            .lfo2_pitch = amountwise(row[8], quarter),
+            .lfo2_tvf = amountwise(row[9], quarter),
+            .lfo2_tva = amountwise(row[10], quarter),
+        };
+    }
+
     /// Bend's pitch depth is **not** stored here, and this says so out loud.
     ///
     /// `40 2x 10` (BEND PITCH CONTROL) and RPN 00/00 (pitch bend sensitivity) are not two

@@ -744,3 +744,48 @@ TEST_CASE("the control matrix's linear apply routes each destination to itself",
               == -negative.applied_linear(Source::cc1, 33).tvf_cutoff);
     }
 }
+
+TEST_CASE("the matrix's two apply laws agree on which destination is which", "[dsp][sccore]")
+{
+    using Source = ControlMatrix::Source;
+    using Destination = ControlMatrix::Destination;
+
+    // Bend's law is not a variant of the others -- it multiplies by a per-destination constant
+    // where the linear one shifts. What the two must agree on is the *classification*: which
+    // destinations are measured from centre and which are plain amounts. They were read out of two
+    // separate functions, so agreement is evidence rather than tautology.
+    ControlMatrix matrix;
+
+    // A centred destination reads zero at centre under both laws, whatever the amount.
+    CHECK(matrix.applied_linear(Source::cc1, 127).tvf_cutoff == 0);
+    CHECK(matrix.applied_bipolar(Source::bend, 8000).tvf_cutoff == 0);
+
+    // A unipolar depth reads zero at zero under both, and the power-on matrix has them at zero.
+    CHECK(matrix.applied_linear(Source::cc1, 127).lfo2_tva == 0);
+    CHECK(matrix.applied_bipolar(Source::bend, 8000).lfo2_tva == 0);
+
+    // Off centre, both produce something, and both mirror about centre.
+    matrix.at(Source::bend, Destination::tvf_cutoff) = ControlMatrix::neutral + 0x20;
+    const int up = matrix.applied_bipolar(Source::bend, 8000).tvf_cutoff;
+    matrix.at(Source::bend, Destination::tvf_cutoff) = ControlMatrix::neutral - 0x20;
+    const int down = matrix.applied_bipolar(Source::bend, 8000).tvf_cutoff;
+    CHECK(up != 0);
+    CHECK(up == -down);
+
+    // The two signs multiply: an inverted assignment driven the other way comes back positive.
+    // That is the whole point of a negative depth, and it is easy to lose to an abs().
+    CHECK(matrix.applied_bipolar(Source::bend, -8000).tvf_cutoff == up);
+
+    // A unipolar depth takes its sign from the amount alone -- the depth has no side to be on.
+    matrix.at(Source::bend, Destination::lfo1_pitch) = 0x40;
+    const int rising = matrix.applied_bipolar(Source::bend, 8000).lfo1_pitch;
+    const int falling = matrix.applied_bipolar(Source::bend, -8000).lfo1_pitch;
+    CHECK(rising > 0);
+    CHECK(falling == -rising);
+
+    // Pitch is the destination that takes the product whole, so it must exceed a halved one at the
+    // same depth -- the same ordering the linear law has.
+    matrix.at(Source::bend, Destination::pitch) = ControlMatrix::neutral + 0x20;
+    const ControlMatrix::Modulation m = matrix.applied_bipolar(Source::bend, 8000);
+    CHECK(m.pitch > std::abs(m.tvf_cutoff));
+}
