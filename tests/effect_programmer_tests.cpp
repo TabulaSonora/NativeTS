@@ -6,9 +6,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
+#include <numbers>
 #include <string>
 #include <vector>
 
@@ -20,7 +23,8 @@ namespace {
 /// Computes the presets straight from the DLL, skipping the test when it is absent.
 [[nodiscard]] EffectPresets computed()
 {
-    const RomImage rom = RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
     return EffectProgrammer::compute(rom);
 }
 
@@ -216,4 +220,66 @@ TEST_CASE("the computed set matches a baked harvest when one is present",
     CHECK(harvested.delay().type_names == set.delay().type_names);
     CHECK(harvested.delay().time_milliseconds == set.delay().time_milliseconds);
     CHECK(harvested.delay().ratio_percent == set.delay().ratio_percent);
+}
+
+TEST_CASE("the EQ shelves are unity at 0 dB", "[effects][programmer][sccore]")
+{
+    const EffectPresets presets = computed();
+    REQUIRE(presets.has_eq());
+
+    // 0x40 is the flat setting, twelve steps up from the 0x34 floor. A one-pole shelf whose
+    // numerator equals its denominator is unity at every frequency, so the flat row has to read
+    // {1, -a, a} exactly -- and it is the check that the three stored coefficients were taken in
+    // the right order, because no other assignment of them produces that identity.
+    for (int frequency = 0; frequency < 2; ++frequency) {
+        INFO("frequency index " << frequency);
+
+        const EqBand& low = presets.eq().low_band(frequency, 0x40);
+        CHECK_THAT(low.b0, WithinAbs(1.0, 1e-9));
+        CHECK_THAT(low.b1, WithinAbs(-low.a1, 1e-9));
+        CHECK(low.a1 > 0.0);
+
+        const EqBand& high = presets.eq().high_band(frequency, 0x40);
+        CHECK_THAT(high.b0, WithinAbs(1.0, 1e-9));
+        CHECK_THAT(high.b1, WithinAbs(-high.a1, 1e-9));
+        CHECK(high.a1 > 0.0);
+    }
+
+    // The pole sets the corner, and the second setting of each band has to be the higher one.
+    //
+    // Only the ordering is asserted, not the frequency. Treating the stored pole as a plain
+    // one-pole -3 dB point puts the low band at 225 and 426 Hz against the module's advertised 200
+    // and 400, which looks like a match -- and then puts the high band's second setting at 11 kHz
+    // against an advertised 6. So that reading is wrong even though half of it agrees, and what
+    // Roland means by the printed frequency for a shelf is not pinned down here. The poles
+    // themselves are facts; the Hz are not.
+    for (int band = 0; band < 2; ++band) {
+        const bool low = band == 0;
+        const double first =
+            low ? presets.eq().low_band(0, 0x40).a1 : presets.eq().high_band(0, 0x40).a1;
+        const double second =
+            low ? presets.eq().low_band(1, 0x40).a1 : presets.eq().high_band(1, 0x40).a1;
+        INFO((low ? "low" : "high") << " poles " << first << " then " << second);
+
+        // A smaller pole is a higher corner, so setting 1 must have the smaller one.
+        CHECK(second < first);
+    }
+
+    // Gain is monotonic in the setting: b0 is the shelf's far-side gain, so it rises across the
+    // whole -12..+12 dB span rather than only near the middle.
+    for (int frequency = 0; frequency < 2; ++frequency) {
+        CHECK(presets.eq().low_band(frequency, 0x34).b0
+              < presets.eq().low_band(frequency, 0x40).b0);
+        CHECK(presets.eq().low_band(frequency, 0x40).b0
+              < presets.eq().low_band(frequency, 0x4C).b0);
+        CHECK(presets.eq().high_band(frequency, 0x34).b0
+              < presets.eq().high_band(frequency, 0x40).b0);
+        CHECK(presets.eq().high_band(frequency, 0x40).b0
+              < presets.eq().high_band(frequency, 0x4C).b0);
+    }
+
+    // The engine clamps rather than reading past the table, and so does this.
+    CHECK(presets.eq().low_band(0, 0x00).b0 == presets.eq().low_band(0, 0x34).b0);
+    CHECK(presets.eq().low_band(0, 0x7F).b0 == presets.eq().low_band(0, 0x4C).b0);
+    CHECK(presets.eq().low_band(9, 0x40).b0 == presets.eq().low_band(1, 0x40).b0);
 }

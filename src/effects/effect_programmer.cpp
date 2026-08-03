@@ -46,6 +46,16 @@ constexpr std::int64_t second_tap_pointers = file_offset(0x1819A0AB0);
 /// File offset of `g_delay_preset_tbl`, ten rows of ten GS delay parameters.
 constexpr std::int64_t delay_preset_offset = file_offset(0x181893930);
 
+// The EQ shelf tables, read by `fx_eq_band_preset_apply`. Each is two corner-frequency rows of 25
+// gain settings, each setting three coefficients in the same fixed14 encoding as everything else —
+// so the whole four-band EQ block is 300 bytes of stored answers and no arithmetic at all.
+constexpr std::int64_t eq_low_table = file_offset(0x1818960B0);
+constexpr std::int64_t eq_high_table = file_offset(0x1818961E0);
+
+/// Coefficients per gain setting, and the stride of one frequency row (`0x4b` in the engine).
+constexpr int eq_coefficients = 3;
+constexpr int eq_row_stride = EqPresets::gain_count * eq_coefficients;
+
 /// The ring base every GS macro program's taps are stored relative to.
 constexpr int ring_base = 0x2000;
 
@@ -86,8 +96,8 @@ constexpr std::array<double, 120> delay_ratio_percent{
     constexpr std::array<int, 4> shifts{0, 1, 2, 4};
     const int shift = shifts[static_cast<std::size_t>((value >> 14) & 3)];
 
-    const auto shifted =
-        static_cast<std::int32_t>(static_cast<std::uint32_t>(mantissa) << static_cast<unsigned>(shift));
+    const auto shifted = static_cast<std::int32_t>(static_cast<std::uint32_t>(mantissa)
+                                                   << static_cast<unsigned>(shift));
     if (shifted == 0) {
         return static_cast<double>(1e-05F);
     }
@@ -146,6 +156,30 @@ read_row(const RomImage& rom, std::int64_t pointer_table, int index, std::size_t
     }
 
     return read_u16(rom, file_offset(static_cast<std::int64_t>(address)), count);
+}
+
+/// Reads one EQ band's whole table: two frequency rows of 25 gain settings.
+///
+/// The three coefficients per setting are stored in the order the register writes take them, which
+/// is not `b0, b1, a1` — `fx_eq_band_preset_apply` sends the row's first word to register 0xe7, the
+/// second to 0xe6 and the third to 0xe8. Reading them straight through and naming them by position
+/// is what makes the flat row come out as `{1, -a, a}`, and that identity is the proof the order is
+/// right: any other assignment fails to be unity at 0 dB.
+void read_eq_table(const RomImage& rom,
+                   std::int64_t table,
+                   std::array<std::array<EqBand, EqPresets::gain_count>, 2>& into)
+{
+    const std::vector<std::uint16_t> raw =
+        read_u16(rom, table, static_cast<std::size_t>(2 * eq_row_stride));
+
+    for (std::size_t frequency = 0; frequency < into.size(); ++frequency) {
+        for (int gain = 0; gain < EqPresets::gain_count; ++gain) {
+            const std::size_t at = (frequency * static_cast<std::size_t>(eq_row_stride))
+                                   + static_cast<std::size_t>(gain * eq_coefficients);
+            into[frequency][static_cast<std::size_t>(gain)] =
+                EqBand{fixed14(raw[at]), fixed14(raw[at + 1]), fixed14(raw[at + 2])};
+        }
+    }
 }
 
 /// Reads a row as signed 16-bit, which is how the stored taps are relative to the ring base.
@@ -256,14 +290,26 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
     };
 
     preset.tank_a = ReverbTank{
-        .taps = tank_taps({tap[10], tap[11], tap[14], tap[15], tank_a_tail[0], tank_a_tail[1],
-                           tank_a_tail[2], tank_a_tail[3]}),
+        .taps = tank_taps({tap[10],
+                           tap[11],
+                           tap[14],
+                           tap[15],
+                           tank_a_tail[0],
+                           tank_a_tail[1],
+                           tank_a_tail[2],
+                           tank_a_tail[3]}),
         .coef_a = fixed14(coefs[16]),
         .coef_b = fixed14(coefs[17]),
     };
     preset.tank_b = ReverbTank{
-        .taps = tank_taps({tap[18], tap[19], tap[22], tap[23], tank_b_tail[0], tank_b_tail[1],
-                           tank_b_tail[2], tank_b_tail[3]}),
+        .taps = tank_taps({tap[18],
+                           tap[19],
+                           tap[22],
+                           tap[23],
+                           tank_b_tail[0],
+                           tank_b_tail[1],
+                           tank_b_tail[2],
+                           tank_b_tail[3]}),
         .coef_a = fixed14(coefs[18]),
         .coef_b = fixed14(coefs[19]),
     };
@@ -280,9 +326,8 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
     preset.gain_injection = gain(0x4000);
     // The two delay characters price feedback from the delay-feedback byte; the rest from the
     // reverb time.
-    preset.gain_feedback = character >= 6
-                               ? gain(std::min(feedback, 0x5F) << 8)
-                               : gain(((std::min(time, 0x6C) * 0x17C) / 0x6C) << 6);
+    preset.gain_feedback = character >= 6 ? gain(std::min(feedback, 0x5F) << 8)
+                                          : gain(((std::min(time, 0x6C) * 0x17C) / 0x6C) << 6);
     preset.gain_output = gain(0x4000);
     return preset;
 }
@@ -321,9 +366,8 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
 std::vector<std::array<int, EffectProgrammer::delay_preset_stride>>
 EffectProgrammer::read_delay_presets(const RomImage& rom)
 {
-    const std::vector<std::uint8_t> bytes =
-        rom.read(delay_preset_offset,
-                 static_cast<std::size_t>(delay_type_count) * delay_preset_stride);
+    const std::vector<std::uint8_t> bytes = rom.read(
+        delay_preset_offset, static_cast<std::size_t>(delay_type_count) * delay_preset_stride);
 
     std::vector<std::array<int, delay_preset_stride>> presets(delay_type_count);
     for (int t = 0; t < delay_type_count; ++t) {
@@ -348,15 +392,20 @@ EffectPresets EffectProgrammer::compute(const RomImage& rom)
     const std::vector<std::uint8_t> chorus_rows = rom.read(chorus_macro_rows, 8 * 8);
 
     ReverbPresets reverb;
-    reverb.type_names = {"Room1", "Room2", "Room3", "Hall1",
-                         "Hall2", "Plate", "Delay", "PanDelay"};
+    reverb.type_names = {"Room1", "Room2", "Room3", "Hall1", "Hall2", "Plate", "Delay", "PanDelay"};
     for (int t = 0; t < 8; ++t) {
         reverb.types.push_back(compute_reverb(rom, reverb_rows.data() + (t * 7)));
     }
 
     ChorusPresets chorus;
-    chorus.type_names = {"Chorus1", "Chorus2", "Chorus3",       "Chorus4",
-                         "FeedbackChorus", "Flanger", "ShortDelay", "ShortDelayFB"};
+    chorus.type_names = {"Chorus1",
+                         "Chorus2",
+                         "Chorus3",
+                         "Chorus4",
+                         "FeedbackChorus",
+                         "Flanger",
+                         "ShortDelay",
+                         "ShortDelayFB"};
     for (int t = 0; t < 8; ++t) {
         chorus.types.push_back(compute_chorus(rom, chorus_rows.data() + (t * 8)));
     }
@@ -369,13 +418,25 @@ EffectPresets EffectProgrammer::compute(const RomImage& rom)
     chorus.defaults = chorus.types[2];
 
     DelayPresets delay;
-    delay.type_names = {"Delay1",    "Delay2",    "Delay3",    "Delay4",        "PanDelay1",
-                        "PanDelay2", "PanDelay3", "PanDelay4", "DelayToReverb", "PanRepeat"};
+    delay.type_names = {"Delay1",
+                        "Delay2",
+                        "Delay3",
+                        "Delay4",
+                        "PanDelay1",
+                        "PanDelay2",
+                        "PanDelay3",
+                        "PanDelay4",
+                        "DelayToReverb",
+                        "PanRepeat"};
     delay.time_milliseconds.assign(delay_time_milliseconds.begin(), delay_time_milliseconds.end());
     delay.ratio_percent.assign(delay_ratio_percent.begin(), delay_ratio_percent.end());
     delay.raw_presets = read_delay_presets(rom);
 
-    return EffectPresets::from_parts(std::move(reverb), std::move(chorus), std::move(delay));
+    EqPresets eq;
+    read_eq_table(rom, eq_low_table, eq.low);
+    read_eq_table(rom, eq_high_table, eq.high);
+
+    return EffectPresets::from_parts(std::move(reverb), std::move(chorus), std::move(delay), eq);
 }
 
 } // namespace ts

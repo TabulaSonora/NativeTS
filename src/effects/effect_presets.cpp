@@ -4,6 +4,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
@@ -166,14 +167,33 @@ void install(std::shared_ptr<const EffectPresets> presets)
 
 } // namespace
 
-EffectPresets
-EffectPresets::from_parts(ReverbPresets reverb, ChorusPresets chorus, DelayPresets delay)
+EffectPresets EffectPresets::from_parts(ReverbPresets reverb,
+                                        ChorusPresets chorus,
+                                        DelayPresets delay,
+                                        EqPresets eq)
 {
     EffectPresets presets;
     presets.reverb_ = std::move(reverb);
     presets.chorus_ = std::move(chorus);
     presets.delay_ = std::move(delay);
+    presets.eq_ = eq;
+
+    // A default-constructed band is unity, which is indistinguishable from a real flat setting, so
+    // presence is tracked rather than inferred: only a set that came from a DLL has EQ.
+    presets.has_eq_ = eq.low[0][0].a1 != 0.0 || eq.high[0][0].a1 != 0.0;
     return presets;
+}
+
+const EqBand& EqPresets::low_band(int frequency, int gain) const noexcept
+{
+    return low[static_cast<std::size_t>(std::clamp(frequency, 0, 1))]
+              [static_cast<std::size_t>(std::clamp(gain - gain_base, 0, gain_count - 1))];
+}
+
+const EqBand& EqPresets::high_band(int frequency, int gain) const noexcept
+{
+    return high[static_cast<std::size_t>(std::clamp(frequency, 0, 1))]
+               [static_cast<std::size_t>(std::clamp(gain - gain_base, 0, gain_count - 1))];
 }
 
 void EffectPresets::use(EffectPresets presets)
