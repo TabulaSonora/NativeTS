@@ -249,14 +249,19 @@ int LfoEngine::mod_wheel_depth(int controller, int depth, int offset) noexcept
 // LfoRunner
 // ---------------------------------------------------------------------------------------------
 
-void LfoRunner::tick() noexcept
+void LfoRunner::tick(int rate_offset) noexcept
 {
     applied_ = false;
-    if (config_.increment == 0) {
+
+    // The matrix's rate reaches the increment, not the rate index -- the engine adds it to the
+    // value the rate table has already produced. The ceiling is on the total, and a total that is
+    // not positive skips the update entirely rather than merely holding the phase still.
+    const int increment = std::min(config_.increment + rate_offset, 0x28F6);
+    if (increment <= 0) {
         return;
     }
 
-    phase_ = (phase_ + config_.increment) & 0xFFFF;
+    phase_ = (phase_ + increment) & 0xFFFF;
 
     if (delay_ < 0xFFFF) {
         // The LFO runs during the delay but is not applied. A zero rate never completes, which is
@@ -278,25 +283,27 @@ void LfoRunner::tick() noexcept
     applied_ = true;
 }
 
-double LfoRunner::value(LfoDestination destination) const noexcept
+double LfoRunner::value(LfoDestination destination, int matrix_depth) const noexcept
 {
     const LfoEngine::Limits limits = LfoEngine::destination_limits(destination);
     const int depth = std::clamp(config_.depth(destination), -limits.clamp, limits.clamp);
-    if (depth == 0) {
+
+    // A patch with no depth still sounds the LFO when the matrix supplies one -- that is the whole
+    // point of an assignable depth, and the engine takes the same branch for it (`lfo_apply_depth`
+    // with a zero patch depth passes the matrix's value straight to the waveform).
+    if (depth == 0 && matrix_depth == 0) {
         return 0.0;
     }
-    return apply(faded(depth), limits.rounding);
+
+    // Summed after the fade-in, then clamped: the fade belongs to the patch's depth, and a
+    // controller that arrives mid-fade is not faded in with it.
+    const int effective = std::clamp(faded(depth) + matrix_depth, -limits.clamp, limits.clamp);
+    return apply(effective, limits.rounding);
 }
 
 double LfoRunner::pitch_value(double wheel_depth) const noexcept
 {
-    const LfoEngine::Limits limits = LfoEngine::destination_limits(LfoDestination::pitch);
-    const int depth = std::clamp(config_.pitch_depth, -limits.clamp, limits.clamp);
-
-    // The wheel is summed after the fade-in, then the total is clamped to +-6000.
-    const int effective =
-        std::clamp(faded(depth) + static_cast<int>(wheel_depth), -limits.clamp, limits.clamp);
-    return apply(effective, limits.rounding);
+    return value(LfoDestination::pitch, static_cast<int>(wheel_depth));
 }
 
 int LfoRunner::faded(int depth) const noexcept

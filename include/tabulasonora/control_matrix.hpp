@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 
@@ -78,6 +79,25 @@ struct ControlMatrix {
         return depth[static_cast<std::size_t>(source)][static_cast<std::size_t>(destination)];
     }
 
+    /// Stores one depth the way `sysex_part_control_matrix` does, which is not a plain assignment.
+    ///
+    /// Ten of the eleven destinations take the byte as it arrives. **Pitch does not**: it is
+    /// clamped to 0x28-0x58, which is ±24 semitones, and that range is the reason the pitch law's
+    /// 0xbe8 clamp is the top of the scale rather than a rail a real stream can reach — 24 × 127 is
+    /// exactly 3048. Storing the byte raw instead lets a depth of 0x7f reach that clamp at a third
+    /// of the wheel's travel, so the pitch ramps steeply and then stops dead half way up. That is
+    /// what it did here until the module was asked: against `40 21 00` at 0x7f the module ramps
+    /// evenly to 24 semitones across the whole wheel, and this engine had already railed by 64.
+    ///
+    /// Bend's pitch depth never reaches this function — see `bend_pitch_lives_in_bend_range`. The
+    /// engine clamps that one to 0x40-0x58 instead, one-sided, which is the 0-24 range
+    /// `Part::bend_range` already holds it to.
+    void store(Source source, Destination destination, int value) noexcept
+    {
+        at(source, destination) =
+            destination == Destination::pitch ? std::clamp(value, 0x28, 0x58) : value;
+    }
+
     /// What one source contributes, once its depths have been scaled by its current amount.
     ///
     /// Named fields rather than an array, deliberately. The engine's own output is eleven shorts in
@@ -96,6 +116,62 @@ struct ControlMatrix {
         int lfo2_pitch = 0;
         int lfo2_tvf = 0;
         int lfo2_tva = 0;
+
+        /// One field, chosen by destination.
+        ///
+        /// Keyed by the enum rather than by an integer, which is the whole of what makes it safe:
+        /// the permutation the fields exist to retire is a numeric one, and a caller who cannot
+        /// supply a number cannot reintroduce it. Summing eleven destinations in a loop needs this;
+        /// reaching for a single one should still use the field.
+        [[nodiscard]] constexpr int at(Destination destination) const noexcept
+        {
+            switch (destination) {
+            case Destination::pitch:
+                return pitch;
+            case Destination::tvf_cutoff:
+                return tvf_cutoff;
+            case Destination::amplitude:
+                return amplitude;
+            case Destination::lfo1_rate:
+                return lfo1_rate;
+            case Destination::lfo1_pitch:
+                return lfo1_pitch;
+            case Destination::lfo1_tvf:
+                return lfo1_tvf;
+            case Destination::lfo1_tva:
+                return lfo1_tva;
+            case Destination::lfo2_rate:
+                return lfo2_rate;
+            case Destination::lfo2_pitch:
+                return lfo2_pitch;
+            case Destination::lfo2_tvf:
+                return lfo2_tvf;
+            case Destination::lfo2_tva:
+                break;
+            }
+            return lfo2_tva;
+        }
+
+        /// Accumulates another source's contribution.
+        ///
+        /// The engine keeps one running sum a destination and every source adds into it before
+        /// anything is clamped, so the sources have to be summed raw — adding scaled results
+        /// instead would clamp each source separately and let the total escape the rail.
+        constexpr Modulation& operator+=(const Modulation& other) noexcept
+        {
+            pitch += other.pitch;
+            tvf_cutoff += other.tvf_cutoff;
+            amplitude += other.amplitude;
+            lfo1_rate += other.lfo1_rate;
+            lfo1_pitch += other.lfo1_pitch;
+            lfo1_tvf += other.lfo1_tvf;
+            lfo1_tva += other.lfo1_tva;
+            lfo2_rate += other.lfo2_rate;
+            lfo2_pitch += other.lfo2_pitch;
+            lfo2_tvf += other.lfo2_tvf;
+            lfo2_tva += other.lfo2_tva;
+            return *this;
+        }
     };
 
     /// Scales this source's depths by a controller amount — `modmatrix_apply_linear`.
@@ -210,6 +286,98 @@ struct ControlMatrix {
             .lfo2_pitch = amountwise(row[8], quarter),
             .lfo2_tvf = amountwise(row[9], quarter),
             .lfo2_tva = amountwise(row[10], quarter),
+        };
+    }
+
+    /// What turns a summed destination into its own unit — `part_mod_depth_recalc`, once per
+    /// destination.
+    ///
+    /// The engine keeps eleven running sums per part, one a destination, each the total of the five
+    /// part-wide sources. A sum is a raw `depth x amount` product in no unit at all; this is the
+    /// step that gives it one. Every destination does the same three things — clamp the magnitude,
+    /// shift it, take the high word of a 16-bit multiply — and differs only in the three constants.
+    struct Law {
+        /// The magnitude ceiling, applied before the scale.
+        int clamp;
+        /// The left shift the magnitude takes first.
+        int shift;
+        /// The 16.16 multiplier whose high word is the result.
+        int multiplier;
+    };
+
+    /// The three constants for one destination.
+    ///
+    /// Two things are worth reading off this table rather than trusting. The clamps are exactly the
+    /// largest sum each destination can reach: 0xbe8 is 127 x 24 for a whole product, 4000 is
+    /// 127 x 63 / 2 for a halved one, and 0xfc0 is 127 x 127 / 4 for a quartered one — so the clamp
+    /// is not a safety rail that a real stream might hit, it is the top of the scale. And each
+    /// `clamp << shift` lands just inside 16 bits (64512 is the largest, for the LFO amplitude
+    /// depths), which is what keeps the engine's unsigned-short intermediate from wrapping. Both
+    /// facts fall out of the constants; neither was put there by hand.
+    ///
+    /// The full-scale results are the published ranges, exactly: +-24000 milli-semitones of pitch,
+    /// +-24576 cutoff units (9600 cents at 2.56 a cent), +-32512 of 0x7f00 amplitude, +-6553 of LFO
+    /// increment (10 Hz, since 65536 increments a tick at 100 Hz is 100 Hz), and for the LFO depths
+    /// 32512, 6144 and 6000 — 100 %, 2400 cents and 600 cents. Eleven constants reproducing seven
+    /// documented figures is the check that the table has been read off correctly.
+    [[nodiscard]] static constexpr Law law(Destination destination) noexcept
+    {
+        switch (destination) {
+        case Destination::pitch:
+            return Law{0xBE8, 3, 0xFBF8};
+        case Destination::tvf_cutoff:
+            return Law{4000, 3, 0xC49C};
+        case Destination::amplitude:
+            return Law{4000, 4, 0x820D};
+        case Destination::lfo1_rate:
+        case Destination::lfo2_rate:
+            return Law{4000, 1, 0xD1B8};
+        case Destination::lfo1_pitch:
+        case Destination::lfo2_pitch:
+            return Law{0xFC0, 1, 0xBE7A};
+        case Destination::lfo1_tvf:
+        case Destination::lfo2_tvf:
+            return Law{0xFC0, 1, 0xC30D};
+        case Destination::lfo1_tva:
+        case Destination::lfo2_tva:
+            break;
+        }
+        return Law{0xFC0, 4, 0x8105};
+    }
+
+    /// Clamps and scales a destination's summed sources into that destination's unit.
+    ///
+    /// Sign-magnitude, like everything else here: the clamp and the multiply see the magnitude and
+    /// the sign is reapplied, which is not the same as clamping a signed value and shifting it.
+    [[nodiscard]] static constexpr int scaled(Destination destination, int sum) noexcept
+    {
+        if (sum == 0) {
+            return 0;
+        }
+
+        const Law rule = law(destination);
+        const unsigned magnitude =
+            static_cast<unsigned>(std::min(std::abs(sum), rule.clamp) << rule.shift);
+        const int value =
+            static_cast<int>((magnitude * static_cast<unsigned>(rule.multiplier)) >> 16);
+        return sum < 0 ? -value : value;
+    }
+
+    /// Every destination's summed sources, each scaled by its own law.
+    [[nodiscard]] static constexpr Modulation scaled(const Modulation& sums) noexcept
+    {
+        return Modulation{
+            .pitch = scaled(Destination::pitch, sums.pitch),
+            .tvf_cutoff = scaled(Destination::tvf_cutoff, sums.tvf_cutoff),
+            .amplitude = scaled(Destination::amplitude, sums.amplitude),
+            .lfo1_rate = scaled(Destination::lfo1_rate, sums.lfo1_rate),
+            .lfo1_pitch = scaled(Destination::lfo1_pitch, sums.lfo1_pitch),
+            .lfo1_tvf = scaled(Destination::lfo1_tvf, sums.lfo1_tvf),
+            .lfo1_tva = scaled(Destination::lfo1_tva, sums.lfo1_tva),
+            .lfo2_rate = scaled(Destination::lfo2_rate, sums.lfo2_rate),
+            .lfo2_pitch = scaled(Destination::lfo2_pitch, sums.lfo2_pitch),
+            .lfo2_tvf = scaled(Destination::lfo2_tvf, sums.lfo2_tvf),
+            .lfo2_tva = scaled(Destination::lfo2_tva, sums.lfo2_tva),
         };
     }
 

@@ -139,7 +139,7 @@ double PartialVoice::choke_gain(std::int64_t since) noexcept
 
 void PartialVoice::render(std::span<float> destination,
                           double bend_milli_semitones,
-                          double mod_wheel_depth)
+                          const ControlMatrix::Modulation& matrix)
 {
     if (finished_) {
         std::fill(destination.begin(), destination.end(), 0.0F);
@@ -155,7 +155,7 @@ void PartialVoice::render(std::span<float> destination,
     }
 
     if (sample_ % control_block == 0) {
-        control(bend_milli_semitones, mod_wheel_depth, control_tick_ == 0);
+        control(bend_milli_semitones, matrix, control_tick_ == 0);
         ++control_tick_;
         pitch_ramp_.arm(entry_ratio_, ratio_);
         slot_remaining_ = 0;
@@ -205,7 +205,9 @@ void PartialVoice::render(std::span<float> destination,
     }
 }
 
-void PartialVoice::control(double bend_milli_semitones, double mod_wheel_depth, bool first)
+void PartialVoice::control(double bend_milli_semitones,
+                           const ControlMatrix::Modulation& matrix,
+                           bool first)
 {
     const bool is_released = note_off_ >= 0 && sample_ >= note_off_;
 
@@ -217,23 +219,25 @@ void PartialVoice::control(double bend_milli_semitones, double mod_wheel_depth, 
     double lfo_tva = 0.0;
 
     if (!first) {
+        // Eight of the matrix's eleven destinations are the two LFOs' rate and three depths. The
+        // rate is consumed by the tick, since it moves the phase; the depths are consumed reading
+        // the value out, since they scale the waveform the phase produced.
         if (lfo1_) {
-            lfo1_->tick();
+            lfo1_->tick(matrix.lfo1_rate);
         }
         if (lfo2_) {
-            lfo2_->tick();
+            lfo2_->tick(matrix.lfo2_rate);
         }
 
         if (lfo1_) {
-            // Only LFO1 takes the mod wheel; LFO2 is unaffected.
-            lfo_pitch += lfo1_->pitch_value(mod_wheel_depth);
-            lfo_tvf += lfo1_->value(LfoDestination::tvf);
-            lfo_tva += lfo1_->value(LfoDestination::tva);
+            lfo_pitch += lfo1_->value(LfoDestination::pitch, matrix.lfo1_pitch);
+            lfo_tvf += lfo1_->value(LfoDestination::tvf, matrix.lfo1_tvf);
+            lfo_tva += lfo1_->value(LfoDestination::tva, matrix.lfo1_tva);
         }
         if (lfo2_) {
-            lfo_pitch += lfo2_->value(LfoDestination::pitch);
-            lfo_tvf += lfo2_->value(LfoDestination::tvf);
-            lfo_tva += lfo2_->value(LfoDestination::tva);
+            lfo_pitch += lfo2_->value(LfoDestination::pitch, matrix.lfo2_pitch);
+            lfo_tvf += lfo2_->value(LfoDestination::tvf, matrix.lfo2_tvf);
+            lfo_tva += lfo2_->value(LfoDestination::tva, matrix.lfo2_tva);
         }
     }
 
@@ -259,8 +263,14 @@ void PartialVoice::control(double bend_milli_semitones, double mod_wheel_depth, 
     ratio_ = ratio(bend_milli_semitones);
 
     // Amplitude modulation folds in as a fraction of 0x7f00, clamped first.
+    //
+    // The matrix's amplitude destination is summed with the two LFOs' before that clamp, not after
+    // and not separately: the engine adds all three and clamps the total once, so a part already
+    // driven to the rail by tremolo cannot be pushed past it by a controller.
     tremolo_ = 1.0
-               + (std::clamp(lfo_tva, -static_cast<double>(0x7F00), static_cast<double>(0x7F00))
+               + (std::clamp(lfo_tva + matrix.amplitude,
+                             -static_cast<double>(0x7F00),
+                             static_cast<double>(0x7F00))
                   / static_cast<double>(0x7F00));
 
     if (tap_ != FilterTap::bypass && cutoff_) {
@@ -268,10 +278,14 @@ void PartialVoice::control(double bend_milli_semitones, double mod_wheel_depth, 
         // The envelope can cross several segments inside one 10 ms tick, and taking a single point
         // instead costs about 1.7% of peak on a piano attack -- the one place where the two render
         // paths measurably parted company.
+        // The matrix's cutoff destination joins the sum the engine clamps, alongside both LFOs'
+        // filter modulation -- `tvf_cutoff_add_lfo` adds every term and clamps once at the end,
+        // rather than clamping the running cutoff and then adding to it.
         double total = 0.0;
         for (int n = 0; n < control_block; ++n) {
             total += std::clamp(cutoff_base_ + cutoff_offset_
-                                    + cutoff_->value_at(envelope_sample(sample_ + n)) + lfo_tvf,
+                                    + cutoff_->value_at(envelope_sample(sample_ + n)) + lfo_tvf
+                                    + matrix.tvf_cutoff,
                                 0.0,
                                 static_cast<double>(0x7FFF));
         }

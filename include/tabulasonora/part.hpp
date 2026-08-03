@@ -299,52 +299,42 @@ public:
     /// The combined volume multiplier, 1.0 with everything at 127.
     [[nodiscard]] double volume_scale() const noexcept { return volume_scale_; }
 
-    /// The mod wheel's contribution to LFO1 pitch depth, in milli-semitones.
+    /// Everything the control matrix modulates, each destination in its own unit.
     ///
-    /// The depth is the matrix's own (`40 2x 04`) rather than a constant. Its power-on value is
-    /// 0x0A, which is what `LfoEngine::mod_wheel_depth` had been assuming — so a stream that never
-    /// touches the matrix sounds exactly as before, and one that does is no longer ignored.
-    [[nodiscard]] double mod_wheel_depth() const noexcept
-    {
-        return LfoEngine::mod_wheel_depth(
-            modulation,
-            control.at(ControlMatrix::Source::modulation, ControlMatrix::Destination::lfo1_pitch));
-    }
-
-    /// The control matrix's contribution to pitch, in milli-semitones.
+    /// `part_mod_depth_recalc` keeps eleven running sums a part, one a destination, each the total
+    /// of the sources' contributions, and clamps and scales each by its own law. This is that
+    /// function, computed on demand rather than cached behind a dirty mask — the mask is a way of
+    /// not recomputing, not a difference in what is computed.
     ///
-    /// `part_mod_depth_recalc` sums the pitch entry of five sources — mod wheel, bend, channel
-    /// aftertouch, CC1 and CC2 — clamps the total to ±0xbe8 and scales it. That clamp is not a
-    /// round number by accident: 0xbe8 is 3048, which is 127 × 24, exactly the largest value
-    /// `amount × (depth − 0x40)` can reach. The scale then works out to 24 semitones at the rail,
-    /// which is what fixes the unit as milli-semitones.
-    ///
-    /// **Two of the six sources are missing here.** CC1 and CC2 need their assignable controller
-    /// numbers tracked, which they are not, so the sum runs over the mod wheel, both aftertouches
-    /// and bend — and the clamp sees a smaller total than the engine's would when all six are
-    /// deflected at once. That is a real difference and it only shows at the rail.
+    /// **Two of the six sources are missing.** CC1 and CC2 need their assignable controller numbers
+    /// tracked, which they are not, so the sum runs over the mod wheel, both aftertouches and bend
+    /// — and every clamp sees a smaller total than the engine's would when all six are deflected at
+    /// once. That is a real difference and it only shows at the rail.
     ///
     /// `key_pressure` is the polyphonic aftertouch on the note being rendered, which is why this
     /// takes an argument at all: everything else here belongs to the part, and that one belongs to
-    /// the key. A caller with no note in hand passes nothing and gets the part's own modulation.
+    /// the key. The module applies it at exactly this point too, and for the same reason — it is
+    /// the one source whose amount is not a property of the part, so it cannot be folded into a
+    /// per-part cache. A caller with no note in hand passes nothing.
+    [[nodiscard]] ControlMatrix::Modulation matrix(int key_pressure = 0) const noexcept
+    {
+        ControlMatrix::Modulation sums =
+            control.applied_linear(ControlMatrix::Source::modulation, modulation);
+        sums += control.applied_linear(ControlMatrix::Source::channel_pressure, channel_pressure);
+        sums += control.applied_linear(ControlMatrix::Source::poly_pressure, key_pressure);
+        sums += control.applied_bipolar(
+            ControlMatrix::Source::bend, bend - 8192, bend_range + ControlMatrix::neutral);
+        return ControlMatrix::scaled(sums);
+    }
+
+    /// The control matrix's contribution to pitch alone, in milli-semitones.
+    ///
+    /// The clamp behind this is not a round number by accident: 0xbe8 is 3048, which is 127 × 24,
+    /// exactly the largest value `amount × (depth − 0x40)` can reach. The scale then works out to
+    /// 24 semitones at the rail, which is what fixes the unit as milli-semitones.
     [[nodiscard]] double matrix_pitch_milli_semitones(int key_pressure = 0) const noexcept
     {
-        const int sum =
-            control.applied_linear(ControlMatrix::Source::modulation, modulation).pitch
-            + control.applied_linear(ControlMatrix::Source::channel_pressure, channel_pressure)
-                  .pitch
-            + control.applied_linear(ControlMatrix::Source::poly_pressure, key_pressure).pitch
-            + control
-                  .applied_bipolar(
-                      ControlMatrix::Source::bend, bend - 8192, bend_range + ControlMatrix::neutral)
-                  .pitch;
-        if (sum == 0) {
-            return 0.0;
-        }
-
-        const int magnitude = std::min(std::abs(sum), 0xBE8);
-        const int scaled = ((magnitude << 3) * 0xFBF8) >> 16;
-        return static_cast<double>(sum < 0 ? -scaled : scaled);
+        return static_cast<double>(matrix(key_pressure).pitch);
     }
 
     /// The bend offset in milli-semitones.

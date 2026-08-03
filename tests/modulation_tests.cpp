@@ -22,6 +22,7 @@
 
 using namespace ts;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 namespace fs = std::filesystem;
 
 namespace {
@@ -884,4 +885,164 @@ TEST_CASE("the pitch ramp reproduces the engine's measured glide", "[pitch][ramp
     // And it settles: once the target is reached the ramp stops moving and reports unity.
     CHECK_FALSE(ramp.is_active());
     CHECK(ramp.next_slot() == 65536);
+}
+
+
+TEST_CASE("every matrix destination rails at its published range", "[dsp]")
+{
+    using Destination = ControlMatrix::Destination;
+
+    // The scale is what fixes each destination's unit, so the check is that a full-scale sum comes
+    // out as the figure the GS documentation names -- not as whatever the constants happen to give.
+    // Written as the published quantity beside the raw result, because the raw result alone would
+    // be a restatement of the table rather than a test of it.
+    struct Case {
+        Destination destination;
+        int rail;
+        const char* published;
+    };
+
+    const std::array<Case, 11> cases{{
+        {Destination::pitch, 24000, "24 semitones, in milli-semitones"},
+        {Destination::tvf_cutoff, 24576, "9600 cents, at 2.56 units a cent"},
+        {Destination::amplitude, 32512, "100 %, as a fraction of 0x7f00"},
+        {Destination::lfo1_rate, 6553, "10 Hz, as a per-tick phase increment"},
+        {Destination::lfo1_pitch, 6000, "600 cents"},
+        {Destination::lfo1_tvf, 6144, "2400 cents"},
+        {Destination::lfo1_tva, 32512, "100 %"},
+        {Destination::lfo2_rate, 6553, "10 Hz"},
+        {Destination::lfo2_pitch, 6000, "600 cents"},
+        {Destination::lfo2_tvf, 6144, "2400 cents"},
+        {Destination::lfo2_tva, 32512, "100 %"},
+    }};
+
+    for (const Case& entry : cases) {
+        const ControlMatrix::Law law = ControlMatrix::law(entry.destination);
+        INFO(entry.published);
+        CHECK(ControlMatrix::scaled(entry.destination, law.clamp) == entry.rail);
+        CHECK(ControlMatrix::scaled(entry.destination, -law.clamp) == -entry.rail);
+
+        // Past the clamp nothing more happens, and the clamp is symmetric.
+        CHECK(ControlMatrix::scaled(entry.destination, law.clamp * 4) == entry.rail);
+        CHECK(ControlMatrix::scaled(entry.destination, 0) == 0);
+
+        // The engine's intermediate is an unsigned short, and the clamp is what keeps it from
+        // wrapping. If a law ever changed so that it could, this is where it would show.
+        CHECK((law.clamp << law.shift) <= 0xFFFF);
+    }
+}
+
+TEST_CASE("the pitch destination is stored clamped to plus or minus 24 semitones", "[dsp]")
+{
+    using Destination = ControlMatrix::Destination;
+    using Source = ControlMatrix::Source;
+
+    ControlMatrix matrix;
+
+    // 0x28-0x58 is the pitch destination's whole range, and a byte outside it is clamped rather
+    // than taken. Storing it raw is what this engine used to do, and the module disagreed audibly.
+    matrix.store(Source::modulation, Destination::pitch, 0x7F);
+    CHECK(matrix.at(Source::modulation, Destination::pitch) == 0x58);
+    matrix.store(Source::modulation, Destination::pitch, 0x00);
+    CHECK(matrix.at(Source::modulation, Destination::pitch) == 0x28);
+    matrix.store(Source::modulation, Destination::pitch, 0x50);
+    CHECK(matrix.at(Source::modulation, Destination::pitch) == 0x50);
+
+    // Nothing else is clamped: the other ten destinations take the byte as it arrives.
+    matrix.store(Source::modulation, Destination::amplitude, 0x7F);
+    CHECK(matrix.at(Source::modulation, Destination::amplitude) == 0x7F);
+    matrix.store(Source::modulation, Destination::lfo1_tva, 0x00);
+    CHECK(matrix.at(Source::modulation, Destination::lfo1_tva) == 0x00);
+
+    // What the clamp buys, which is the part that was wrong: with the depth at its maximum the
+    // pitch rises *evenly across the whole controller* and reaches the rail exactly at 127. Stored
+    // raw, the same sweep railed at 49 and then sat still -- a ramp that stops a third of the way
+    // up, which is what the module was asked about and did not do.
+    matrix.store(Source::modulation, Destination::pitch, 0x7F);
+    const int at_full = ControlMatrix::scaled(
+        Destination::pitch, matrix.applied_linear(Source::modulation, 127).pitch);
+    const int at_half = ControlMatrix::scaled(
+        Destination::pitch, matrix.applied_linear(Source::modulation, 64).pitch);
+    const int just_under = ControlMatrix::scaled(
+        Destination::pitch, matrix.applied_linear(Source::modulation, 126).pitch);
+
+    CHECK(at_full == 24000);
+    CHECK(just_under < at_full);
+    CHECK_THAT(static_cast<double>(at_half),
+               WithinRel(static_cast<double>(at_full) * 64.0 / 127.0, 0.01));
+}
+
+TEST_CASE("a matrix depth drives an LFO a patch gives no depth of its own", "[dsp]")
+{
+    const Fixture fixture = Fixture::make();
+
+    // A plain triangle at a middling rate with every depth at zero: on its own this LFO is silent
+    // at all three destinations, which is what makes anything measured here the matrix's doing.
+    LfoConfig config;
+    config.waveform = 5;
+    config.increment = 3000;
+    config.delay_rate = 0xFFFF;
+    config.fade_rate = 0xFFFF;
+
+    LfoRunner runner = fixture.lfo().create_runner(config);
+    for (int tick = 0; tick < 8; ++tick) {
+        runner.tick();
+    }
+    REQUIRE(runner.is_applied());
+
+    CHECK(runner.value(LfoDestination::pitch) == 0.0);
+    CHECK(runner.value(LfoDestination::tvf) == 0.0);
+    CHECK(runner.value(LfoDestination::tva) == 0.0);
+
+    // With a depth assigned, all three sound -- and the sign follows the depth, since the waveform
+    // is the same one in each case.
+    const double pitch = runner.value(LfoDestination::pitch, 6000);
+    const double tvf = runner.value(LfoDestination::tvf, 6144);
+    const double tva = runner.value(LfoDestination::tva, 0x7F00);
+    CHECK(pitch != 0.0);
+    CHECK(tvf != 0.0);
+    CHECK(tva != 0.0);
+    CHECK(runner.value(LfoDestination::pitch, -6000) == -pitch);
+
+    // The depth is clamped to the destination's own limit, which is also the matrix's full scale --
+    // so a rail is reachable but never exceeded.
+    CHECK(runner.value(LfoDestination::pitch, 12000) == pitch);
+}
+
+TEST_CASE("the matrix's LFO rate moves the increment, and can stop the LFO", "[dsp]")
+{
+    const Fixture fixture = Fixture::make();
+
+    LfoConfig config;
+    config.waveform = 5;
+    config.increment = 1000;
+    config.delay_rate = 0xFFFF;
+    config.fade_rate = 0xFFFF;
+
+    // Two runners over the same configuration, one of them handed a rate offset every tick: the
+    // faster one gets further round the cycle, which is the whole of what a rate destination does.
+    const auto phase_after = [&](int rate_offset, int ticks) {
+        LfoRunner runner = fixture.lfo().create_runner(config);
+        double travelled = 0.0;
+        for (int tick = 0; tick < ticks; ++tick) {
+            runner.tick(rate_offset);
+            travelled += std::abs(runner.value(LfoDestination::pitch, 6000));
+        }
+        return travelled;
+    };
+
+    CHECK(phase_after(2000, 4) != phase_after(0, 4));
+
+    // An offset that drives the increment to nothing stops the LFO outright rather than freezing
+    // its phase: the engine skips the entire update, so no depth is applied either.
+    LfoRunner stalled = fixture.lfo().create_runner(config);
+    for (int tick = 0; tick < 8; ++tick) {
+        stalled.tick(-1000);
+    }
+    CHECK_FALSE(stalled.is_applied());
+    CHECK(stalled.value(LfoDestination::pitch, 6000) == 0.0);
+
+    // And it is only the total that matters, so the same LFO revives when the offset lifts.
+    stalled.tick(0);
+    CHECK(stalled.is_applied());
 }

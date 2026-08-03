@@ -190,12 +190,31 @@ public:
     [[nodiscard]] bool is_applied() const noexcept { return applied_; }
 
     /// Advances one control tick.
-    void tick() noexcept;
+    ///
+    /// `rate_offset` is the control matrix's LFO rate destination, in the same per-tick increment
+    /// units as the configured rate — the engine adds it to the rate straight out of the table (or,
+    /// for LFO2, to the raw rate) and clamps the total to 0x28f6.
+    ///
+    /// A total of zero or less does not merely stop the phase: the engine skips the whole update,
+    /// so the depths are not applied either and the LFO's last output is held rather than decaying.
+    /// Deep enough negative rate modulation is therefore an off switch, which is why this shares
+    /// its early return with a configured rate of zero.
+    void tick(int rate_offset = 0) noexcept;
 
     /// The modulation for one destination, after the last tick.
-    [[nodiscard]] double value(LfoDestination destination) const noexcept;
+    ///
+    /// `matrix_depth` is the control matrix's depth destination for this LFO, in the destination's
+    /// own units. It is summed *after* the fade-in — the fade scales the patch's depth, not the
+    /// controller's — and the total is then clamped to the destination's limit. Those limits are
+    /// exactly the matrix's own full-scale figures, so a matrix depth alone can reach the rail but
+    /// never exceed it.
+    [[nodiscard]] double value(LfoDestination destination, int matrix_depth = 0) const noexcept;
 
     /// The pitch modulation with a mod-wheel depth folded in, in milli-semitones.
+    ///
+    /// The offline path's spelling of the same thing: the wheel reaches LFO1 pitch depth through
+    /// the matrix, so this is `value(LfoDestination::pitch, ...)` with the wheel's contribution
+    /// standing in for the whole matrix sum.
     [[nodiscard]] double pitch_value(double wheel_depth) const noexcept;
 
 private:

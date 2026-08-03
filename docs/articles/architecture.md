@@ -129,10 +129,28 @@ whole of what "polyphonic" buys. It does **not** reset when a key is struck agai
 hard, release it, strike it once more and say nothing about pressure, and the module sounds the new
 note still bent. That was measured against the DLL, and it is the opposite of the obvious guess.
 
-One of the eleven destinations is consumed so far — **pitch**, reached by four of the six sources:
-the mod wheel, both aftertouches and bend. The other ten (cutoff, amplitude, and the two LFOs'
-rates and depths) are parsed and stored and go nowhere yet, and CC1 and CC2 need their assignable
-controller numbers tracked before they can reach anything at all.
+**All eleven destinations are consumed**, each in its own unit and by its own consumer. Pitch and
+the two LFOs' pitch depths are milli-semitones; cutoff and the LFOs' filter depths are the filter's
+own units, at 2.56 a cent; amplitude and the LFOs' amplitude depths are fractions of 0x7f00; and
+the two rates are per-tick phase increments, where 6553 is 10 Hz. The eleven scales are not eleven
+arbitrary constants — each one's full-scale result is exactly the figure the GS documentation names
+for that parameter (±24 semitones, ±9600 cents, ±100 %, ±10 Hz, and 600, 2400 and 100 for the LFO
+depths), and eleven constants reproducing seven published numbers is the check that the table has
+been read off the engine correctly rather than guessed.
+
+Where each one lands is decided by what it modulates rather than by where it came from. Cutoff
+joins the sum the filter clamps once, alongside both LFOs' filter modulation. Amplitude joins the
+tremolo sum before *its* clamp, so a part already driven to the rail by tremolo cannot be pushed
+past it by a controller. The six LFO depths are summed onto the patch's own depth after the
+fade-in, because the fade belongs to the patch and a controller arriving mid-fade is not faded in
+with it. And the two rates are added to the LFO's increment, which is not merely a speed control:
+an increment driven to nothing stops that LFO outright — the module skips the whole update, so the
+depths stop being applied too.
+
+Four of the six sources reach them. CC1 and CC2 still need their assignable controller numbers
+(`40 1x 1F` and `20`) tracked before they can reach anything at all, so every clamp here sees a
+smaller total than the module's would with all six deflected at once. That difference only shows at
+the rail.
 
 **The part modify offsets.** ts::PartModifiers is the eight 0x40-centred bytes behind CC#71–78 —
 vibrato rate, depth and delay, cutoff, and the envelope's attack, decay and release. Three writers

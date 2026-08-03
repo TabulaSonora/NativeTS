@@ -752,9 +752,9 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
                 return;
             }
 
-            part.control
-                .depth[static_cast<std::size_t>(source)][static_cast<std::size_t>(destination)] =
-                value;
+            part.control.store(static_cast<ControlMatrix::Source>(source),
+                               static_cast<ControlMatrix::Destination>(destination),
+                               value);
             return;
         }
         return;
@@ -1158,15 +1158,19 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // The static tune rides in with the bend: the engine folds RPN and key-shift tuning into one
     // per-part milli-semitone offset added to every voice's pitch, and the master tune and key
     // shift sit on top of that globally.
-    // Bend is inside `matrix_pitch_milli_semitones` now, not beside it: the engine sums the five
-    // matrix sources and clamps the total, so applying bend separately would escape that clamp.
-    const double pitch_offset = part.tune_milli_semitones()
-                                + part.matrix_pitch_milli_semitones(part.key_pressure(voice.note()))
-                                + master_tune_milli_semitones();
+    // Bend is inside the matrix now, not beside it: the engine sums the five matrix sources and
+    // clamps the total, so applying bend separately would escape that clamp.
+    //
+    // All eleven destinations come out of one call. Ten of them are the voice's business rather
+    // than the mix's, so they travel into `render` together; pitch is read off here because the
+    // part's static tune and the master tune are summed with it before the voice ever sees it.
+    const ControlMatrix::Modulation matrix = part.matrix(part.key_pressure(voice.note()));
+    const double pitch_offset =
+        part.tune_milli_semitones() + matrix.pitch + master_tune_milli_semitones();
     // Refreshed per block, not latched at note-on: a filter sweep has to reach notes that are
     // already sounding.
     voice.set_cutoff_offset(part.modifiers().cutoff_offset());
-    voice.render(block, pitch_offset, part.mod_wheel_depth());
+    voice.render(block, pitch_offset, matrix);
 
     // A silenced part contributes nothing at all -- not to the dry mix and not to the sends
     // either, so muting a part also removes its tail. It keeps running, so unmuting is instant.

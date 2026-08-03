@@ -205,9 +205,11 @@ rather than a second renderer. What survives under the old name is
 ts::NoteRenderer::render_note, which renders one note in isolation and is not a song path at all.
 
 The immediate reason to delete it rather than leave it standing was that it was about to cost
-something. The remaining control-matrix destinations — cutoff, amplitude, the LFO rates and depths
-— move *while* a note sounds, and a renderer that builds each note whole can only take them as one
-more pre-computed curve per note. That is machinery written to be deleted.
+something, and that has since been borne out. The other ten control-matrix destinations — cutoff,
+amplitude, the LFO rates and depths — move *while* a note sounds, and a renderer that builds each
+note whole could only have taken them as ten more pre-computed curves per note. They were wired
+into the block loop instead, where each one is read at the tick that uses it, and none of that
+machinery had to be written twice.
 
 ### Three tiers of digest, in order of authority
 
@@ -265,6 +267,45 @@ remaining gaps — insertion EFX above all — are bright. That is the number to
 \note The comparison is run at 64 voices deliberately. The DLL has that many and steals; a render
 with more of them is measuring a different instrument, however much better it may sound.
 
+### Measuring the control matrix against the module
+
+The eleven destinations were closed one at a time and each was measured against the DLL before it
+was believed. Three things about the method are worth keeping, because the obvious version of each
+does not work.
+
+**Measure differentially.** The same probe file is rendered twice per engine — once with the
+destination assigned to the mod wheel, once with that route switched off — and what is compared is
+the difference. A patch's own envelope drifts across a ten-second note by more than most of these
+destinations move, so an absolute measurement is swamped by it; the difference cancels it exactly.
+
+**Step the source, don't just deflect it.** Each file holds one note and steps the wheel through
+0, 32, 64, 96 and 127, so every destination produces a curve. This is what caught the one real bug:
+against `40 21 00` at depth 0x7f the module ramps evenly to 24 semitones across the whole wheel,
+and this engine reached the rail by 64 and then sat still. The endpoints agreed. Only the shape
+disagreed — a depth byte stored raw where `sysex_part_control_matrix` clamps it to 0x28–0x58, which
+is what makes the pitch law's clamp the top of the scale rather than a rail a real stream can hit.
+
+**The wheel is never inert.** `40 2x 04` starts at 0x0a, so moving the wheel adds vibrato whatever
+else it is assigned to. That route leaks into every probe and has to be switched off or accounted
+for; mistaking it for the destination under test is the easy way to "verify" nothing.
+
+What the module and this engine produce, at the wheel's five steps:
+
+| Destination | Measured | Module | Here |
+|---|---|---|---|
+| pitch | pitch, cents | 0 / 608 / 1210 / 1817 / 2400 | 0 / 605 / 1210 / 1814 / 2400 |
+| amplitude | level, dB | 0 / 2.0 / 3.6 / 4.9 / 6.0 | 0 / 1.9 / 3.5 / 4.9 / 6.0 |
+| lfo1_rate | vibrato rate, Hz | 5.86 / 7.81 / 10.74 / 12.70 / 15.62 | identical |
+| lfo1_pitch | vibrato depth, Hz | 0.3 / 42.0 / 85.7 / 130.2 / 173.6 | 0.2 / 42.4 / 85.3 / 129.9 / 173.8 |
+| lfo1_tva | tremolo depth | 0.008 / 0.014 / 0.024 / 0.035 / 0.044 | 0.005 / 0.013 / 0.025 / 0.037 / 0.047 |
+| lfo2_rate | vibrato rate, Hz | 1.95 / 3.91 / 6.84 / 9.77 / 11.72 | identical |
+| lfo2_tva | level, dB | 0 / 0.1 / 0.4 / 0.6 / 1.2 | 0 / 0.1 / 0.4 / 0.8 / 0.7 |
+| tvf_cutoff | brightness, dB | 0 / −0.3 / 0.8 / 0.8 / 0.8 | 0 / −0.5 / 0.8 / 0.8 / 0.8 |
+
+Amplitude's +6.0 dB at full deflection is the doubling the law predicts, reached from the other
+direction. Both rate destinations land in the same analysis bin as the module at every step. The
+three destinations not in the table are the thinly-measured ones under Known limits.
+
 ### What the digests should be
 
 Three per file, all from the block loop, because one number cannot say both things:
@@ -310,11 +351,22 @@ Stated plainly, because they are not covered by the numbers above:
   partial slots (ts::Tone::partial_slots), and asking for more throws rather than guessing. General
   MIDI kits resolve to ordinary melodic tones, so the common path works.
 - **LFO random waveforms** need the engine's own RNG state and return zero, as in the reference.
-  Waveform selectors 1, 2 and 3 are the affected ones.
-- **Ten of the control matrix's eleven destinations go nowhere yet.** Pitch is consumed, from four
-  of the six sources; cutoff, amplitude and the two LFOs' rates and depths are parsed, stored and
-  unused, and CC1 and CC2 need their assignable controller numbers tracked before they can reach
-  anything. A stream that assigns those and expects to hear them will not.
+  Waveform selectors 1, 2 and 3 are the affected ones. This is not a corner: probing the control
+  matrix's LFO2 destinations across the GM set found that most patches with a running LFO2 use one
+  of the three, and only thirteen of the 128 programs have an LFO2 that both runs and uses a
+  modelled shape. On such a patch a matrix depth assigned to LFO2 is computed correctly and then
+  multiplied by a waveform that is flat, so it is inaudible here and clearly audible on the module
+  — which is worth knowing before reading that difference as a fault in the matrix.
+- **Two of the control matrix's six sources go nowhere yet.** All eleven destinations are consumed
+  now, but only from four sources — the mod wheel, both aftertouches and bend. CC1 and CC2 need
+  their assignable controller numbers tracked first, so every destination's clamp sees a smaller
+  total than the module's would with all six deflected at once. That difference only shows at the
+  rail.
+- **Three destinations are wired but thinly measured.** The two LFOs' filter depths and LFO2's
+  pitch depth agree with the module wherever they could be made to move, but no probe was found
+  that drives them hard enough to be conclusive: the patches whose filters are open enough to hear
+  a cutoff sweep barely change brightness under one, and the obvious LFO2 patches run their LFO on
+  a random waveform, which is the next limit down this list.
 - **Some GS part parameters are recognised and dropped**, each because nothing under them is
   modelled: assign mode (`40 1x 14`, one voice-allocation policy here), the CC1/CC2 controller
   numbers (`40 1x 1F`/`20`), and per-key Rx note-on/off in the drum setup (`40 2x 07`/`08`), whose

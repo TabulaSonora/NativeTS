@@ -1,6 +1,7 @@
 #pragma once
 
 #include "realtime/wave_reader.hpp"
+#include "tabulasonora/control_matrix.hpp"
 #include "tabulasonora/interpolator.hpp"
 #include "tabulasonora/lfo_engine.hpp"
 #include "tabulasonora/partial_parameters.hpp"
@@ -138,14 +139,20 @@ public:
     ///
     /// A block never straddles a control tick: a voice starts on the render-block grid and the tick
     /// is ten blocks long, so the coefficient refresh always lands on a block boundary.
-    void render(std::span<float> destination, double bend_milli_semitones, double mod_wheel_depth);
+    ///
+    /// `matrix` is the part's control-matrix modulation, already scaled into each destination's own
+    /// units, and it is passed rather than stored because it is not purely a property of the part:
+    /// polyphonic aftertouch contributes to it, and that belongs to this voice's key.
+    void render(std::span<float> destination,
+                double bend_milli_semitones,
+                const ControlMatrix::Modulation& matrix);
 
     /// Sets the part's live cutoff offset, in the 15-bit cutoff units the filter sums.
     void set_cutoff_offset(double offset) noexcept { cutoff_offset_ = offset; }
 
 private:
     void release(int damper = 0);
-    void control(double bend_milli_semitones, double mod_wheel_depth, bool first);
+    void control(double bend_milli_semitones, const ControlMatrix::Modulation& matrix, bool first);
     [[nodiscard]] double ratio(double bend_milli_semitones) const;
 
     /// The ratio a given pitch modulation implies, without disturbing the voice's own.

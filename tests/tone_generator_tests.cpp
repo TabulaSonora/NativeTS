@@ -20,6 +20,7 @@
 
 using namespace ts;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 namespace fs = std::filesystem;
 
 namespace {
@@ -806,7 +807,7 @@ TEST_CASE("the mod wheel's depth comes from the matrix", "[stream][sccore]")
             generator.send_sysex(dt1({0x40, 0x21, 0x04, assigned}));
         }
         generator.send_channel(0xB0, 1, 127);
-        return generator.part(0).mod_wheel_depth();
+        return static_cast<double>(generator.part(0).matrix().lfo1_pitch);
     };
 
     // Untouched, the matrix's 0x0a is what the engine assumed all along, so a stream that never
@@ -819,4 +820,53 @@ TEST_CASE("the mod wheel's depth comes from the matrix", "[stream][sccore]")
     // before the matrix was wired in.
     CHECK(depth_at(0x40) > power_on * 3.0);
     CHECK(depth_at(0x00) == 0.0);
+}
+
+TEST_CASE("the control matrix reaches amplitude, not only pitch", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // A destination is only implemented once a render moves. The matrix's own arithmetic is tested
+    // in the modulation suite; what this asks is whether the sum reaches the mix at all.
+    const auto loudness = [&](int depth, int wheel) {
+        ToneGenerator generator{notes};
+        // The wheel is never inert at power-on: `40 2x 04` starts at 0x0a, so moving it adds
+        // vibrato whatever else it is assigned to, and that alone shifts the measured energy by a
+        // few per cent. Switching that route off is what leaves the amplitude destination as the
+        // only thing the wheel is doing.
+        generator.send_sysex(dt1({0x40, 0x21, 0x04, 0x00}));
+        generator.send_sysex(dt1({0x40, 0x21, 0x02, depth}));
+        generator.send_channel(0xB0, 1, wheel);
+        generator.send_channel(0x90, 60, 100);
+
+        std::array<float, 32000> left{};
+        std::array<float, 32000> right{};
+        generator.render(left, right);
+
+        double energy = 0.0;
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            energy += (left[i] * left[i]) + (right[i] * right[i]);
+        }
+        return std::sqrt(energy / left.size());
+    };
+
+    // Centred, the wheel does nothing whatever it is set to.
+    const double neutral = loudness(0x40, 0);
+    REQUIRE(neutral > 0.0);
+    CHECK_THAT(loudness(0x40, 127), WithinRel(neutral, 1e-9));
+
+    // Assigned, it does -- upward at a positive depth, downward at a negative one, and the module
+    // was measured at very close to a doubling with the depth and the wheel both at maximum.
+    const double lifted = loudness(0x7F, 127);
+    const double cut = loudness(0x00, 127);
+    CHECK(lifted > neutral * 1.5);
+    CHECK(cut < neutral * 0.75);
+
+    // Half the wheel is not half the effect in decibels, but it is between the two ends, which is
+    // enough to show the amount is carried through rather than treated as a switch.
+    const double halfway = loudness(0x7F, 64);
+    CHECK(halfway > neutral);
+    CHECK(halfway < lifted);
 }
