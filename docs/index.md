@@ -51,8 +51,9 @@ namespace `ts`.
 | ROM | Opens the DLL as data and slices the tables out of it | ts::RomImage, ts::TableManifest, ts::TableSet, ts::WaveRom |
 | Patches | Turns a program change into a tone, and a note into a wave | ts::PatchDirectory, ts::Tone, ts::DrumKitTable, ts::WaveDescriptor |
 | DSP | The per-voice signal path | ts::Sampler, ts::Interpolator, ts::StateVariableFilter, ts::PitchChain, ts::TvaChain, ts::TvfChain, ts::LfoEngine |
-| Effects | The three send effects and their coefficient tables | ts::Reverb, ts::Chorus, ts::SystemDelay, ts::EffectPresets, ts::EffectProgrammer |
-| MIDI | Reading a Standard MIDI File into something renderable | ts::smf::MidiEvent, ts::Sequence |
+| Modulation | What the stream can move while a note sounds | ts::ControlMatrix, ts::PartModifiers, ts::PitchRamp, ts::ControlDecode |
+| Effects | The three send effects, the part EQ, and their coefficient tables | ts::Reverb, ts::Chorus, ts::SystemDelay, ts::Equalizer, ts::EffectPresets, ts::EffectProgrammer |
+| MIDI | Reading a Standard MIDI File into something renderable | ts::MidiEvent, ts::Sequence |
 | The engine | The block loop, 32 samples at a time, and the parts it drives | ts::ToneGenerator, ts::Part, ts::VoicePool, ts::FrameRing |
 | Render | Playing a file through it, live or into a buffer | ts::SequencePlayer, ts::RenderOptions, ts::NoteRenderer, ts::wav::write |
 

@@ -178,7 +178,7 @@ public:
     /// for a fixed one this is just the limit.
     [[nodiscard]] int voice_slots() const noexcept;
 
-    /// The thirty-two parts, indexed by `port * 16 + channel`.
+    /// The parts, indexed by `port * 16 + channel`; `parts()` of them.
     ///
     /// The first sixteen are port A and are what a host that never names a port drives, so an
     /// engine sent only port-A traffic behaves exactly as a sixteen-part one.
@@ -194,7 +194,7 @@ public:
     /// actually loaded.
     [[nodiscard]] int drum_kit() const noexcept;
 
-    /// The drum kit in force on one port, 0 or 1.
+    /// The drum kit in force on one port.
     ///
     /// Each port has its own drum part, so each carries its own kit. `drum_kit()` is port A's.
     [[nodiscard]] int drum_kit_for(int port) const noexcept;
@@ -219,7 +219,7 @@ public:
     /// Applies one MIDI event on port A; its position is ignored, since it applies now.
     void send(const MidiEvent& message);
 
-    /// Applies one MIDI event on a port, 0 or 1. Anything wider folds onto those two.
+    /// Applies one MIDI event on a port. Anything past `ports()` folds onto the ports that exist.
     void send(int port, const MidiEvent& message);
 
     /// Applies one channel voice message on port A.
@@ -228,7 +228,8 @@ public:
     /// hardwired to zero and so can only ever reach port A.
     void send_channel(int status, int data1, int data2);
 
-    /// Applies one channel voice message on a port, 0 or 1. Anything wider folds onto those two.
+    /// Applies one channel voice message on a port. Anything past `ports()` folds onto those that
+    /// exist.
     ///
     /// The port travels with the message rather than being selected beforehand, which is how the
     /// module works: it dispatches on the port field of each packet as that packet is drained, and
@@ -238,7 +239,7 @@ public:
     /// Applies one system-exclusive message on port A, including the leading `F0`.
     void send_sysex(std::span<const std::uint8_t> bytes);
 
-    /// Applies one system-exclusive message on a port, 0 or 1.
+    /// Applies one system-exclusive message on a port.
     ///
     /// GS part addressing is port-relative: a `40 1n` block address names a part on whichever port
     /// the message arrived on. The module does this by latching the arriving packet's port field

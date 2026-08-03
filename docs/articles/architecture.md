@@ -71,30 +71,86 @@ flowchart TD
     end
 
     subgraph control["Modulation &mdash; 100 Hz control tick"]
+        MTX["ControlMatrix<br/><small>six sources &times; eleven destinations</small>"]
+        MOD["PartModifiers<br/><small>CC 71&ndash;78, NRPN, GS part SysEx</small>"]
         PITCH["PitchChain<br/><small>absolute milli-semitones</small>"]
+        RAMP["PitchRamp<br/><small>glide, one increment per 8 samples</small>"]
         LFO["LfoEngine<br/><small>two engines, three destinations</small>"]
         TVF["TvfChain<br/><small>cutoff envelope, f and q</small>"]
+        MTX -.-> PITCH & LFO & TVF
+        MOD -.-> LFO & TVF
+        PITCH --> RAMP
     end
 
     WD --> CODEC
-    PITCH -.->|read rate| INTERP
+    RAMP -.->|read rate| INTERP
     LFO -.->|pitch| INTERP
     LFO -.->|cutoff| SVF
     LFO -.->|amplitude| TVA
     TVF -.->|coefficients| SVF
+    MOD -.->|level, velocity sense| TVA
 
     PAN --> BUS["bus accumulator<br/><small>dry, plus three sends</small>"]
+    BUS --> EQ["Equalizer<br/><small>two shelves, the parts that opt in</small>"]
     BUS --> FX["Reverb &bull; Chorus &bull; SystemDelay"]
     BUS --> OUT["stereo output"]
+    EQ --> OUT
     FX --> OUT
 ```
 
 Solid arrows are the audio path; dotted arrows are control-rate parameter flow. The classes are
 ts::PatchDirectory, ts::Sampler, ts::Interpolator, ts::StateVariableFilter, ts::TvaChain,
-ts::PanLaw, ts::PitchChain, ts::LfoEngine, ts::TvfChain, and the three ts::Effect implementations.
+ts::PanLaw, ts::ControlMatrix, ts::PartModifiers, ts::PitchChain, ts::PitchRamp, ts::LfoEngine,
+ts::TvfChain, ts::Equalizer, and the three ts::Effect implementations.
 
 Partials **sum**. Each is an independent voice dispatched into one accumulation buffer; there is no
 divide-by-count anywhere, and averaging would silently halve every two-partial patch.
+
+### What moves while a note sounds
+
+Besides its own envelopes, three things reach a sounding voice, by three different routes because
+the module gives them three different routes.
+
+**The control matrix.** ts::ControlMatrix is the GS controller assignment block, `40 2x`: six
+sources — the mod wheel, bend, channel and polyphonic aftertouch, and the part's CC1 and CC2 — each
+with eleven destinations, from pitch and cutoff through both LFOs' rates and depths. The depths are
+0x40-centred, so a source assigned nothing anywhere leaves the voice alone, and one route is not
+zero at power-on: the mod wheel's LFO1 pitch depth, which is why a GM file's mod wheel produces
+vibrato without being told to.
+
+Bend goes *through* the matrix rather than around it, and its own law — a per-destination 16-bit
+scale rather than a shift. Its pitch depth is the one cell the matrix does not store, because
+`40 2x 10` and RPN 00/00 are not two parameters that agree but one byte written by both handlers;
+ts::Part::bend_range owns it.
+
+**The part modify offsets.** ts::PartModifiers is the eight 0x40-centred bytes behind CC#71–78 —
+vibrato rate, depth and delay, cutoff, and the envelope's attack, decay and release. Three writers
+share each byte: the sound controller, an NRPN and the part SysEx `40 1x 3x` all land on the same
+address in the engine. TVF resonance is deliberately absent from the set. Its byte exists and all
+three handlers write it; nothing in the engine ever reads it.
+
+**The pitch ramp.** ts::PitchRamp is the one that is easy to leave out and audible when you do. The
+engine does not step a voice's pitch once per 10 ms tick: it records the pitch entering the block
+and the pitch leaving it, and glides between them, writing a fresh sampler increment every eight
+samples. Without the glide the sub-sample residue is frozen into the sampler's phase for the rest
+of the note, which selects a different interpolator row from there on — drum tone 1946 drops 6.671
+semitones inside its first block and comes out about 1.1 dB bright. \ref verification has the
+measurement.
+
+### The equalizer
+
+ts::Equalizer is the GS "four-band" EQ, which is two shelves: a low and a high, each with a
+frequency and a gain from `40 02`, written to the left and right registers with identical values so
+that the spectrum moves and the stereo image does not.
+
+It is not a send. Parts that switch it on with `40 4x 20` mix into an EQ bus, that bus is filtered
+once and summed into the dry pair — the same result as filtering each part separately, the filter
+being linear and every part sharing one coefficient set. Both gains flat is exactly unity, so the
+stage is skipped rather than approximated.
+
+The part switch defaults **off**, which is what the binary does and not what the SC-8820 manual
+says. \ref verification sets out the disagreement, since it is the one claim there resting on
+absence of evidence rather than on measurement.
 
 ## One way to drive it
 

@@ -189,6 +189,12 @@ port A and behaves exactly as a sixteen-part engine.
 ts::ToneGeneratorOptions::ports takes 1, 2 or 4, and four is an extension past the module rather
 than something it does; ts::ToneGenerator::max_port_count says so in the reference.
 
+A file says which port a track belongs to with a meta event — `FF 21` (MIDI Port) carries the
+number, and `FF 09` (Device Name) names an output that ts::MidiEvent::port numbers in order of
+first appearance — so a sequence that addresses more than sixteen channels routes itself. An
+untagged file is all port 0, exactly as before, and a file asking for a port the engine does not
+have folds onto one it does rather than falling silent.
+
 \note ts::ToneGenerator is not thread-safe: events and rendering must come from the same thread. To
 get audio to an audio callback on another thread, hand blocks across ts::FrameRing, the lock-free
 single-producer, single-consumer ring the players use.

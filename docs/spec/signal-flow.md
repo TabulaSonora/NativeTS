@@ -140,6 +140,10 @@ The spec's names and this library's types correspond closely enough to be worth 
 | TVA level curves | ts::TvaChain |
 | `g_pan_tbl` | ts::PanLaw |
 | the pitch envelope and key-follow | ts::PitchChain |
+| `voice_pitch_block_init`, `ramp_env_step_eval` | ts::PitchRamp |
+| `modmatrix_apply_linear` / `_bipolar`, the `40 2x` block | ts::ControlMatrix |
+| the part modify bytes at `part+0x3e4` | ts::PartModifiers |
+| `fx_eq_band_preset_apply`, the `40 02` block | ts::Equalizer |
 | `LFO1/LFO2` | ts::LfoEngine |
 | voice allocation and stealing | ts::VoicePool, ts::Voice |
 | the drum kit table | ts::DrumKitTable |

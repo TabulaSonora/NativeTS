@@ -240,7 +240,8 @@ void apply_channels(ts::ChannelMask& mask, const std::vector<std::string>& lists
             }
             const int channel = std::stoi(item) - 1;
             if (channel < 0 || channel >= ts::ChannelMask::channel_count) {
-                throw std::runtime_error("Channel '" + item + "' is outside 1-16.");
+                throw std::runtime_error("Channel '" + item + "' is outside 1-"
+                                         + std::to_string(ts::ChannelMask::channel_count) + ".");
             }
             if (mute) {
                 mask.set_muted(channel, true);
@@ -287,7 +288,8 @@ int main(int argc, char** argv)
     app.add_flag("--no-reverb", no_reverb, "Disable the reverb send");
     app.add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     app.add_flag("--no-delay", no_delay, "Disable the delay send");
-    app.add_option("--mute", muted, "Silence these channels, as a mixer labels them (1-16)");
+    app.add_option("--mute", muted,
+                   "Silence these channels, as a mixer labels them (1-32; 17+ are port B)");
     app.add_option("--solo", soloed, "Hear only these channels");
 
     CLI11_PARSE(app, argc, argv);

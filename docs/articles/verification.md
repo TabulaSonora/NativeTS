@@ -280,7 +280,10 @@ Stated plainly, because they are not covered by the numbers above:
 - **The LFO has no hardware trace.** It is verified against the reference, which the spec project
   separately reports as bit-exact against the live engine. That is one link removed from the DLL.
 - **Insertion EFX is out of scope**, as it is upstream. The 67-algorithm subsystem is not
-  implemented; the GS SysEx that selects it is parsed and dropped.
+  implemented; the GS SysEx that selects it is parsed and dropped. The groundwork is in:
+  `tools/dump_efx_table.py` reads the DLL's own directory of all sixty-five effects by name and
+  points at the algorithm and parameter handler behind each. The names are Roland's, so they are
+  decoded from your own copy rather than committed here.
 - **Drum tones with the 4-partial layout are not reversed** upstream. A melodic tone here has two
   partial slots (ts::Tone::partial_slots), and asking for more throws rather than guessing. General
   MIDI kits resolve to ordinary melodic tones, so the common path works.

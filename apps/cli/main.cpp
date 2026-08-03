@@ -421,7 +421,8 @@ void apply_channels(ts::ChannelMask& mask, const std::vector<std::string>& lists
             }
             const int channel = std::stoi(item) - 1;
             if (channel < 0 || channel >= ts::ChannelMask::channel_count) {
-                throw std::runtime_error("Channel '" + item + "' is outside 1-16.");
+                throw std::runtime_error("Channel '" + item + "' is outside 1-"
+                                         + std::to_string(ts::ChannelMask::channel_count) + ".");
             }
             if (mute) {
                 mask.set_muted(channel, true);
@@ -509,7 +510,9 @@ int main(int argc, char** argv)
 
     std::vector<std::string> muted;
     std::vector<std::string> soloed;
-    render->add_option("--mute", muted, "Silence these channels, as a mixer labels them (1-16)");
+    render->add_option(
+        "--mute", muted,
+        "Silence these channels, as a mixer labels them (1-64; 17+ need --ports)");
     render->add_option("--solo", soloed, "Hear only these channels");
 
     std::string effect_kind;
