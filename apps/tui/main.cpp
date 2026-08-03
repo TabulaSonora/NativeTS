@@ -204,7 +204,12 @@ struct Ui {
             level_bar(ui.held_left, 14),
             text(" R ") | dim,
             level_bar(ui.held_right, 14),
-            text("  " + std::to_string(state.active_voices) + "/64") | dim,
+            // The configured limit, not the hardware's -- this player runs 256 by default and a
+            // reading against 64 would look permanently overloaded. A growing pool has no ceiling,
+            // so its capacity is shown as what it has reached, marked.
+            text("  " + std::to_string(state.active_voices) + "/"
+                 + std::to_string(state.voice_capacity) + (state.voices_grow ? "+" : ""))
+                | dim,
             text("  " + std::to_string(state.note_count) + " notes") | dim,
             underruns,
             filler(),

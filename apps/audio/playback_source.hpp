@@ -33,6 +33,10 @@ struct EngineSnapshot {
 
     std::int64_t position = 0;
     int active_voices = 0;
+    /// Slots the pool currently holds -- the configured limit, or what a growing pool has reached.
+    int voice_capacity = 0;
+    /// Whether the pool grows on demand instead of stealing, so the capacity is not a ceiling.
+    bool voices_grow = false;
     int note_count = 0;
     int drum_kit = 0;
     /// Parts the engine was created with; only the first this many of `parts` are meaningful.

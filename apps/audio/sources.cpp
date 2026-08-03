@@ -46,6 +46,8 @@ void StreamingSource::capture(EngineSnapshot& into) const
     into.live = true;
     into.position = player_.position();
     into.active_voices = generator_.active_voices();
+    into.voice_capacity = generator_.voices().capacity();
+    into.voices_grow = generator_.voices().grows();
     into.note_count = generator_.note_count();
     into.drum_kit = generator_.drum_kit();
     into.part_count = generator_.parts();
