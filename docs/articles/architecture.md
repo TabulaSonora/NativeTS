@@ -228,7 +228,13 @@ settings are departures, so both are opt-in — the principle throughout is to m
 default and exceed it only on request.
 
 ts::NoteRenderer::render_note is not a second renderer. It renders one note in isolation, which is
-what analysis, the note gate and `render-note` want, and none of those is a song.
+what analysis, the C# note digest and `render-note` want, and none of those is a song.
+
+The authoritative note gate does *not* use it, and the reason is worth stating: the oracle audio it
+compares against came out of the DLL's whole pipeline, so it drives one note through the block loop
+instead. A standalone note renderer is a different signal path — no part processing, no output
+stage — and comparing against it would measure the gap between two architectures and call it a
+defect.
 
 Rendering is comfortably faster than realtime on one core. `tabula-sonora bench` reports the margin
 on your machine, stage by stage, and `render` reports afterwards whether the polyphony setting

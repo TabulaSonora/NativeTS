@@ -12,6 +12,7 @@
 // argues actually separates a good render from a bad one: the length exactly, then level, spectrum
 // and a coarse envelope that catches a note going missing or arriving late without seeing phase.
 
+#include "render_metrics.hpp"
 #include "test_data.hpp"
 
 #include "tabulasonora/note_renderer.hpp"
@@ -30,7 +31,6 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
-#include <numbers>
 #include <string>
 #include <vector>
 
@@ -57,111 +57,13 @@ struct Metrics {
     std::vector<double> envelope;
 };
 
-/// In-place radix-2 FFT, transcribed from the generator so the two compute the same number.
-void transform(std::vector<double>& real, std::vector<double>& imag)
-{
-    const std::size_t size = real.size();
-    for (std::size_t i = 1, j = 0; i < size; ++i) {
-        std::size_t bit = size >> 1;
-        for (; (j & bit) != 0; bit >>= 1) {
-            j ^= bit;
-        }
-        j |= bit;
-        if (i < j) {
-            std::swap(real[i], real[j]);
-            std::swap(imag[i], imag[j]);
-        }
-    }
+/// The bands the generator takes. Eight, down to 63 Hz: a song has a bass line and a single note
+/// mostly does not, which is why the note gate's list starts one octave higher.
+constexpr std::array<int, 8> band_centres{63, 125, 250, 500, 1000, 2000, 4000, 8000};
 
-    for (std::size_t length = 2; length <= size; length <<= 1) {
-        const double angle = -2.0 * std::numbers::pi / static_cast<double>(length);
-        const double wr = std::cos(angle);
-        const double wi = std::sin(angle);
-        for (std::size_t i = 0; i < size; i += length) {
-            double cr = 1.0;
-            double ci = 0.0;
-            for (std::size_t k = 0; k < length / 2; ++k) {
-                const double ur = real[i + k];
-                const double ui = imag[i + k];
-                const double vr = real[i + k + length / 2] * cr - imag[i + k + length / 2] * ci;
-                const double vi = real[i + k + length / 2] * ci + imag[i + k + length / 2] * cr;
-                real[i + k] = ur + vr;
-                imag[i + k] = ui + vi;
-                real[i + k + length / 2] = ur - vr;
-                imag[i + k + length / 2] = ui - vi;
-                const double next_r = cr * wr - ci * wi;
-                ci = cr * wi + ci * wr;
-                cr = next_r;
-            }
-        }
-    }
-}
-
-/// Level in eight octave bands, from a window taken a quarter of the way in.
-///
-/// A quarter in rather than at the start, because the opening of a song is often silence and a
-/// spectrum of silence compares equal to any other silence.
-[[nodiscard]] std::vector<double> octave_bands(const std::vector<double>& mono, int rate)
-{
-    std::size_t size = 1;
-    while (size < std::min<std::size_t>(mono.size(), 1U << 16U)) {
-        size <<= 1;
-    }
-    if (size < 256) {
-        return {};
-    }
-
-    const std::size_t start = std::min(mono.size() - size, mono.size() / 4);
-    std::vector<double> real(size);
-    std::vector<double> imag(size, 0.0);
-    for (std::size_t i = 0; i < size; ++i) {
-        const double window =
-            0.5 - 0.5 * std::cos(2.0 * std::numbers::pi * static_cast<double>(i)
-                                 / static_cast<double>(size));
-        real[i] = mono[start + i] * window;
-    }
-    transform(real, imag);
-
-    std::vector<double> bands;
-    for (const int centre : {63, 125, 250, 500, 1000, 2000, 4000, 8000}) {
-        const double low = centre / std::numbers::sqrt2;
-        const double high = centre * std::numbers::sqrt2;
-        double total = 0.0;
-        for (std::size_t k = 0; k <= size / 2; ++k) {
-            const double frequency =
-                static_cast<double>(k) * rate / static_cast<double>(size);
-            if (frequency >= low && frequency < high) {
-                total += real[k] * real[k] + imag[k] * imag[k];
-            }
-        }
-        bands.push_back(total > 0.0 ? 10.0 * std::log10(total) : -999.0);
-    }
-    return bands;
-}
-
-/// A coarse RMS envelope: catches a missing or late note without seeing phase at all.
-[[nodiscard]] std::vector<double> rms_envelope(const std::vector<double>& mono, int windows = 64)
-{
-    std::vector<double> out;
-    if (mono.empty()) {
-        return out;
-    }
-    const std::size_t span = std::max<std::size_t>(1, mono.size() / static_cast<std::size_t>(windows));
-    for (int w = 0; w < windows; ++w) {
-        const std::size_t begin = static_cast<std::size_t>(w) * span;
-        if (begin >= mono.size()) {
-            break;
-        }
-        const std::size_t end = std::min(begin + span, mono.size());
-        double energy = 0.0;
-        for (std::size_t i = begin; i < end; ++i) {
-            energy += mono[i] * mono[i];
-        }
-        energy /= static_cast<double>(end - begin);
-        out.push_back(energy > 0.0 ? 10.0 * std::log10(energy) : -999.0);
-    }
-    return out;
-}
+/// A quarter of the way in rather than at the start, because the opening of a song is often silence
+/// and a spectrum of silence compares equal to any other silence.
+constexpr double band_window_start = 0.25;
 
 [[nodiscard]] Metrics measure(const std::vector<std::int16_t>& left,
                               const std::vector<std::int16_t>& right,
@@ -182,8 +84,8 @@ void transform(std::vector<double>& real, std::vector<double>& imag)
 
     metrics.peak = static_cast<double>(peak) / 32768.0;
     metrics.rms = std::sqrt(energy / static_cast<double>(std::max<std::size_t>(1, mono.size())));
-    metrics.bands = octave_bands(mono, rate);
-    metrics.envelope = rms_envelope(mono);
+    metrics.bands = testmetrics::octave_bands(mono, rate, band_centres, band_window_start);
+    metrics.envelope = testmetrics::rms_envelope(mono, /*windows=*/64);
     return metrics;
 }
 
@@ -398,7 +300,8 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
             if (expected_bands[band] < -60.0) {
                 continue;
             }
-            INFO("band " << band << ": " << ours.bands[band] << " vs " << expected_bands[band]);
+            INFO("band " << band_centres[band] << " Hz: " << ours.bands[band] << " vs "
+                         << expected_bands[band]);
             CHECK(std::abs(ours.bands[band] - expected_bands[band]) < allowed.band_db);
         }
 

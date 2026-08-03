@@ -28,6 +28,7 @@ a fixture generated from the C# CLI:
 | single note | `[render][sccore][gate]` | SHA-256 of the whole render plus eight literal samples |
 | block loop, real time | `[stream][sccore][gate]` | a whole WAV, sample by sample: worst error ≤ 1 LSB, under 0.02% differing |
 | predictor stream | `[sampler][sccore][gate]` | against an independent decoder |
+| **single note, against the DLL** | `[note][oracle][sccore][gate]` | 180 notes: length, level, octave bands and a coarse envelope, within stated tolerances |
 | **whole song, against the DLL** | `[song][oracle][sccore][gate]` | length, level, octave bands and a coarse envelope, within stated tolerances |
 
 Only the real-time gate has any tolerance against the C# engine, and it is one LSB. A fifth,
@@ -39,7 +40,12 @@ gate's fixture predates the exact-start wave decode, so every case whose wave be
 skipped as **superseded** rather than failed, leaving 111 the fixture can still speak for; the
 stream gate has no unaffected case at all, so its references are this engine's own output, kept as
 a regression baseline. The archived C# checkout cannot be re-run to refresh either, which is the
-whole reason the oracle gate matters.
+whole reason the oracle gates matter.
+
+The note gate has since been *superseded rather than retired*: the same 180-case sweep now runs
+against the DLL as `[note][oracle][sccore][gate]`, and where the two disagree the DLL decides. The
+C# digest is kept beside it because it compares samples, and a one-LSB drift is worth catching even
+against a reference that has been overtaken.
 
 The fixtures are Roland-derived and so are not committed. Each pins the DLL's SHA-256 and is
 regenerated locally by the scripts in `tools/`; a gate whose fixture index is missing skips with the
@@ -224,7 +230,8 @@ collapsed into one number:
    black box rather than with another reimplementation. `tools/dump_note_renders_oracle.py` sweeps
    180 single notes across every tone map and `tools/dump_song_renders_oracle.py` drives the song
    corpus, both through the spec repository's `scdec` harness — natively on Windows, under wine
-   elsewhere. The song half is **live**: `[song][oracle][sccore][gate]`.
+   elsewhere. **Both halves are live**: `[song][oracle][sccore][gate]` and
+   `[note][oracle][sccore][gate]`.
 3. **Constrained** — this engine at the hardware's 64 voices, which is the tier directly comparable
    to (2). The gap between them is the measurement that matters, and it answers a question worth
    asking precisely: *how much of the difference is missing features?* Every remaining gap in this
@@ -266,6 +273,51 @@ remaining gaps — insertion EFX above all — are bright. That is the number to
 
 \note The comparison is run at 64 voices deliberately. The DLL has that many and steals; a render
 with more of them is measuring a different instrument, however much better it may sound.
+
+### What 180 single notes say
+
+A song averages every patch it touches into eight numbers, so a tone that resolves wrong can hide
+behind sixteen that resolve right. `[note][oracle][sccore][gate]` asks the question one level down:
+36 programs across the GM map, five keys each, three velocities and all four tone maps, every one
+driven exactly as `scdec notebatch` drove the DLL — same warm-up, same six controllers, same
+320-sample chunks with the note-off landing on a control tick.
+
+| | |
+|---|---|
+| overall level, median | **0.09 dB**, 90th percentile 0.32 dB |
+| octave bands the note reaches, median | **0.17 dB**, 95th percentile 1.8 dB |
+| envelope, median worst window | **0.72 dB** |
+| programs needing no allowance at all | **27 of 36** |
+
+The measurement turned on one distinction, which is worth stating because the obvious version of
+the gate gets it wrong. Sorting all 1254 comparable bands by how far each sits below its own note's
+loudest band splits them in two. Above 40 dB down, the two engines agree to a median 0.17 dB. Below
+it, they disagree by up to 31 dB — because a band 60 dB under the fundamental holds the analysis
+window's leakage and the engine's own noise floor, and comparing it measures which engine has the
+quieter arithmetic rather than which one plays the right note. Those bands are held to a floor
+instead: whatever is in them must stay 25 dB under the note's own level, so an artefact cannot
+creep up into audibility unnoticed. **This engine's floor is the higher of the two**, by up to
+31 dB in the emptiest bands and worst on `Syn.Bass 1`, where it comes within 29.7 dB of the note.
+
+The nine programs that do need an allowance fall into two groups:
+
+- **Patches that deviate in *time* while their spectrum and level agree.** `Bass & Lead` is the
+  clearest, and the only one diagnosed: the module's envelope dips 8 dB partway through the note and
+  recovers — that is tremolo — and this engine's dip lands in a different window, 12 dB apart at the
+  worst one while the spectrum stays inside 2.6 dB and the level inside 0.5 dB. Nothing about the
+  tone is wrong. That points at the same unresolved LFO starting phase the song gate names for the
+  effect LFOs, met one level down where it is far easier to look at. `Nylon Gt.` and `Syn.Bass 1`
+  deviate the same way but 20 dB into the decay, where a release rate would do it too; `Vibraphone`
+  and `Tenor Sax` miss on the peak alone. Those four are grouped by shape, which is a hypothesis
+  rather than a finding.
+- **Patches with a noise component** — `Whistle`, `Synth Drum`, `Seashore`, `Atmosphere`. The
+  obvious explanation is that the shared pseudo-random source is at a different point when the note
+  starts, and that was measured and **is not it**: returning the generator to its seed before every
+  case moves these four by hundredths of a dB, and makes `Whistle` slightly worse. The gate does it
+  anyway, so that no case depends on the ones that ran before it, but the cause lies elsewhere.
+
+`Whistle` is the outlier of the four by a wide margin — 21 dB in a band the note genuinely reaches
+and 2 dB of overall level. It is the sharpest lead this gate produced.
 
 ### Measuring the control matrix against the module
 

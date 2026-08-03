@@ -68,6 +68,12 @@ TEST_CASE("a rendered note matches the reference engine bit for bit", "[render][
     // The oracle here is the C# engine itself rather than a reimplementation. At this level that is
     // the point -- what is being checked is that the port assembles the same subsystems the same
     // way, and no independent transcription of a whole synthesiser would be evidence of that.
+    //
+    // **It is no longer the authority on single notes.** `[note][oracle][sccore][gate]` compares
+    // the same sweep against `SCCore.dll` itself, and where the two disagree the DLL decides -- 23
+    // of the cases below are already superseded for exactly that reason. What this still does that
+    // the oracle gate cannot is compare *samples*: a digest catches a one-LSB drift that no
+    // tolerance would, and drift is worth catching even against a reference that has been overtaken.
     const fs::path fixture_path = testdata::repository_root() / "fixtures" / "note_renders.json";
     if (!fs::exists(fixture_path)) {
         SKIP("No render fixture. Generate it with:\n"

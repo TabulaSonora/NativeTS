@@ -7,10 +7,12 @@ add_executable(ts_tests
     frame_ring_tests.cpp
     interpolator_tests.cpp
     modulation_tests.cpp
+    note_oracle_tests.cpp
     note_renderer_tests.cpp
     ownership_tests.cpp
     patch_directory_tests.cpp
     port_tests.cpp
+    render_metrics.cpp
     sampler_tests.cpp
     song_oracle_tests.cpp
     wave_codec_tests.cpp

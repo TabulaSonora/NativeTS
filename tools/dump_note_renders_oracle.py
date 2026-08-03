@@ -111,6 +111,28 @@ def octave_bands(mono, rate):
     return bands
 
 
+def rms_envelope(mono, windows=32):
+    """A coarse RMS envelope, which for a single note is the measure that matters most.
+
+    Peak and RMS say how loud the note is and the bands say what colour it is; neither can tell a
+    correct attack from one that arrives late, or a release that decays at the wrong rate. Over a
+    2.8 s note thirty-two windows are about 88 ms each, which resolves the attack and the release
+    without being sensitive to phase.
+    """
+    out = []
+    if not mono:
+        return out
+    span = max(1, len(mono) // windows)
+    for w in range(windows):
+        begin = w * span
+        if begin >= len(mono):
+            break
+        end = min(begin + span, len(mono))
+        energy = sum(v * v for v in mono[begin:end]) / (end - begin)
+        out.append(round(10 * math.log10(energy) if energy > 0 else -999.0, 3))
+    return out
+
+
 def measure(path, rate):
     raw = path.read_bytes()
     frames = len(raw) // 8
@@ -130,6 +152,7 @@ def measure(path, rate):
         "sha256": hashlib.sha256(raw).hexdigest(),
         "first8": [round(v, 9) for v in samples[:8]],
         "bands": octave_bands(mono, rate),
+        "envelope": rms_envelope(mono),
     }
 
 
@@ -182,7 +205,8 @@ def main():
                   "Roland-derived: generate locally, do not redistribute. These are tolerance "
                   "gates -- this port is not bit-exact with the DLL and does not aim to be, so the "
                   "sha256 identifies the oracle audio rather than anything the port must match. "
-                  "Compare frames exactly, and peak, rms and the octave bands within tolerance."),
+                  "Compare frames exactly, and peak, rms, the octave bands and the envelope "
+                  "within tolerance."),
         "generator": "tools/dump_note_renders_oracle.py",
         "dllSha256": hashlib.sha256(arguments.dll.read_bytes()).hexdigest(),
         "sampleRate": arguments.rate,
