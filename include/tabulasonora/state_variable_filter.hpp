@@ -34,19 +34,20 @@ enum class FilterTap {
 /// Reassociating `input - (q*band + low)` into `input - q*band - low` is a different sequence of
 /// IEEE operations, and the build disables FMA contraction so the compiler cannot fuse them either.
 ///
-/// **Known divergence in the overdamped regime.** When `f*q` grows past the point where
-/// `(2 - f*q - f*f)^2 >= 4*(1 - f*q)`, the state matrix's poles go real and one of them lands on the
-/// negative axis — at Nyquist, where it lifts the top octave. The reference engine does not do that.
-/// Measured on drum tone 1946 (`f = 0.654, q = 1.891`, poles `+0.682` and `-0.348`): we run about
-/// 5 dB hot at Nyquist and +1.1 dB broadband, and the correlation against the DLL falls to 0.859
-/// where its underdamped neighbours hold 0.999. Only 19 of the 3352 filtered partials in the library
-/// reach the regime at all, so most of the corpus never sees it.
+/// **There is an open divergence involving this filter, and it is not in this loop.** Drum tone
+/// 1946 (resonance byte 121, `f = 0.654, q = 1.891`) renders +1.1 dB broadband and about 5 dB hot at
+/// Nyquist, correlating 0.859 against the reference where its neighbours hold 0.999. Do not try to
+/// fix it here. `svf_render_hp` has been read: eight unrolled copies of exactly the recurrence
+/// above, same operand ages, same parenthesisation, no branch on `q` anywhere — and `f` and `q`
+/// reach it as the values we already match to the integer in steady state, which is where nearly all
+/// of the note lives.
 ///
-/// **Do not "fix" this here.** `svf_render_hp` has since been read: it is eight unrolled copies of
-/// exactly the recurrence above — same operand ages, same parenthesisation — with no branch on `q`
-/// anywhere, and `f` and `q` reach it as the very values we already match to the integer. So the
-/// divergence is provably *not* in this loop, and clamping `q` to keep the poles complex would only
-/// curve-fit over it. See specv2 `docs/FINDINGS.md` for what is left to rule out.
+/// An earlier reading blamed the poles going real (`f*q` past the point where
+/// `(2 - f*q - f*f)^2 >= 4*(1 - f*q)`, putting one pole on the negative axis at Nyquist). **That was
+/// retracted:** sweeping the part cutoff shows the renders still disagree at cutoffs where no
+/// negative pole exists and the filter is nearly transparent, while moving the pole twice as far
+/// barely changes the correlation. The pole regime was a correlate of the resonance byte, not the
+/// cause. See specv2 `docs/FINDINGS.md`; the evidence now points upstream of the filter.
 class StateVariableFilter {
 public:
     /// The lowpass integrator's current value.
