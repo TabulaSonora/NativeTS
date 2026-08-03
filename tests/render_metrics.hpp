@@ -35,4 +35,18 @@ void transform(std::vector<double>& real, std::vector<double>& imag);
 /// A coarse RMS envelope in dB: catches a missing or late note without seeing phase at all.
 [[nodiscard]] std::vector<double> rms_envelope(const std::vector<double>& mono, int windows);
 
+/// The strongest partial within 3% of `target`, in Hz, or zero when there is nothing to find.
+///
+/// Every other measure here is blind to tuning. A couple of cents sits far inside an octave band,
+/// moves no RMS and changes no envelope, so an engine can be sharp on every patch and pass all of
+/// them -- which is what happened, until a two-partial patch turned a detune error into a beat-rate
+/// error and made it audible in the envelope. This is the measurement that sees it directly.
+///
+/// Windowed and transformed exactly as `octave_bands` is, then parabolically interpolated on the
+/// log magnitude, which resolves a 0.5 Hz bin to about a twentieth of that.
+[[nodiscard]] double fundamental(const std::vector<double>& mono,
+                                 int rate,
+                                 double target,
+                                 double start_fraction);
+
 } // namespace testmetrics

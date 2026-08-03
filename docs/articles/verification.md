@@ -28,7 +28,7 @@ a fixture generated from the C# CLI:
 | single note | `[render][sccore][gate]` | SHA-256 of the whole render plus eight literal samples |
 | block loop, real time | `[stream][sccore][gate]` | a whole WAV, sample by sample: worst error ≤ 1 LSB, under 0.02% differing |
 | predictor stream | `[sampler][sccore][gate]` | against an independent decoder |
-| **single note, against the DLL** | `[note][oracle][sccore][gate]` | 180 notes: length, level, octave bands and a coarse envelope, within stated tolerances |
+| **single note, against the DLL** | `[note][oracle][sccore][gate]` | 180 notes: length, level, octave bands, a coarse envelope and the fundamental's tuning, within stated tolerances |
 | **whole song, against the DLL** | `[song][oracle][sccore][gate]` | length, level, octave bands and a coarse envelope, within stated tolerances |
 
 Only the real-time gate has any tolerance against the C# engine, and it is one LSB. A fifth,
@@ -348,13 +348,48 @@ against the module's own render of the same note:
 Holding across both halves of the note rules out a pitch-envelope attack artefact: it is steady
 tuning. The direction is consistent — this engine is sharp, the module flat of equal temperament.
 
-\warning **The cause is not yet known.** The candidates are the `1024` neutral in
-`native = root_key × 1000 + 1024 − fine_tune` (25 milli-semitones would account for it, but 1049 is
-not a plausible constant), the per-wave fine-tune term, and the pitch start jitter, whose first draw
-from the shared generator is 0x4f95 and lands on the negative branch — the wrong direction to
-explain a sharp engine.
+**It is not the shared formula.** `scdec postrace` reads the module's sampler read position per
+control tick, so the module's playback ratio is exact — an integer step in 16.16. Compared against
+`2^((base_pitch − native)/12000)` computed here for the same note:
 
-Two things about *how this was missed* are worth keeping. **No gate in this project measures
+| patch, map | module's ratio | ours | |
+|---|---|---|---|
+| `Trombone`, SC-88Pro | 1.079414431 | 1.079415269 | **0.001 cents** |
+| `Piano 1`, SC-8820 | 0.558837891 | 0.559063217 | 4 milli-semitones |
+| `Fingered Bs.`, SC-88 | 0.790908813 | 0.792326339 | 31 milli-semitones |
+| `Clarinet`, SC-88Pro | 0.943016603 | 0.945238305 | 41 milli-semitones |
+
+One patch matching the module's own ratio to a thousandth of a cent rules out an error in anything
+every patch shares — the `1024` neutral in `native = root_key × 1000 + 1024 − fine_tune` included,
+which was the leading candidate. **Whatever is wrong is a per-patch term.** Read the trace one tick
+at a time: a longer baseline crosses a loop wrap and the read position jumps backwards, which turns
+a sound measurement into a wild one.
+
+\warning The remaining candidates are the per-partial coarse-tune byte (block +0x11, applied here
+as `(raw − 0x40) × 10` milli-semitones), the key-follow table term, and the pitch start jitter —
+which is applied as a *permanent* offset on a patch with no pitch envelope, and whose first draw
+from the shared generator is 0x4f95, landing on the negative branch. That is the wrong direction to
+explain a sharp engine, but not the wrong direction for every patch.
+
+### Now it is measured
+
+The gate compares the fundamental of each render against the module's, in cents, and holds it to a
+ratchet like everything else. Adding it is the actual repair available today: the cause is not
+isolated, but the defect can no longer grow, and the next person to look has an instrument.
+
+| | |
+|---|---|
+| comparable cases | 177 of 180 |
+| median | **+2.21 cents** |
+| within one cent | 25 of 177 |
+| worst | `Tenor Sax` at 23 cents, on the 65 Hz key alone |
+
+Part of that spread is the measurement, not the engine: a 0.5 Hz bin is 13 cents wide at the
+sweep's lowest key, so the estimator is least able to speak exactly where the notes are lowest.
+`Synth Drum` and `Seashore` have no fundamental at all, and their rows say so — a bound of 110
+cents is not a check, and saying that out loud beats skipping them where nobody would notice.
+
+Two things about *how this was missed* are worth keeping. **No gate in this project measured
 pitch.** Level, spectrum and envelope all pass: 2.5 cents is far inside a third-octave band, moves
 no RMS, and changes no envelope — except on a patch where it changes a beat rate, which is the only
 reason it surfaced at all. And the note gate found it only because a single note has one

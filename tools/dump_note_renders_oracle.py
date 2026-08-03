@@ -63,13 +63,13 @@ def build_cases():
     return cases
 
 
-def octave_bands(mono, rate):
-    """Per-octave level in dB, the measure a timbre difference actually shows up in."""
+def power_spectrum(mono):
+    """The windowed power spectrum, computed once and read by everything below it."""
     size = 1
     while size < min(len(mono), 1 << 16):
         size <<= 1
-    if size < 256:
-        return []
+    if size < 256 or size > len(mono):
+        return [], 0
 
     window = [0.5 - 0.5 * math.cos(2 * math.pi * i / size) for i in range(size)]
     real = [mono[i] * window[i] for i in range(size)]
@@ -100,7 +100,11 @@ def octave_bands(mono, rate):
                 cr, ci = cr * wr - ci * wi, cr * wi + ci * wr
         length <<= 1
 
-    power = [real[k] * real[k] + imag[k] * imag[k] for k in range(size // 2 + 1)]
+    return [real[k] * real[k] + imag[k] * imag[k] for k in range(size // 2 + 1)], size
+
+
+def octave_bands(power, size, rate):
+    """Per-octave level in dB, the measure a timbre difference actually shows up in."""
     bands = []
     for centre in (125, 250, 500, 1000, 2000, 4000, 8000):
         low = centre / math.sqrt(2)
@@ -109,6 +113,33 @@ def octave_bands(mono, rate):
                     if low <= k * rate / size < high)
         bands.append(round(10 * math.log10(total) if total > 0 else -999.0, 3))
     return bands
+
+
+def fundamental(power, size, rate, target):
+    """The strongest partial within a semitone and a half of where the note should sound, in Hz.
+
+    Nothing else this file records can see a tuning error. Level, spectrum and envelope are all
+    blind to a couple of cents -- it is far inside an octave band, moves no RMS and changes no
+    envelope -- so an engine can be sharp on every patch and pass every one of them, which is
+    exactly what happened. This is the measurement that would have caught it.
+
+    Parabolic interpolation on the log magnitude, which is what makes a 0.5 Hz bin resolve to
+    about a twentieth of that. A search window of +-3% is wide enough for any patch's own detune
+    and narrow enough that it cannot lock onto a neighbouring harmonic.
+    """
+    if not power:
+        return 0.0
+    low = max(1, int(target * 0.97 * size / rate))
+    high = min(len(power) - 2, int(target * 1.03 * size / rate))
+    if high <= low:
+        return 0.0
+    peak = max(range(low, high + 1), key=lambda k: power[k])
+    if power[peak] <= 0.0:
+        return 0.0
+    a, b, c = (math.log(power[k] + 1e-30) for k in (peak - 1, peak, peak + 1))
+    divisor = a - 2 * b + c
+    offset = 0.5 * (a - c) / divisor if divisor != 0 else 0.0
+    return round((peak + offset) * rate / size, 4)
 
 
 def rms_envelope(mono, windows=32):
@@ -133,7 +164,7 @@ def rms_envelope(mono, windows=32):
     return out
 
 
-def measure(path, rate):
+def measure(path, rate, note):
     raw = path.read_bytes()
     frames = len(raw) // 8
     samples = struct.unpack(f"<{frames * 2}f", raw[:frames * 8])
@@ -145,14 +176,17 @@ def measure(path, rate):
     rms = math.sqrt(energy / len(samples)) if samples else 0.0
     mono = [(left[i] + right[i]) * 0.5 for i in range(frames)]
 
+    power, size = power_spectrum(mono)
+
     return {
         "frames": frames,
         "peak": peak,
         "rms": rms,
         "sha256": hashlib.sha256(raw).hexdigest(),
         "first8": [round(v, 9) for v in samples[:8]],
-        "bands": octave_bands(mono, rate),
+        "bands": octave_bands(power, size, rate),
         "envelope": rms_envelope(mono),
+        "pitchHz": fundamental(power, size, rate, 440.0 * 2 ** ((note - 69) / 12)),
     }
 
 
@@ -196,7 +230,7 @@ def main():
         audio = arguments.audio_dir / f"case{index:04d}.f32"
         if not audio.exists():
             sys.exit(f"harness did not produce {audio}")
-        case.update(measure(audio, arguments.rate))
+        case.update(measure(audio, arguments.rate, case["note"]))
         case["audio"] = str(audio.relative_to(arguments.output.parent)) \
             if arguments.output.parent in audio.parents else str(audio)
 
@@ -205,8 +239,8 @@ def main():
                   "Roland-derived: generate locally, do not redistribute. These are tolerance "
                   "gates -- this port is not bit-exact with the DLL and does not aim to be, so the "
                   "sha256 identifies the oracle audio rather than anything the port must match. "
-                  "Compare frames exactly, and peak, rms, the octave bands and the envelope "
-                  "within tolerance."),
+                  "Compare frames exactly, and peak, rms, the octave bands, the envelope and "
+                  "pitchHz within tolerance."),
         "generator": "tools/dump_note_renders_oracle.py",
         "dllSha256": hashlib.sha256(arguments.dll.read_bytes()).hexdigest(),
         "sampleRate": arguments.rate,

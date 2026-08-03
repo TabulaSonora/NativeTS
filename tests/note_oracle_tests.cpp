@@ -39,6 +39,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <span>
 #include <string>
@@ -59,6 +60,7 @@ struct Metrics {
     std::size_t frames = 0;
     double peak = 0.0;
     double rms = 0.0;
+    double pitch_hz = 0.0;
     std::vector<double> bands;
     std::vector<double> envelope;
 };
@@ -70,7 +72,8 @@ struct Metrics {
 /// rounding here would only add a difference that is not in either engine.
 [[nodiscard]] Metrics measure(const std::vector<float>& left,
                               const std::vector<float>& right,
-                              int rate)
+                              int rate,
+                              double target_hz)
 {
     Metrics metrics;
     metrics.frames = left.size();
@@ -91,6 +94,7 @@ struct Metrics {
     metrics.rms = std::sqrt(energy / static_cast<double>(std::max<std::size_t>(1, left.size() * 2)));
     metrics.bands = testmetrics::octave_bands(mono, rate, band_centres, /*start_fraction=*/0.0);
     metrics.envelope = testmetrics::rms_envelope(mono, /*windows=*/32);
+    metrics.pitch_hz = testmetrics::fundamental(mono, rate, target_hz, /*start_fraction=*/0.0);
     return metrics;
 }
 
@@ -124,6 +128,17 @@ struct Deviation {
     double peak = 0.01;
     double band_db = 3.0;
     double envelope_db = 6.0;
+    /// Tuning, in cents. **This default is a debt, not a standard.** Two engines rendering the same
+    /// note from the same wave should agree to a small fraction of a cent -- `Trombone` at the
+    /// SC-88Pro map agrees with the module's own playback ratio to 0.001, so the machinery can --
+    /// and the median here is +2.2 cents with only 25 of 177 cases inside one. It is set at what
+    /// this engine currently manages so that nothing gets *worse* while the cause is found; see
+    /// \ref the-engine-plays-sharp. Tighten it, do not live with it.
+    ///
+    /// Part of the spread is the measurement rather than the engine: a 0.5 Hz bin is 13 cents wide
+    /// at the sweep's lowest key, so the estimator is least able to speak exactly where the notes
+    /// are lowest. That is why `Tenor Sax`'s row is what it is.
+    double pitch_cents = 9.5;
 };
 
 struct Case {
@@ -175,16 +190,21 @@ struct KnownDeviation {
 ///
 /// `TS_STRICT_NOTES=1` holds every program to the defaults, which is how a row's current deviation
 /// is read off when it is due to be tightened. Not a test mode -- a ruler.
-constexpr std::array<KnownDeviation, 9> known_deviations{{
+constexpr std::array<KnownDeviation, 11> known_deviations{{
     {11, {1.0, 0.06, 3.0, 6.0}, "Vibraphone; peak alone -- level, spectrum and envelope all pass"},
     {24, {1.6, 0.01, 7.0, 11.5}, "Nylon Gt.; decays about 1.5x too fast, 20 dB into the tail"},
     {38, {1.3, 0.01, 3.0, 11.5}, "Syn.Bass 1; beat rate, and the sweep's highest noise floor"},
-    {66, {1.0, 0.04, 3.0, 6.0}, "Tenor Sax; peak alone -- level, spectrum and envelope all pass"},
+    {40, {1.0, 0.01, 3.0, 6.0, 10.5}, "Violin; tuning only"},
+    {46, {1.0, 0.01, 3.0, 6.0, 12.0}, "Harp; tuning only"},
+    {66, {1.0, 0.04, 3.0, 6.0, 24.5}, "Tenor Sax; 23 cents, and only on the 65 Hz key"},
     {78, {2.5, 0.13, 23.0, 6.0}, "Whistle; lead -- 21 dB in a band the note reaches"},
     {87, {1.0, 0.02, 3.0, 13.5}, "Bass & Lead; beats at 2.33 Hz where the module beats at 1.75"},
-    {99, {1.6, 0.01, 4.5, 9.0}, "Atmosphere; noise layer"},
-    {118, {1.0, 0.045, 7.0, 6.0}, "Synth Drum; noise layer"},
-    {122, {1.0, 0.01, 6.0, 6.0}, "Seashore; noise is the whole patch"},
+    {99, {1.6, 0.01, 4.5, 9.0, 11.0}, "Atmosphere; noise layer"},
+    // Unpitched. The estimator finds the loudest peak near the note in each render and there is no
+    // fundamental there to find, so what these two compare is one noise peak against another. The
+    // bound says "not checked" out loud rather than skipping them where nobody would notice.
+    {118, {1.0, 0.045, 7.0, 6.0, 110.0}, "Synth Drum; unpitched -- the pitch bound is not a check"},
+    {122, {1.0, 0.01, 6.0, 6.0, 38.0}, "Seashore; unpitched -- the pitch bound is not a check"},
 }};
 
 [[nodiscard]] Deviation deviation_for(const Case& which)
@@ -277,7 +297,7 @@ constexpr std::array<KnownDeviation, 9> known_deviations{{
         }
     }
 
-    return measure(left, right, rate);
+    return measure(left, right, rate, 440.0 * std::pow(2.0, (which.note - 69) / 12.0));
 }
 
 } // namespace
@@ -318,6 +338,7 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
 
     std::size_t compared = 0;
     std::size_t sounding = 0;
+    std::size_t pitched = 0;
     std::size_t signal_bands = 0;
     std::size_t floor_bands = 0;
 
@@ -392,6 +413,24 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
             ++signal_bands;
         }
 
+        // Tuning. The one measure here that is not about level or colour, and the only one that can
+        // see a wrong playback ratio at all -- see `Deviation::pitch_cents`.
+        //
+        // Skipped when the module's own fundamental lands more than a semitone from the note, which
+        // means the estimator did not lock onto a fundamental rather than that the module is out of
+        // tune: `Synth Drum` and `Seashore` have no pitch to find, and one `Choir Aahs` case reads
+        // 73 cents flat. Three cases of 180.
+        const double expected_pitch = entry.value("pitchHz", 0.0);
+        const double nominal = 440.0 * std::pow(2.0, (which.note - 69) / 12.0);
+        if (expected_pitch > 0.0 && ours.pitch_hz > 0.0
+            && std::abs(1200.0 * std::log2(expected_pitch / nominal)) < 50.0) {
+            const double cents = 1200.0 * std::log2(ours.pitch_hz / expected_pitch);
+            INFO("pitch " << ours.pitch_hz << " Hz vs " << expected_pitch << " (" << cents
+                          << " cents)");
+            CHECK(std::abs(cents) < allowed.pitch_cents);
+            ++pitched;
+        }
+
         // Shape over time -- for one note, this is the envelope machine, and it is the measure most
         // likely to catch a real defect here. A wrong attack rate, a release that decays too fast,
         // a segment that never fires: none of them move the spectrum much and all of them move
@@ -423,8 +462,38 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
             const ResolvedTone resolved = notes.directory().resolve_midi(
                 which.program, which.note, which.velocity, static_cast<ToneMap>(which.map), 0);
 
+            // The playback ratio each partial starts at, `2^((base_pitch - native)/12000)`, and its
+            // two terms. `scdec postrace` reads the module's sampler read position per control
+            // tick, so the module's ratio is *exact* -- an integer step in 16.16 -- and these are
+            // directly comparable to it. Read one tick at a time: a longer baseline crosses a loop
+            // wrap and the position jumps backwards.
+            //
+            // This is how the tuning question narrowed. `Trombone` at the SC-88Pro map comes out
+            // 1.079415269 here against the module's 1.079414431 -- 0.001 cents, an exact match --
+            // which rules out any error in the shared formula, the `1024` neutral included. Three
+            // other patches traced the same way disagree by 4, 31 and 41 milli-semitones. Whatever
+            // is wrong is a per-patch term, not a constant.
+            const auto tone_number = notes.directory().lut3_resolved(
+                which.program, static_cast<ToneMap>(which.map), 0);
+            const auto tone = tone_number ? notes.directory().tone(*tone_number) : std::nullopt;
+
             std::cout << "case " << which.program << ' ' << which.note << ' ' << which.velocity
-                      << ' ' << which.map << " partials " << resolved.partials.size() << " rms "
+                      << ' ' << which.map << " ratio";
+            for (const ResolvedPartial& voice : resolved.partials) {
+                const double native = (voice.descriptor.root_key * 1000.0) + 1024.0
+                                      - voice.descriptor.fine_tune;
+                double base = 0.0;
+                if (tone && voice.partial_index < static_cast<int>(tone->partials().size())) {
+                    const PartialParameters& partial =
+                        tone->partials()[static_cast<std::size_t>(voice.partial_index)];
+                    base = notes.pitch().base_pitch_milli_semitones(partial, which.note,
+                                                                    partial.key_center());
+                }
+                std::cout << ' ' << std::setprecision(10) << std::pow(2.0, (base - native) / 12000.0)
+                          << '/' << base << '/' << native << std::setprecision(6);
+            }
+            std::cout << " pitch " << std::setprecision(10) << ours.pitch_hz << std::setprecision(6)
+                      << " partials " << resolved.partials.size() << " rms "
                       << ours.rms << " peak " << ours.peak << " bands";
             for (const double band : ours.bands) {
                 std::cout << ' ' << band;
@@ -450,4 +519,8 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
                       << " held to the noise floor");
     CHECK(signal_bands > floor_bands);
     CHECK(signal_bands > 700);
+
+    // And that the pitch check is not quietly skipping the sweep. Measured at 177 of 180.
+    INFO(pitched << " cases had a fundamental to compare");
+    CHECK(pitched > cases.size() - 10);
 }

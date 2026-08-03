@@ -46,15 +46,16 @@ void transform(std::vector<double>& real, std::vector<double>& imag)
     }
 }
 
-std::vector<double> octave_bands(const std::vector<double>& mono,
-                                 int rate,
-                                 std::span<const int> centres,
-                                 double start_fraction)
+namespace {
+
+/// The Hann-windowed power spectrum both measures below read, or empty when it does not fit.
+///
+/// The size is rounded *up*, exactly as the generators round it, because two sides that round
+/// differently are two sides measuring different windows. That can overshoot the input for a render
+/// shorter than 64 Ki frames, which is a case neither generator survives either -- Python raises on
+/// the slice. Returning nothing lets the caller say so instead of reading past the end.
+[[nodiscard]] std::vector<double> spectrum(const std::vector<double>& mono, double start_fraction)
 {
-    // Rounded *up*, exactly as the generators round it, because two sides that round differently
-    // are two sides measuring different windows. That can overshoot the input for a render shorter
-    // than 64 Ki frames, which is a case neither generator survives either -- Python raises on the
-    // slice. Returning nothing lets the caller's size check say so instead of reading past the end.
     std::size_t size = 1;
     while (size < std::min<std::size_t>(mono.size(), 1U << 16U)) {
         size <<= 1;
@@ -76,20 +77,74 @@ std::vector<double> octave_bands(const std::vector<double>& mono,
     }
     transform(real, imag);
 
+    std::vector<double> power(size / 2 + 1);
+    for (std::size_t k = 0; k < power.size(); ++k) {
+        power[k] = real[k] * real[k] + imag[k] * imag[k];
+    }
+    return power;
+}
+
+} // namespace
+
+std::vector<double> octave_bands(const std::vector<double>& mono,
+                                 int rate,
+                                 std::span<const int> centres,
+                                 double start_fraction)
+{
+    const std::vector<double> power = spectrum(mono, start_fraction);
+    if (power.empty()) {
+        return {};
+    }
+    const std::size_t size = (power.size() - 1) * 2;
+
     std::vector<double> bands;
     for (const int centre : centres) {
         const double low = centre / std::numbers::sqrt2;
         const double high = centre * std::numbers::sqrt2;
         double total = 0.0;
-        for (std::size_t k = 0; k <= size / 2; ++k) {
+        for (std::size_t k = 0; k < power.size(); ++k) {
             const double frequency = static_cast<double>(k) * rate / static_cast<double>(size);
             if (frequency >= low && frequency < high) {
-                total += real[k] * real[k] + imag[k] * imag[k];
+                total += power[k];
             }
         }
         bands.push_back(total > 0.0 ? 10.0 * std::log10(total) : -999.0);
     }
     return bands;
+}
+
+double fundamental(const std::vector<double>& mono, int rate, double target, double start_fraction)
+{
+    const std::vector<double> power = spectrum(mono, start_fraction);
+    if (power.empty()) {
+        return 0.0;
+    }
+    const auto size = static_cast<double>((power.size() - 1) * 2);
+
+    // A window of +-3%: wide enough for any patch's own detune, narrow enough that it cannot lock
+    // onto a neighbouring harmonic.
+    const auto low = std::max<std::size_t>(1, static_cast<std::size_t>(target * 0.97 * size / rate));
+    const auto high = std::min(power.size() - 2, static_cast<std::size_t>(target * 1.03 * size / rate));
+    if (high <= low) {
+        return 0.0;
+    }
+
+    std::size_t peak = low;
+    for (std::size_t k = low; k <= high; ++k) {
+        if (power[k] > power[peak]) {
+            peak = k;
+        }
+    }
+    if (power[peak] <= 0.0) {
+        return 0.0;
+    }
+
+    const double a = std::log(power[peak - 1] + 1e-30);
+    const double b = std::log(power[peak] + 1e-30);
+    const double c = std::log(power[peak + 1] + 1e-30);
+    const double divisor = a - 2.0 * b + c;
+    const double offset = divisor != 0.0 ? 0.5 * (a - c) / divisor : 0.0;
+    return (static_cast<double>(peak) + offset) * rate / size;
 }
 
 std::vector<double> rms_envelope(const std::vector<double>& mono, int windows)
