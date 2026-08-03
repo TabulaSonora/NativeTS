@@ -311,6 +311,14 @@ Stated plainly, because they are not covered by the numbers above:
   MIDI kits resolve to ordinary melodic tones, so the common path works.
 - **LFO random waveforms** need the engine's own RNG state and return zero, as in the reference.
   Waveform selectors 1, 2 and 3 are the affected ones.
+- **Ten of the control matrix's eleven destinations go nowhere yet.** Pitch is consumed, from four
+  of the six sources; cutoff, amplitude and the two LFOs' rates and depths are parsed, stored and
+  unused, and CC1 and CC2 need their assignable controller numbers tracked before they can reach
+  anything. A stream that assigns those and expects to hear them will not.
+- **Some GS part parameters are recognised and dropped**, each because nothing under them is
+  modelled: assign mode (`40 1x 14`, one voice-allocation policy here), the CC1/CC2 controller
+  numbers (`40 1x 1F`/`20`), and per-key Rx note-on/off in the drum setup (`40 2x 07`/`08`), whose
+  law is not recovered.
 
 ## Methodology worth borrowing
 

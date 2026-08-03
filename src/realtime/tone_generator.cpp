@@ -459,6 +459,9 @@ void ToneGenerator::Impl::apply_channel(
             std::erase(part.sostenuto_captured, data1);
             std::erase(part.sostenuto_released, data1);
 
+            // A fresh strike does **not** clear the key's poly pressure. See `Part::poly_pressure`:
+            // that was the obvious guess and the engine disagrees, measurably.
+
             start_note(channel, data1, data2);
             break;
         }
@@ -481,8 +484,12 @@ void ToneGenerator::Impl::apply_channel(
         break;
 
     case 0xA0:
-        // Poly pressure reaches the modulation matrix on the module (`poly_aftertouch_apply`);
-        // this engine has no per-note matrix yet, so the message is recognised and dropped.
+        // Poly pressure reaches the modulation matrix on the module (`poly_aftertouch_apply`),
+        // carrying the part's depths and the pressure belonging to this key.
+        if (part.rx.poly_pressure && data1 >= 0 && data1 < 128) {
+            part.poly_pressure[static_cast<std::size_t>(data1)] =
+                static_cast<std::uint8_t>(data2 & 0x7F);
+        }
         break;
 
     case 0xB0:
@@ -1153,7 +1160,8 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // shift sit on top of that globally.
     // Bend is inside `matrix_pitch_milli_semitones` now, not beside it: the engine sums the five
     // matrix sources and clamps the total, so applying bend separately would escape that clamp.
-    const double pitch_offset = part.tune_milli_semitones() + part.matrix_pitch_milli_semitones()
+    const double pitch_offset = part.tune_milli_semitones()
+                                + part.matrix_pitch_milli_semitones(part.key_pressure(voice.note()))
                                 + master_tune_milli_semitones();
     // Refreshed per block, not latched at note-on: a filter sweep has to reach notes that are
     // already sounding.

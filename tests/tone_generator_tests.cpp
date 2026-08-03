@@ -745,6 +745,55 @@ TEST_CASE("the control matrix arrives over SysEx", "[stream][sccore]")
     CHECK(part.control.at(Source::cc2, Destination::lfo2_tva) == 0x00);
 }
 
+TEST_CASE("polyphonic aftertouch bends the key it names", "[stream][sccore]")
+{
+    // Verified against the DLL rather than reasoned about. A part with `40 2x 30` at 0x58, one note
+    // held while its pressure ramps 0 to 127: the module takes the note from 130 Hz to 1032 Hz and
+    // this engine follows it to the same four frequencies, measured by autocorrelation at 0.35,
+    // 0.70, 0.95 and 1.20 s.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    // Poly pressure -> pitch on part 1, deflected hard enough to be unmistakable.
+    generator.send_sysex(dt1({0x40, 0x21, 0x30, 0x58}));
+    const Part& part = generator.part(0);
+
+    generator.send_channel(0xC0, 48, 0);
+    generator.send_channel(0x90, 60, 100);
+    generator.send_channel(0x90, 67, 100);
+
+    const double unpressed = part.matrix_pitch_milli_semitones(part.key_pressure(60));
+    CHECK(unpressed == 0.0);
+
+    // The pressure lands on the key it names and on no other, which is the whole of "polyphonic".
+    generator.send_channel(0xA0, 60, 127);
+    CHECK(part.key_pressure(60) == 127);
+    CHECK(part.key_pressure(67) == 0);
+
+    const double pressed = part.matrix_pitch_milli_semitones(part.key_pressure(60));
+    CHECK(pressed > 0.0);
+    CHECK(part.matrix_pitch_milli_semitones(part.key_pressure(67)) == 0.0);
+
+    // Half the pressure, less than half the way there is not asserted -- only that it tracks.
+    generator.send_channel(0xA0, 60, 64);
+    CHECK(part.matrix_pitch_milli_semitones(part.key_pressure(60)) < pressed);
+
+    // **The measured surprise.** A fresh strike does not clear it: press a key hard, release it,
+    // strike it again saying nothing about pressure, and the module sounds the new note still bent.
+    // The pressure belongs to the key, not to the note that was sounding on it.
+    generator.send_channel(0xA0, 60, 127);
+    generator.send_channel(0x80, 60, 0);
+    generator.send_channel(0x90, 60, 100);
+    CHECK(part.key_pressure(60) == 127);
+    CHECK(part.matrix_pitch_milli_semitones(part.key_pressure(60)) == pressed);
+
+    // A GS reset is what does clear it.
+    generator.reset();
+    CHECK(generator.part(0).key_pressure(60) == 0);
+}
+
 TEST_CASE("the mod wheel's depth comes from the matrix", "[stream][sccore]")
 {
     const RomImage rom =

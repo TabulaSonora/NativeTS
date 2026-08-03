@@ -108,9 +108,27 @@ public:
     /// the engine stores it in the same byte RPN 00/00 writes. See `ControlMatrix`.
     ControlMatrix control;
 
-    /// Channel aftertouch, stored but not yet routed: the engine feeds it to the modulation
-    /// matrix (`channel_pressure_apply`), which this port does not model beyond the mod wheel.
+    /// Channel aftertouch, which reaches pitch through the control matrix.
     int channel_pressure = 0;
+
+    /// Polyphonic aftertouch, per key.
+    ///
+    /// One byte a note rather than one a part, which is the whole of what makes it polyphonic: the
+    /// engine's `poly_aftertouch_apply` takes the part's matrix depths and the pressure belonging
+    /// to *that key*, so two notes held on one part can be modulated by different amounts.
+    ///
+    /// **Not cleared by note-on**, which is the opposite of the obvious guess and was measured
+    /// rather than assumed. Press a key to full pressure, release it, strike it again and say
+    /// nothing about pressure: the module sounds the new note *still bent*, an octave and a half up
+    /// on a part whose `40 2x 30` depth is 0x58. The pressure belongs to the key, not to the note
+    /// that happened to be sounding on it, and only another poly message or a reset moves it.
+    std::array<std::uint8_t, 128> poly_pressure{};
+
+    /// The pressure on one key, or zero for anything out of range.
+    [[nodiscard]] int key_pressure(int note) const noexcept
+    {
+        return note >= 0 && note < 128 ? poly_pressure[static_cast<std::size_t>(note)] : 0;
+    }
 
     /// The GS part modify offsets, 0x40 centred. Three writers share each one -- the sound
     /// controllers (CC#71-78), the NRPNs (`01 08`-`01 66`), and the part SysEx (`40 1x 30`-`37`)
@@ -301,18 +319,21 @@ public:
     /// `amount × (depth − 0x40)` can reach. The scale then works out to 24 semitones at the rail,
     /// which is what fixes the unit as milli-semitones.
     ///
-    /// **Two of the five are missing here, deliberately.** Bend's term comes from the bipolar
-    /// apply, which is not transcribed yet, and this engine already applies bend through
-    /// `bend_range` — adding it again would double it. CC1 and CC2 need their controller values
-    /// tracked, which they are not. So the sum runs over the mod wheel and channel aftertouch, and
-    /// the clamp sees a smaller total than the engine's would when bend is also deflected. That is
-    /// a real difference and it only shows at the rail.
-    [[nodiscard]] double matrix_pitch_milli_semitones() const noexcept
+    /// **Two of the six sources are missing here.** CC1 and CC2 need their assignable controller
+    /// numbers tracked, which they are not, so the sum runs over the mod wheel, both aftertouches
+    /// and bend — and the clamp sees a smaller total than the engine's would when all six are
+    /// deflected at once. That is a real difference and it only shows at the rail.
+    ///
+    /// `key_pressure` is the polyphonic aftertouch on the note being rendered, which is why this
+    /// takes an argument at all: everything else here belongs to the part, and that one belongs to
+    /// the key. A caller with no note in hand passes nothing and gets the part's own modulation.
+    [[nodiscard]] double matrix_pitch_milli_semitones(int key_pressure = 0) const noexcept
     {
         const int sum =
             control.applied_linear(ControlMatrix::Source::modulation, modulation).pitch
             + control.applied_linear(ControlMatrix::Source::channel_pressure, channel_pressure)
                   .pitch
+            + control.applied_linear(ControlMatrix::Source::poly_pressure, key_pressure).pitch
             + control
                   .applied_bipolar(
                       ControlMatrix::Source::bend, bend - 8192, bend_range + ControlMatrix::neutral)
@@ -376,6 +397,7 @@ public:
         soft = false;
         modulation = 0;
         channel_pressure = 0;
+        poly_pressure.fill(0);
         portamento_on = false;
         portamento_control_key = -1;
         rpn_msb = 0x7F;

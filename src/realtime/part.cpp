@@ -13,6 +13,7 @@ void Part::reset()
     damper = 0;
     soft = false;
     channel_pressure = 0;
+    poly_pressure.fill(0);
     reverb_send = sequence_builder::default_reverb_send;
     chorus_send = sequence_builder::default_chorus_send;
     delay_send = 0;

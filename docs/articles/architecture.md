@@ -123,6 +123,17 @@ scale rather than a shift. Its pitch depth is the one cell the matrix does not s
 `40 2x 10` and RPN 00/00 are not two parameters that agree but one byte written by both handlers;
 ts::Part::bend_range owns it.
 
+Polyphonic aftertouch is the one source that is not a property of the part: ts::Part::poly_pressure
+keeps a byte per key, so two notes held on one part can be bent by different amounts, which is the
+whole of what "polyphonic" buys. It does **not** reset when a key is struck again — press a key
+hard, release it, strike it once more and say nothing about pressure, and the module sounds the new
+note still bent. That was measured against the DLL, and it is the opposite of the obvious guess.
+
+One of the eleven destinations is consumed so far — **pitch**, reached by four of the six sources:
+the mod wheel, both aftertouches and bend. The other ten (cutoff, amplitude, and the two LFOs'
+rates and depths) are parsed and stored and go nowhere yet, and CC1 and CC2 need their assignable
+controller numbers tracked before they can reach anything at all.
+
 **The part modify offsets.** ts::PartModifiers is the eight 0x40-centred bytes behind CC#71–78 —
 vibrato rate, depth and delay, cutoff, and the envelope's attack, decay and release. Three writers
 share each byte: the sound controller, an NRPN and the part SysEx `40 1x 3x` all land on the same
