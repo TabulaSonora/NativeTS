@@ -40,9 +40,13 @@ enum class FilterTap {
 /// Measured on drum tone 1946 (`f = 0.654, q = 1.891`, poles `+0.682` and `-0.348`): we run about
 /// 5 dB hot at Nyquist and +1.1 dB broadband, and the correlation against the DLL falls to 0.859
 /// where its underdamped neighbours hold 0.999. Only 19 of the 3352 filtered partials in the library
-/// reach the regime at all, so most of the corpus never sees it. What the reference does instead is
-/// not yet known — refitting `q` alone recovers most but not all of the gap, so do not "fix" this by
-/// clamping until stage D's overdamped branch has actually been read. See specv2 `docs/FINDINGS.md`.
+/// reach the regime at all, so most of the corpus never sees it.
+///
+/// **Do not "fix" this here.** `svf_render_hp` has since been read: it is eight unrolled copies of
+/// exactly the recurrence above — same operand ages, same parenthesisation — with no branch on `q`
+/// anywhere, and `f` and `q` reach it as the very values we already match to the integer. So the
+/// divergence is provably *not* in this loop, and clamping `q` to keep the poles complex would only
+/// curve-fit over it. See specv2 `docs/FINDINGS.md` for what is left to rule out.
 class StateVariableFilter {
 public:
     /// The lowpass integrator's current value.
