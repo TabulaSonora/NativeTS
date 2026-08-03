@@ -12,14 +12,18 @@ It exists so that hosts which cannot take a .NET runtime can embed the engine di
 is GPL-compatible, so [Cog](https://github.com/losnoco/Cog) and its like can link it without a
 separate grant.
 
-**Status: it plays.** A Standard MIDI File renders to a WAV that is **byte-for-byte identical to the
-C# engine** — checked on a 123-second, 4,366-note file across all four tone maps and every effect and
-gain option. Faster, too: about 7 seconds against 10.5 for the same render. The real-time block loop,
-a terminal player and a full-screen mixer are in as well.
+**Status: it plays.** A Standard MIDI File renders to a WAV through the same real-time block loop
+the players and the browser build drive, comfortably faster than realtime on one core. A terminal
+player and a full-screen mixer are in as well.
+
+The oracle is `SCCore.dll` itself — its captured internal state and its rendered audio, driven
+through its own exported API. See
+[Verification](https://tabulasonora.github.io/NativeTS/verification.html) for what is proven and
+how.
 
 ```
 tabula-sonora render song.mid out.wav --map 4
-tabula-sonora render song.mid out.wav --stream --solo 1,2
+tabula-sonora render song.mid out.wav --stream --solo 1,2       # at the hardware's 64 voices
 tabula-sonora render-note 48 60 100 1.0 note.f32 4
 tabula-sonora dump-effect reverb 4 48000 impulse.f32
 tabula-sonora bench song.mid                      # time the render path stage by stage
@@ -42,19 +46,38 @@ The test suite pins its data separately: `TS_SCCORE` for the DLL and `TS_TABLES`
 tables directory. Unset, it looks beside the repository and in the sibling C# checkout, and skips
 what it cannot find rather than failing.
 
-`render --stream` drives the same block loop the player does, so the difference the architecture
-makes — a 64-voice limit that actually steals, live controllers, effect types that change mid-song —
-can be heard against the offline render of the same file.
+Every render goes through the block loop, so `--stream` does not select a different renderer — it
+selects the module's own 64-voice limit, and the stealing can be heard as the module would do it.
+The default grows the pool instead, so every note in the file sounds. `--polyphony N` and
+`--ports 1|2|4` go further in that direction, past what the module can do.
 
 ## What "faithful" means here
 
 Almost every constant in this engine was recovered by measurement against the real DLL. Changing one
 on aesthetic grounds is a regression even when it sounds nicer.
 
-The C# engine is the oracle for this port, and the bar is **bit-exactness where that engine is
-bit-exact** — the static tables, the sample codec, the pitch and LFO tick streams — with rendered
-audio matching to float epsilon. Each porting phase ends by diffing against a C# render; a phase does
-not start until the previous one is exact.
+Faithful means matching **the module**, not matching another implementation of it. The oracle is
+`SCCore.dll`: its static tables, its captured internal state, and its rendered audio. Where a
+reimplementation and the hardware disagree, the hardware wins — which has happened, and cost this
+engine its bit-exactness against the C# port it grew out of. That port was the scaffolding, not the
+standard; it is archived and kept as a record.
+
+## Past the module
+
+Sound Canvas VA is itself a port: `SCCore.dll` carries the SC-8820's own mask ROMs and reproduces
+its voice, down to the fixed-point arithmetic. So the lineage runs hardware → plugin → here, and
+this end of it is not confined to what the previous ones could do.
+
+| | the module | here |
+|---|---|---|
+| parts | 32, of which the shipped DLL can reach 16 — one `and r8b,0Fh` hides the rest | 16, 32 or 64, over one, two or four ports |
+| polyphony | 64 voices, stolen when full | any limit, or a pool that grows so every note in the file sounds |
+| platforms | a 64-bit Windows VST/AU host | anything with a C++20 compiler, including WebAssembly in a browser |
+| licence | withdrawn from sale in September 2024 | BSD 3-Clause, embeddable in GPL software |
+
+The rule for all of it: **match the module by default, and exceed it only on request.** A mode that
+sounds better than the hardware is a feature to opt into, never the baseline — which is what keeps
+"more parts" from quietly becoming "a different instrument".
 
 ### Why C++20 specifically
 
@@ -111,10 +134,12 @@ Both players build on Windows as well: ftxui carries its own console support, an
 reads the console through `conio` — scan codes rather than escape sequences, with no terminal mode
 to take or restore. `tabula-sonora-play` is a one-line transport, and stays usable when stdin is a
 pipe.
-`tabula-sonora-tui` is a full-screen mixer over the *running* engine: sixteen parts with the tone
-each program resolved to, live volume, expression and pan, a per-channel voice count, and mute and
-solo that take effect on a note already sounding. Both drive the same `ts::audio` core, so the ring
-protocol and the transport exist once.
+`tabula-sonora-tui` is a full-screen mixer over the *running* engine: one strip per part the file
+addresses, with the tone each program resolved to, live volume, expression and pan, a per-channel
+voice count, and mute and solo that take effect on a note already sounding. It opens four ports and
+raises the voice limit to match, so a file that addresses more than the hardware's thirty-two parts
+still plays. Both drive the same `ts::audio` core, so the ring protocol and the transport exist
+once.
 
 ```
 ./build/release/apps/cli/tabula-sonora manifest

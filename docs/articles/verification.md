@@ -2,19 +2,21 @@
 
 The engine is checked against **three oracles**, and they are not equal in authority.
 
+**The real `SCCore.dll`** — its own captured internal state (per-voice gain, filter registers,
+controller sweeps) and its rendered audio, both taken with the
+[spec repository](https://github.com/TabulaSonora/spec)'s `scdec` harness driving the DLL through
+its own exported API. Where anything disagrees, **the hardware wins**.
+
+**The reference implementation** — the Python in the same repository — is swept over whole input
+domains to produce expected values. This catches the sign-extension, truncation-direction and
+integer-width mistakes that a port invites.
+
 **The C# engine** — the archived
 [DotNetAdministravit](https://github.com/TabulaSonora/DotNetAdministravit), which this port was
-written against phase by phase. It is the closest oracle and the strictest: the bar here is
-bit-exactness, not similarity.
-
-**The reference implementation** — the Python in the
-[spec repository](https://github.com/TabulaSonora/spec) — is swept over whole input domains to
-produce expected values. This catches the sign-extension, truncation-direction and integer-width
-mistakes that a port invites.
-
-**The real `SCCore.dll`'s own captured internal state** — per-voice gain, filter registers,
-controller sweeps, taken with the spec repository's `scdec` harness. Where these disagree, **the
-hardware wins**.
+written against phase by phase and reproduced bit for bit. It is scaffolding rather than a target:
+it was never an independent witness to the hardware, only a careful one, and where the two now
+disagree the DLL decides. Its fixtures are kept for the coverage they still have —
+\ref past-the-csharp-engine says exactly how much that is.
 
 ## What the port itself is held to
 
@@ -23,12 +25,19 @@ a fixture generated from the C# CLI:
 
 | gate | tag | comparison |
 |---|---|---|
-| single note | `[render][sccore][gate]` | SHA-256 of the whole render plus eight literal samples, over 100+ cases |
-| whole song, offline | `[song][sccore][gate]` | SHA-256, across 20 option variants |
-| block loop, real time | `[stream][sccore][gate]` | the whole reference WAV: worst error ≤ 1 LSB, under 0.02% of samples differing |
+| single note | `[render][sccore][gate]` | SHA-256 of the whole render plus eight literal samples |
+| block loop, real time | `[stream][sccore][gate]` | a whole WAV, sample by sample: worst error ≤ 1 LSB, under 0.02% differing |
 | predictor stream | `[sampler][sccore][gate]` | against an independent decoder |
 
-Only the real-time gate has any tolerance at all, and it is one LSB.
+Only the real-time gate has any tolerance at all, and it is one LSB. A fourth, `[song]`, compared
+whole songs rendered offline; it was retired with the renderer that produced them.
+
+Two of the three are now partly historical, and \ref past-the-csharp-engine says why. The note
+gate's fixture predates the exact-start wave decode, so every case whose wave begins mid-block is
+skipped as **superseded** rather than failed, leaving 111 the fixture can still speak for; the
+stream gate has no unaffected case at all, and its references are this engine's own output kept as
+a regression baseline. The archived C# checkout cannot be re-run to refresh either, which is the
+whole reason the oracle work below matters.
 
 The fixtures are Roland-derived and so are not committed. Each pins the DLL's SHA-256 and is
 regenerated locally by the scripts in `tools/`; a gate whose fixture index is missing skips with the
@@ -38,12 +47,13 @@ failed.
 
 ## What is proven
 
-These results were established for the C# engine against the reference and the DLL. They carry
-over because this engine reproduces that one bit for bit:
+These results were established for the C# engine against the reference and the DLL, and carried
+over to this port, which reproduced that engine bit for bit — except where
+\ref past-the-csharp-engine records that it no longer does:
 
 | | result |
 |---|---|
-| static tables | all 48 byte-identical to the extracted cache |
+| static tables | all 50 byte-identical to the extracted cache |
 | sample codec | bit-exact against the engine's own predictor |
 | patch directory | 470 of 512 programs reproduce the engine's observed zones |
 | per-voice gain | within **5.4e-05** of the engine's gain word |
@@ -119,6 +129,40 @@ after sounding.
 load-bearing for a byte-identical render, so a regression in either shows up as a failed SHA-256,
 but the failure will not name the cause.
 
+## What the C# fixtures can still speak for {#past-the-csharp-engine}
+
+Two corrections towards the DLL have taken this engine off bit-exactness with the C# port, and
+neither can be carried back: `DotNetAdministravit` is archived, so its fixtures cannot be
+regenerated to follow.
+
+**Waves decode from their exact start.** Two in five descriptors — 1,660 of 4,259 — put a wave's
+data start partway into a 32-sample exponent block. The codec permits it: it stores differences and
+no absolute value per block, so a wave may begin and end mid-block, and the decoder has only to
+index the exponents by absolute sample position. Rounding the start down to a block boundary began
+integrating up to 31 samples early, and because the predictor has no leak and nothing downstream
+blocks DC, those extra deltas displaced the wave for its whole length rather than adding a moment
+of lead-in.
+
+The change is measurably *inert* against the DLL everywhere it could be checked — the largest
+correlation shift over drum keys and unaligned melodic programs is 2e-4 — so it rests on the
+format's semantics rather than on an audible improvement. What cross-checks it is
+`tools/dump_predictors.py`, an independent Python oracle of the documented formula, which agrees
+with the C++ decode over all 3,703 waves and 25.6 M samples.
+
+**The pitch ramp.** The engine does not step a voice's pitch once per control tick: it records the
+pitch entering the block and the pitch leaving it and glides between them, writing a fresh sampler
+increment every eight samples. A renderer that only applies post-tick values never sounds a pitch
+envelope's start level at all, and the sub-sample residue the glide leaves behind is frozen into
+the sampler's phase for the rest of the note. Drum tone 1946 is the case that exposed it — its
+pitch envelope drops 6.671 semitones inside block 0 — and against the DLL it moves from a
+correlation of 0.859 to 0.99999, taking a +1.11 dB error down to +0.03 dB. ts::PitchRamp is the
+implementation.
+
+The fixture fallout was handled by counting it rather than hiding it: the note gate marks the cases
+that touch a mid-block wave as superseded, and the stream gate — whose four cases *all* do — has no
+unaffected case left, so it stands as a regression baseline against this engine's own output until
+the DLL-derived gate replaces it.
+
 ## Where the reference departs from its own manual
 
 **Part EQ defaults off, and the SC-8820 manual says on.** The manual's parameter table gives
@@ -136,7 +180,7 @@ both readings sound identical. On a stream that sets an EQ curve without ever ad
 one claim on this page resting on absence of evidence rather than measurement, and a file that sets
 `40 02` and no part EQ would settle it in a single render.
 
-## The per-note renderer is being retired
+## The per-note renderer was retired
 
 This project long treated the offline per-note renderer as the authoritative one, and the digests
 were taken from it. That reasoning does not survive contact with what you actually hear.
@@ -152,9 +196,15 @@ The polyphony limit was the only remaining reason to prefer it, and that reason 
 `ToneGeneratorOptions::unlimited_polyphony` grows the pool rather than stealing, so the block loop
 can render every note in a file. The per-note renderer no longer does anything the block loop cannot.
 
-\note The decision is to retire it. The retirement is not complete: `SequenceRenderer` still exists
-and `render` still reaches the block loop only through `--stream`. Flipping that default changes
-what every existing invocation produces, so it is a deliberate step rather than a cleanup.
+It is now gone. `SequenceRenderer` was deleted with its tests and the `[song]` gate that used it,
+and every `render` goes through the block loop — `--stream` selects the hardware's voice limit
+rather than a second renderer. What survives under the old name is
+ts::NoteRenderer::render_note, which renders one note in isolation and is not a song path at all.
+
+The immediate reason to delete it rather than leave it standing was that it was about to cost
+something. The remaining control-matrix destinations — cutoff, amplitude, the LFO rates and depths
+— move *while* a note sounds, and a renderer that builds each note whole can only take them as one
+more pre-computed curve per note. That is machinery written to be deleted.
 
 ### Three tiers of digest, in order of authority
 
@@ -162,11 +212,14 @@ The digests are being re-based onto three tiers, which are **not** equal and sho
 collapsed into one number:
 
 1. **Historical** — the existing fixtures, generated from the archived C# engine. Kept as a record
-   of what the old reference produced, not as a target. They are the only digests that exist today,
-   and every gate currently measures against them.
+   of what the old reference produced, not as a target. They are what every gate in the suite
+   currently measures against.
 2. **Authoritative** — generated from `SCCore.dll` itself, driven through its own exported API
    (`TG_initialize`, `TG_LongMidiIn`, `TG_Process`) under wine. This is the real target: agreement
-   with the black box rather than with another reimplementation.
+   with the black box rather than with another reimplementation. The generators exist:
+   `tools/dump_note_renders_oracle.py` sweeps 180 single notes across every tone map and
+   `tools/dump_song_renders_oracle.py` drives the song corpus, both through the spec repository's
+   harness. No gate consumes them yet.
 3. **Constrained** — this engine at the hardware's 64 voices, which is the tier directly comparable
    to (2). The gap between them is the measurement that matters, and it answers a question worth
    asking precisely: *how much of the difference is missing features?* Every remaining gap in this
@@ -176,11 +229,19 @@ collapsed into one number:
 The unlimited and 256-voice digests sit alongside (3) as regression checks on this engine only.
 Nothing in the DLL can produce them, because the DLL has 64 voices.
 
-\note The harness for tier 2 mostly exists: `tools/decoder` in the spec repository already loads the
-real DLL and drives it through the exported API, and has a `song` mode. What it does not yet do is
-render an **arbitrary Standard MIDI File** — `song` takes a program number and plays a built-in
-sequence. Extending it to feed a parsed SMF through `TG_ShortMidiIn`/`TG_LongMidiIn` on the same
-sample grid is what stands between here and an authoritative digest for the test corpus.
+\note Tier 2 is no longer blocked on the harness. What stood in the way was that `scdec` could
+only play a built-in sequence; it now takes an **arbitrary Standard MIDI File** in `smf` mode and
+renders a whole sweep of single notes in one process in `notebatch` mode, which is what the two
+generators here drive.
+
+**Tier 2 records tolerances, not digests, and that is a property of the problem.** A song runs the
+chorus and reverb, whose LFOs the DLL starts at a phase this port cannot yet derive, so two renders
+that agree on every note still diverge sample by sample: whole-song correlation against the oracle
+sits near 0.18 while every octave band agrees to a tenth of a dB. Sample identity is therefore not
+merely unreachable, it is the wrong question. What the fixtures record is frame count exactly, and
+peak, RMS, per-octave level and a coarse RMS envelope within tolerance — the envelope catching a
+note that goes missing or arrives late without being sensitive to phase. The oracle audio is kept
+beside them so a failure can be measured rather than only counted.
 
 ### What the digests should be
 
@@ -199,12 +260,14 @@ with another reimplementation, but agreement with the black box.
 The principle behind all three: **match the original library by default, and exceed it only on
 request.** A mode that sounds better than the module is a feature to opt into, never the baseline.
 
-Two observations from the current corpus. `canyon.mid` and `sc50nn.mid` produce the *same* digest at
-all three settings — neither ever exceeds 64 voices, so for them the three-way check is free but
-uninformative. `th07_19_user_gm.mid` (173,183 notes) gives `eda314cc…` at 64 and `8ddd6033…` at both
-256 and unlimited: it steals heavily at the hardware limit, and 256 is already enough for it. That
-256 and unlimited agree bit for bit is worth having — it says the growing pool converges on what a
-large enough fixed pool reaches rather than doing anything of its own.
+Two observations from the current corpus, whose shape outlives the particular digests — the wave
+decode correction moved every one of them. `canyon.mid` and `sc50nn.mid` produce the *same* digest
+at all three settings: neither ever exceeds 64 voices, so for them the three-way check is free but
+uninformative. `th07_19_user_gm.mid` (173,183 notes) differs at 64 and agrees at both 256 and
+unlimited — it steals heavily at the hardware limit, and 256 is already enough for it. That the top
+two agree bit for bit is worth having: it says the growing pool converges on what a large enough
+fixed pool reaches rather than doing anything of its own. `render` reports which case a file falls
+into, so this does not have to be guessed at.
 
 ## Known limits
 

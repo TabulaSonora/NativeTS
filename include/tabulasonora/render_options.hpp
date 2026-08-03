@@ -16,8 +16,9 @@ namespace ts {
 
 /// Per-channel mute and solo.
 ///
-/// Read live so a mixer can change it while sound is running; a render takes one snapshot for its
-/// whole duration, or some notes of a part would sound and others not.
+/// Read live so a mixer can change it while sound is running, and read where the engine *mixes*
+/// rather than where it starts notes: a part goes quiet on the next block and comes back on the
+/// one after, and a muted part goes on consuming polyphony exactly as an audible one does.
 ///
 /// The flags are atomic because this is the one place in the library where two threads meet: a UI
 /// thread sets them while the render thread reads them on every note-on. Relaxed ordering is enough
@@ -116,9 +117,5 @@ struct RenderResult {
     /// Peak absolute sample across both channels, after the output gain.
     float peak = 0.0F;
 };
-
-/// Renders a whole sequence note by note and mixes the send effects over it.
-///
-/// Every note is rendered whole and summed into one buffer, so polyphony is unbounded here — the
 
 } // namespace ts

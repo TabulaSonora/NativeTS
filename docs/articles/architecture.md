@@ -41,10 +41,11 @@ Control-rate work — patch resolution, envelopes, effect selection — is ordin
 and, in the effects, real virtual dispatch through ts::Effect. At 100 Hz, or once per 32-sample
 block, a virtual call costs nothing measurable.
 
-Per-sample work is flat. ts::VoicePool holds its 64 voices as parallel arrays rather than as
-objects, which is the shape the original uses too: it renders voices in SIMD-friendly groups of
-four. ts::Voice is a handle — an index plus control-rate operations — not a container for render
-state.
+Per-sample work is flat. ts::VoicePool holds its voices as parallel arrays rather than as objects,
+which is the shape the original uses too: it renders voices in SIMD-friendly groups of four.
+ts::Voice is a handle — an index plus control-rate operations — not a container for render state.
+The pool is the hardware's 64 slots by default and can be sized past that, or told to grow on
+demand; the layout does not change with it.
 
 ## The signal path
 
@@ -95,28 +96,37 @@ ts::PanLaw, ts::PitchChain, ts::LfoEngine, ts::TvfChain, and the three ts::Effec
 Partials **sum**. Each is an independent voice dispatched into one accumulation buffer; there is no
 divide-by-count anywhere, and averaging would silently halve every two-partial patch.
 
-## Two ways to drive it
+## One way to drive it
 
-The same signal path is driven by two renderers, which differ in *when* they know things rather
-than in what they compute.
+ts::ToneGenerator is the engine and the renderer both. `tabula-sonora render` and
+`tabula-sonora-play` differ in *when* the work happens, not in what does it, and a file exported
+from the browser is byte-identical to one rendered at the command line because there is only the
+one path for them to be identical to.
 
-| | ts::SequenceRenderer | ts::ToneGenerator |
+An offline renderer that built each note whole and summed them also existed here, and was deleted.
+It could not put a mid-song change where the stream put it — an effect type that switches between
+two notes has to be resolved *per note* rather than at the moment it arrives — so on the property
+that matters most for judging fidelity it was the architecture that could not be right.
+\ref verification has the reasoning.
+
+What varies is how much the engine is allowed to spend:
+
+| | default | past the hardware |
 |---|---|---|
-| unit of work | one whole note | one 32-sample block |
-| note length | known before rendering | discovered when note-off arrives |
-| polyphony | unbounded | 64 voices, stolen when full |
-| controllers | latched at note-on, curves per sample | live, re-read every block |
-| effect type | one per song | changes when the file says so |
-| parts | 16 channels | 32 parts over two ports |
+| polyphony | 64 voices, stolen when full | any limit, or `ToneGeneratorOptions::unlimited_polyphony`, which **grows** the pool instead of stealing |
+| parts | 32, over two ports | 64, over four — an extension, not a fidelity feature |
 
-Neither is a reimplementation of the other. The envelopes, the sampler, the filter and the tables
-are one set of objects that both drive; the offline path fills arrays from them and the block loop
-steps them. That is why a single note with no controller movement comes out **identical to float
-epsilon** through either — asserted in the test suite, not asserted by hand.
+The growing pool is what an offline render wants and what an audio thread must not have: growing
+allocates, and allocating inside the block loop is the one thing a real-time thread cannot do. Both
+settings are departures, so both are opt-in — the principle throughout is to match the module by
+default and exceed it only on request.
 
-Both are comfortably faster than realtime on one core: the offline path renders a 123-second,
-4,366-note file in about seven seconds. `tabula-sonora bench` reports the margin on your machine,
-stage by stage.
+ts::NoteRenderer::render_note is not a second renderer. It renders one note in isolation, which is
+what analysis, the note gate and `render-note` want, and none of those is a song.
+
+Rendering is comfortably faster than realtime on one core. `tabula-sonora bench` reports the margin
+on your machine, stage by stage, and `render` reports afterwards whether the polyphony setting
+actually bound — a file that never ran out sounds the same at every limit.
 
 ### The block loop
 
@@ -165,10 +175,11 @@ These are all asserted in the test suite, because each one is silent when wrong:
   table.
 - **The velocity level-scale is split** — one byte for the first two envelope segments, another for
   the rest. Sharing one makes later segments run about 1.45× too fast.
-- **Every layer borrows the one below it.** ts::NoteRenderer keeps a reference to the image and
-  ts::SequenceRenderer a raw pointer to the renderer, so a host that holds the chain by value and is
-  then moved leaves both addressing moved-from shells. `std::unique_ptr` members keep the addresses
-  the layers above captured — see \ref getting-started.
+- **Every layer borrows the one below it.** ts::NoteRenderer keeps a reference to the image,
+  ts::ToneGenerator one to the renderer and ts::SequencePlayer a raw pointer to the engine, so a
+  host that holds the chain by value and is then moved leaves them addressing moved-from shells.
+  `std::unique_ptr` members keep the addresses the layers above captured — see \ref
+  getting-started.
 
 ## Fixed-point
 

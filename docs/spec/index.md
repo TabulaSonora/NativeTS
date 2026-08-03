@@ -36,10 +36,15 @@ The specification is larger than these three pages, and the rest of it stays whe
 than being duplicated into this site:
 
 - **[FINDINGS.md](https://github.com/TabulaSonora/spec/blob/main/docs/FINDINGS.md)** — the master
-  record, some 2,900 lines. It is a *chronological log* rather than a reference document: it
+  record, over 4,000 lines. It is a *chronological log* rather than a reference document: it
   contains retractions and superseded sections in place, which is exactly what makes it honest and
   exactly what makes it unsuitable for republishing as settled fact. Read it for the evidence
-  behind any claim on these pages.
+  behind any claim on these pages — and for the findings that have landed in this engine since
+  these three pages were curated, the pitch ramp and the filter's stability ceiling among them.
+- **[COMPARING_RENDERS.md](https://github.com/TabulaSonora/spec/blob/main/docs/COMPARING_RENDERS.md)**
+  — what actually distinguishes a good render from a bad one when sample identity is unreachable.
+  It is the argument the DLL-derived tolerance fixtures are built on; \ref verification says where
+  they sit.
 - **[SYMBOLS.md](https://github.com/TabulaSonora/spec/blob/main/docs/SYMBOLS.md)** — the recovered
   symbol map, 749 of the DLL's 1,045 functions named by address.
 - **[PROVENANCE.md](https://github.com/TabulaSonora/spec/blob/main/docs/PROVENANCE.md)** — the

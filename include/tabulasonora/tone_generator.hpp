@@ -72,15 +72,15 @@ struct ToneGeneratorOptions {
 /// The real-time engine: MIDI in, audio out, rendered a block at a time.
 ///
 /// This is the block-based voice loop the hardware runs. Events are applied at the render-block
-/// boundary — the grid the engine itself quantises them to — voices are allocated from a fixed pool
-/// of 64 and stolen when it runs out, and each block is summed into a dry pair and three send buses
-/// that the effects then process. Nothing about a note has to be known in advance, so a note can be
+/// boundary — the grid the engine itself quantises them to — voices are allocated from a pool that
+/// holds the hardware's 64 unless `ToneGeneratorOptions` says otherwise, and each block is summed
+/// into a dry pair and three send buses that the effects then process. Nothing about a note has to be known in advance, so a note can be
 /// held indefinitely and released whenever.
 ///
 /// It shares its DSP with the note renderer rather than reimplementing it: the same envelopes, the
-/// same sampler, the same tables. The two differ in what they can express, not in how they sound —
-/// the offline path renders each note whole and never runs out of polyphony, while this one
-/// enforces the engine's own limit and can be driven live.
+/// same sampler, the same tables. `NoteRenderer` renders one note in isolation, for analysis and
+/// for the gates; this is the only path a *song* takes, offline or live, which is why an exported
+/// render and a live performance of the same file cannot drift apart.
 ///
 /// Not thread-safe. Events and rendering must come from the same thread, or be serialised by the
 /// caller.

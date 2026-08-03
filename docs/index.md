@@ -8,20 +8,21 @@ MIDI file in, audio out, on one core.
 
 ```cpp
 #include <tabulasonora/rom_image.hpp>
-#include <tabulasonora/note_renderer.hpp>
-#include <tabulasonora/sequence_renderer.hpp>
+#include <tabulasonora/tone_generator.hpp>
+#include <tabulasonora/sequence_player.hpp>
 
 auto rom = ts::RomImage::open("SCCore.dll");
 ts::NoteRenderer notes(rom);
-ts::SequenceRenderer renderer(notes);
-
-auto result = renderer.render_file("song.mid", {
+ts::ToneGenerator engine(notes, {
+    .polyphony = ts::ToneGeneratorOptions::unlimited_polyphony,
     .map = ts::ToneMap::sc55,   // the vintage to resolve programs against
-    .tail_seconds = 2.2,
 });
+
+auto player = ts::SequencePlayer::from_file(engine, "song.mid");
+auto result = player.render_to_end(/*tail_seconds=*/2.2);
 ```
 
-`result.left` and `result.right` are the finished mix at ts::NoteRenderer::sample_rate.
+`result.left` and `result.right` are the finished mix at ts::ToneGenerator::sample_rate.
 
 ## Where to start
 
@@ -52,8 +53,8 @@ namespace `ts`.
 | DSP | The per-voice signal path | ts::Sampler, ts::Interpolator, ts::StateVariableFilter, ts::PitchChain, ts::TvaChain, ts::TvfChain, ts::LfoEngine |
 | Effects | The three send effects and their coefficient tables | ts::Reverb, ts::Chorus, ts::SystemDelay, ts::EffectPresets, ts::EffectProgrammer |
 | MIDI | Reading a Standard MIDI File into something renderable | ts::smf::MidiEvent, ts::Sequence |
-| Render | The offline path — every note rendered whole, then mixed | ts::SequenceRenderer, ts::NoteRenderer, ts::wav::write |
-| Real time | The block loop, 32 samples at a time, with a voice limit that steals | ts::ToneGenerator, ts::Part, ts::VoicePool, ts::FrameRing |
+| The engine | The block loop, 32 samples at a time, and the parts it drives | ts::ToneGenerator, ts::Part, ts::VoicePool, ts::FrameRing |
+| Render | Playing a file through it, live or into a buffer | ts::SequencePlayer, ts::RenderOptions, ts::NoteRenderer, ts::wav::write |
 
 ## You must supply the DLL
 
@@ -87,10 +88,16 @@ interoperability effort: music written for the Sound Canvas should keep playing 
 that played it stops being available, on platforms the original plugin never supported.
 
 This repository is the reference implementation. It began as a port of the C# engine, which is now
-archived and kept as the oracle each phase was verified against; both are built to the
-\ref spec "specification" recovered from the DLL. Being C++ with a BSD 3-Clause licence means a
-host that cannot take a .NET runtime — including GPL software such as
-[Cog](https://github.com/losnoco/Cog) — can embed it directly.
+archived and kept as a record; both are built to the \ref spec "specification" recovered from the
+DLL. Being C++ with a BSD 3-Clause licence means a host that cannot take a .NET runtime — including
+GPL software such as [Cog](https://github.com/losnoco/Cog) — can embed it directly.
+
+And the plugin is itself a port: `SCCore.dll` carries the SC-8820's own mask ROMs and reproduces
+its voice down to the fixed-point arithmetic. The lineage runs hardware → plugin → here, and this
+end of it is not confined to what the previous two could do — it will run 64 parts over four ports
+where the module has 32 and the shipped DLL reaches 16, and will grow its voice pool past the
+hardware's 64 rather than steal. Everything of that kind is opt-in, because the default has a job:
+**match the module, and exceed it only on request.**
 
 ## How this was written
 

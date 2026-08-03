@@ -90,11 +90,18 @@ tabula-sonora render song.mid out.wav --map 4
 | `--volume G` | linear gain on the finished mix |
 | `--drum-map 0..5` | drum map row, when you want one the vintage would not pick |
 | `--no-reverb`, `--no-chorus`, `--no-delay` | effects are on by default, as the module has them |
-| `--stream` | render through the real-time block loop instead of the offline path |
+| `--stream` | limit polyphony to the hardware's 64 voices |
+| `--polyphony N` | voice limit outright; `0` grows the pool on demand, and is the default |
+| `--ports 1\|2\|4` | 16, 32 or 64 parts; two is the hardware |
 
-`--stream` is worth knowing about. It drives the same block loop the players use, so the difference
-the architecture makes — a 64-voice limit that actually steals, live controllers, effect types that
-change mid-song — can be heard against the offline render of the same file.
+Every render goes through the block loop — there is no second renderer to choose between, and
+`--stream` no longer selects one. What it selects is the module's own voice limit, so that the
+stealing can be heard as the module would do it. The default instead grows the pool, so every note
+in the file sounds; `render` says afterwards which of the two happened, because a file that never
+ran out renders identically at any limit.
+
+`--ports 4` is past what the module can do and wants a voice limit raised to suit — sixty-four
+parts sharing sixty-four voices would steal without pause. See \ref architecture.
 
 Two more subcommands exist for analysis: `render-note` writes a single note as raw interleaved
 float32, `dump-effect` writes a send effect's impulse response, and `bench` times the render path
@@ -126,9 +133,12 @@ quits. Playback starts immediately — the song is synthesised through the block
 there is nothing to wait for and a long file costs no more memory than a short one. `--prerender`
 renders the whole song first instead, which makes seeking exact.
 
-`tabula-sonora-tui` is a full-screen mixer over the *running* engine: sixteen parts with the tone
-each program resolved to, live volume, expression and pan, a per-channel voice count, and mute and
-solo that take effect on a note already sounding.
+`tabula-sonora-tui` is a full-screen mixer over the *running* engine: one strip per part the file
+actually addresses, with the tone each program resolved to, live volume, expression and pan, a
+per-channel voice count, and mute and solo that take effect on a note already sounding. It opens
+four ports rather than the hardware's two, and raises the voice limit to match — a player is handed
+whatever it is given, and a file whose parts the engine cannot reach is a silence a listener cannot
+diagnose.
 
 Both build on Windows as well, and both drive the same `ts::audio` core, so the ring protocol and
 the transport exist once. The player takes every render option above, plus:
@@ -169,10 +179,15 @@ engine.send_channel(0x80, 60, 0);     // note off, whenever
 Send events between `render` calls and they land on the block boundary, which is the grid the
 engine itself applies them on. Polyphony is the hardware's own 64 voices; past that the allocator
 steals, taking whole notes rather than half of one and fading what it takes.
+ts::ToneGeneratorOptions::polyphony raises that limit, and
+ts::ToneGeneratorOptions::unlimited_polyphony makes the pool grow rather than steal — right for an
+offline render, wrong on an audio thread, since growing allocates.
 
 The engine has 32 parts over two ports — `send_channel` has an overload taking a port index, and
 ts::ToneGenerator::part is indexed `port * 16 + channel`. A host that never names a port drives
 port A and behaves exactly as a sixteen-part engine.
+ts::ToneGeneratorOptions::ports takes 1, 2 or 4, and four is an extension past the module rather
+than something it does; ts::ToneGenerator::max_port_count says so in the reference.
 
 \note ts::ToneGenerator is not thread-safe: events and rendering must come from the same thread. To
 get audio to an audio callback on another thread, hand blocks across ts::FrameRing, the lock-free
@@ -188,12 +203,12 @@ player.seek(60 * ts::ToneGenerator::sample_rate);
 player.render(left, right);
 ```
 
-\note One thing genuinely differs from ts::SequenceRenderer. The offline path latches a note's
-program, bank and pan by looking them up at the note's own position, which picks up a program
-change written *after* the note-on at the same tick. A running engine cannot: the note-on arrives
-first and plays whatever program was already selected — which is what the module does. Some files,
-`canyon.mid` among them, put their program changes last at tick 0, so the first few notes come out
-on a different patch here.
+\note Events at the same tick are dispatched in the order the file writes them, which is not always
+the order it seems to intend. A note-on plays whatever program was selected when it arrived, so a
+program change written *after* it at the same tick reaches the following note and not that one.
+That is what the module does — a running engine has no way to look ahead — and some files,
+`canyon.mid` among them, put their program changes last at tick 0, so their first few notes sound
+on the previous patch.
 
 ## From code
 
@@ -218,23 +233,28 @@ those headers under it too. C++20 comes through the same way.
 auto rom = ts::RomImage::open(dll_path);
 
 ts::NoteRenderer notes(rom);
-ts::SequenceRenderer renderer(notes);
-auto result = renderer.render_file("song.mid", { .map = ts::ToneMap::sc8820 });
+ts::ToneGenerator engine(notes, { .map = ts::ToneMap::sc8820 });
+
+auto player = ts::SequencePlayer::from_file(engine, "song.mid");
+auto result = player.render_to_end();
 
 // result.left / result.right are float, at result.sample_rate (32 kHz).
 ```
 
+ts::SequencePlayer::render_to_end streams the whole file into memory from wherever the player
+currently is; ts::SequencePlayer::render fills a pair of buffers instead, which is the same work in
+whatever sized pieces the caller wants. Nothing about the engine changes between them.
+
 To mute or solo parts — for a mixer UI, say — hold a ts::ChannelMask and mutate it freely. Its
-flags are atomics, so it is safe to toggle from another thread while a render runs, and the
-renderer snapshots it once so a mid-render change cannot make some notes of a part sound and others
-not.
+flags are atomics, so it is safe to toggle from another thread while a render runs, and it is read
+at the mix rather than at note-on, so a part goes quiet on the next block and comes back on the
+one after.
 
 ```cpp
 ts::ChannelMask channels;
 channels.set_muted(9, true);                  // drop the drum part
 
-ts::RenderOptions options{ .channels = &channels };
-auto dry = renderer.render(sequence, options);
+ts::ToneGenerator engine(notes, { .channels = &channels });
 ```
 
 Writing the result out is ts::wav::write.
@@ -242,9 +262,8 @@ Writing the result out is ts::wav::write.
 ## Holding the engine {#holding-the-engine}
 
 The chain borrows downward. A ts::NoteRenderer keeps a reference to the image it was built over,
-ts::ToneGenerator and ts::SequenceRenderer keep one to the renderer, and ts::SequencePlayer keeps one
-to the engine — no layer owns anything below it, which is what every *must outlive it* in the headers
-is saying. The snippets above are stack locals in a single scope, and that is all a `main` needs.
+ts::ToneGenerator keeps one to the renderer, and ts::SequencePlayer keeps a pointer to the engine —
+no layer owns anything below it, which is what every *must outlive it* in the headers is saying. The snippets above are stack locals in a single scope, and that is all a `main` needs.
 
 A host built the other way cannot do that. A plugin with `startup()` and `shutdown()`, or a session
 object that outlives any one call, holds the chain as members and fills them in later — and
@@ -274,7 +293,7 @@ rom.reset();
 
 The pointer rather than the value, because the pointee does not move when the host object does. Hold
 the chain by value in a struct that is later moved and the renderer's reference to the image, and the
-sequence renderer's pointer to the renderer, both go on addressing the moved-from shells. Nothing
+engine's reference to the renderer, both go on addressing the moved-from shells. Nothing
 announces it. Behind a `std::unique_ptr` the addresses the layers above captured never change, so the
 question does not arise.
 

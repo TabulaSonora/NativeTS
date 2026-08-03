@@ -55,11 +55,18 @@ TEST_CASE("the block loop reproduces the reference to within one LSB", "[stream]
     // an accident of allocation rather than a behaviour.
     //
     // Measured across all four tone maps and both files: 0.006% of samples differ and none by more
-    // than one LSB -- isolated samples at about -90 dBFS. The offline path remains bit-exact, so
-    // this bound is on the block loop's own arithmetic and nothing upstream of it.
+    // than one LSB -- isolated samples at about -90 dBFS. Every other gate was bit-exact against
+    // the same reference, so this bound is on the block loop's own arithmetic and nothing upstream
+    // of it.
     //
     // Chasing it further would mean replicating an uninitialised-buffer accident exactly. The bound
     // is asserted instead, and it is tight enough that a real regression cannot hide under it.
+    //
+    // What this gate is *now*: all four of its cases touch a wave that starts mid-block, and the
+    // exact-start decode moved every one of them away from what the archived C# engine produced.
+    // `dump_stream_renders.py` still harvests that engine, so a fixture generated from it no longer
+    // applies -- the references this gate passes against are this engine's own output, kept as a
+    // regression baseline until the DLL-derived gate replaces it. It is not an independent check.
     const fs::path index_path = testdata::repository_root() / "fixtures" / "stream_renders.json";
     if (!fs::exists(index_path)) {
         SKIP("No stream fixtures. Generate them with:\n"

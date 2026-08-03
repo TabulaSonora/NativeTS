@@ -52,7 +52,10 @@ section skew above.
   wave mask ROMs (IC7 128 Mbit and IC39 64 Mbit) embedded back-to-back. Each sample is a
   block-floating-point ADPCM pair of streams — a per-sample delta and a per-16-sample scale
   nibble — decoded as `cumsum(delta << (scale + 10)) * CONST`. Read by ts::WaveRom and decoded by
-  ts::Sampler.
+  ts::Sampler. A wave's data may **start and end partway into a scale block**; two in five
+  descriptors do, and the decoder indexes the scale stream by absolute sample position rather than
+  rounding to a boundary. Bank A spans all sixteen regions its four-bit field can name
+  (ts::WaveRom::bank_a_region_count), bank B eight.
 - **Patch directory** (data section): `tone` (0x100-stride records = 0x24 header plus four 0x6e
   partial blocks), `multisample` (0x8c stride, key/velocity zone → wave number), `wavedesc` (ROM
   coordinates, root key and loop), plus the `layered` alternate-articulation table and three lookup
@@ -78,7 +81,7 @@ tabula-sonora extract-tables tables/
 ```
 
 Each output is a byte-for-byte slice of the DLL at the offset the manifest records — `size` bytes
-at `file_offset`. All 48 cached tables match the DLL byte-for-byte at these offsets. One,
+at `file_offset`. All 50 cached tables match the DLL byte-for-byte at these offsets. One,
 `kf_tvfenv`, is an over-read whose used rows 0–15 match; the unused high rows differ and are never
 indexed.
 
