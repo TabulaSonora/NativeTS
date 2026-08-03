@@ -156,8 +156,17 @@ only the one sampler between them.
 
 ## Mixing while it plays
 
-The mixer is sixteen live channel strips, and the two kinds of control on them behave differently
-on purpose:
+The mixer is a stack of live channel strips, one per part, with the four faders across the width of
+each row rather than crammed into a column — a fader that is 7rem wide gives one pixel to every
+three MIDI values, which is not a control so much as a suggestion.
+
+Which parts get a row is not fixed. The first sixteen are always there: they are what the on-screen
+keyboard plays into and what any ordinary file addresses. The engine has thirty-two, and the rest
+appear only when the loaded song reaches them — ts::SequencePlayer routes on the port a track is
+tagged for, so a two-port file lights up the strips it actually uses and nothing else. A row for a
+part that nothing can reach can only mislead.
+
+The two kinds of control on a strip behave differently on purpose:
 
 - **Mute and solo** go to ts::ChannelMask, which sits at the mix where no MIDI message reaches.
   They take effect on the next block, and nothing a file does can undo them.
