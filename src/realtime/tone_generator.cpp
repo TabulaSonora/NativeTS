@@ -308,7 +308,12 @@ int ToneGenerator::active_voices() const noexcept
 
 const Part& ToneGenerator::part(int index) const noexcept
 {
-    return impl_->parts[static_cast<std::size_t>(index)];
+    // Clamped rather than trusted. This has to return a reference and cannot throw, so the choice
+    // is between defined data and reading whatever follows the array -- and the caller that gets
+    // this wrong is a UI walking `ChannelMask::channel_count` parts on an engine that has fewer,
+    // which is a mistake that shows up as plausible garbage rather than as a crash.
+    const int last = static_cast<int>(impl_->parts.size()) - 1;
+    return impl_->parts[static_cast<std::size_t>(std::clamp(index, 0, last))];
 }
 
 const VoicePool& ToneGenerator::voices() const noexcept

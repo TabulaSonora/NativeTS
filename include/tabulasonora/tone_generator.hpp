@@ -182,6 +182,10 @@ public:
     ///
     /// The first sixteen are port A and are what a host that never names a port drives, so an
     /// engine sent only port-A traffic behaves exactly as a sixteen-part one.
+    ///
+    /// An index past `parts()` is **clamped**, not undefined — but it is still a caller's bug, and
+    /// `ChannelMask::channel_count` is not the bound to walk: the mask is sixty-four wide whatever
+    /// the engine is.
     [[nodiscard]] const Part& part(int index) const noexcept;
 
     /// The voice allocator.

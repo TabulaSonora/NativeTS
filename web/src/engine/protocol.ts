@@ -26,6 +26,9 @@ export interface EngineSnapshot {
     activeVoices: number;
     noteCount: number;
     drumKit: number;
+
+    /** The kit loaded on each port's drum part, in port order. */
+    drumKits: number[];
     effectiveDrumMapRow: number;
     songComplete: boolean;
     channels: Partial<ChannelSnapshot>[];
@@ -41,7 +44,12 @@ export interface RomInfo {
 export interface SongInfo {
     name: string;
     lengthSamples: number;
-    usedChannels: number;
+
+    /**
+     * The parts the file addresses, as `port * 16 + channel`, ascending. Ports are already folded
+     * onto the ones the engine has, so this is what will sound rather than what the file asked for.
+     */
+    usedParts: number[];
 }
 
 export interface EngineSettings {

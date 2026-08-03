@@ -111,7 +111,11 @@ public:
 
     /// One Control Change — the mixer's faders. Really sent as MIDI, so a running sequence
     /// overwrites it at its next controller event, exactly as on the module's front panel.
-    void send_control(int channel, int controller, int value);
+    ///
+    /// Addressed by **part**, `port * 16 + channel`, which is what the mixer's strips are numbered
+    /// by. The port is split back out here rather than by the caller, since a status byte has no
+    /// room for it.
+    void send_control(int part, int controller, int value);
 
     /// Per-channel mute and solo. Applied at the mix where no MIDI message reaches, and shared with
     /// every generator this session builds, so they survive rebuilds.
@@ -148,6 +152,7 @@ private:
     };
 
     [[nodiscard]] ToneGeneratorOptions options() const;
+    void send_control(int port, int channel, int controller, int value);
     void rebuild();
     void restore_parts(const std::vector<std::array<int, 7>>& previous);
 
@@ -164,7 +169,12 @@ private:
     std::vector<MidiEvent> song_events_;
     std::string song_name_;
     std::int64_t song_length_ = 0;
-    int used_channels_ = 0;
+
+    /// Which parts the loaded song addresses, as `port * 16 + channel`, ascending.
+    ///
+    /// A list rather than a bit mask because there are up to sixty-four of them and a mask that
+    /// wide does not survive the trip through JSON: a JavaScript number carries 53 bits exactly.
+    std::vector<int> used_parts_;
 
     EngineSettings settings_;
     std::optional<int> drum_map_row_;

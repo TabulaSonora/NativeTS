@@ -77,8 +77,17 @@ body {
     padding: var(--space-xl) var(--space-md) var(--space-2xl);
 }
 
+/*
+    Wider than the design system's prose measure, and deliberately. `--content-width` is sized for
+    reading, and most of this page is not read: it is a mixer with a row per part and four faders on
+    each, and every pixel the shell gives back becomes fader travel. The prose that is here keeps its
+    own measure -- the lede is capped at 40rem regardless of this.
+
+    Capped rather than the full window, because a 4K monitor would otherwise put the channel number
+    and the chorus send a foot apart.
+*/
 header, main, footer, .nav {
-    max-width: var(--content-width);
+    max-width: min(100%, 1600px);
     margin: 0 auto;
 }
 
@@ -497,25 +506,38 @@ p.note {
 /* ── Mixer ──────────────────────────────────────────────────────────────────── */
 
 /*
-    Hairline separators from a 1px grid gap over the container's background. A strip now carries a
-    name and four faders as well as its two buttons, so the column count follows the width instead of
-    being pinned at eight: below about 9rem a fader stops being draggable with any precision.
+    A stack, one row per part, hairline-separated by a 1px gap over the container's background.
+
+    Rows rather than a grid of columns because a strip's four faders are what a hand actually
+    reaches for, and a column 9rem wide gives each of them 7rem of travel — about fifty pixels for
+    128 steps, where a single pixel is three MIDI values. Across a row they get the width of the
+    panel. It also means the eye reads down one list of channel numbers instead of wrapping through
+    a grid to find part 11, and the list can grow past sixteen without reflowing everything above it.
 */
 .strips {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr));
+    display: flex;
+    flex-direction: column;
     gap: 1px;
     background: var(--border);
     border: 1px solid var(--border);
     border-radius: var(--radius-card);
     overflow: hidden;
+
+    /* The strips lay themselves out against this, not against the viewport. The panel sits in a
+       column a good deal narrower than the window, so a viewport media query would give a strip
+       four faders' worth of room it does not have. */
+    container-type: inline-size;
 }
 
+/*
+    Four columns: who, what, the two switches, and the faders. The first three are sized to their
+    content so the fourth takes everything left over, which is the point of the row.
+*/
 .strip {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    gap: var(--space-xs);
+    display: grid;
+    grid-template-columns: 7.5rem minmax(6rem, 12rem) auto minmax(0, 1fr);
+    align-items: center;
+    gap: var(--space-sm);
     padding: var(--space-sm);
     background: var(--surface);
 }
@@ -524,8 +546,8 @@ p.note {
     opacity: 0.45;
 }
 
-/* A channel the loaded song never addresses. Dimmed rather than hidden: it is still playable from a
-   keyboard, and sixteen strips that came and went with each file would be worse than a quiet one. */
+/* One of the first sixteen that the loaded song never addresses. Dimmed rather than hidden: it is
+   still playable from a keyboard. Parts past the sixteenth are not drawn at all unless used. */
 .strip.unused .sounding,
 .strip.unused .label {
     opacity: 0.5;
@@ -534,7 +556,6 @@ p.note {
 .strip .label {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-xs);
     font-family: var(--font-mono-qp);
     font-size: var(--text-caption);
@@ -543,14 +564,27 @@ p.note {
     white-space: nowrap;
 }
 
-/* The channel's live voice count. Purple because it is a state readout rather than a health signal --
-   voices in use are neither good nor bad, and the 64-voice ceiling is the transport's business. */
+/*
+    The channel's live voice count. Purple because it is a state readout rather than a health signal
+    -- voices in use are neither good nor bad, and the 64-voice ceiling is the transport's business.
+
+    Held at a fixed size and hidden rather than removed when the channel is silent. It updates ten
+    times a second, and a badge that joins and leaves the line takes the row's height with it: a
+    stack of rows that all resize as the music plays is unreadable in a way the number is not worth.
+*/
 .strip .voices {
+    min-width: 1.15rem;
     padding: 0 0.3rem;
     border-radius: var(--radius-tag);
     background: var(--purple);
     color: var(--white);
     font-size: var(--text-caption);
+    line-height: var(--lh-caption);
+    text-align: center;
+}
+
+.strip .voices.quiet {
+    visibility: hidden;
 }
 
 .strip .sounding {
@@ -567,17 +601,19 @@ p.note {
     gap: var(--space-xs);
 }
 
+/* The four side by side, sharing what the row has left. They stay equal so the eye can read a
+   column of volumes down the stack without measuring each one against a different scale. */
 .strip .faders {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: var(--space-sm);
 }
 
-/* Label and slider on one line: four stacked rows have to fit in the height of a strip, and a label
-   above each would double it for four words nobody needs to read twice. */
+/* Label and slider on one line: a label above each would double the row height for four words
+   nobody needs to read twice. */
 .fader {
     display: grid;
-    grid-template-columns: 2rem 1fr;
+    grid-template-columns: 2rem minmax(0, 1fr);
     align-items: center;
     gap: var(--space-xs);
     font-size: var(--text-caption);
@@ -586,6 +622,34 @@ p.note {
 .fader input[type="range"] {
     width: 100%;
     height: 0.9rem;
+}
+
+/*
+    Under about 52rem the row becomes two. Label, name and switches keep one line — they are short
+    and belong together — and the faders take the full width beneath in two columns.
+
+    The threshold is where four abreast stop being worth having: a fader needs its 2rem name plus
+    something like 6rem of travel to be placed accurately, and four of those alongside a channel
+    number, a tone name and two buttons is where 52rem goes. Below it, two columns of the full width
+    beat four of a quarter — and both beat the old grid, where the whole strip was 9rem wide.
+*/
+@container (max-width: 52rem) {
+    .strip {
+        grid-template-columns: 7.5rem minmax(0, 1fr) auto;
+        row-gap: var(--space-xs);
+    }
+
+    .strip .faders {
+        grid-column: 1 / -1;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+/* Narrower still — a phone. One fader per line, so the travel is the width of the screen. */
+@container (max-width: 26rem) {
+    .strip .faders {
+        grid-template-columns: minmax(0, 1fr);
+    }
 }
 
 /* ── Catalog: banks, programs, kits, pads ───────────────────────────────────── */

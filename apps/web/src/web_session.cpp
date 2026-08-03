@@ -132,17 +132,33 @@ void WebSession::load_song(std::span<const std::uint8_t> midi, std::string name)
 {
     auto events = smf::parse(midi, sample_rate);
 
-    // Which channels the file touches at all, so the mixer can dim the strips a four-part sequence
-    // never addresses instead of showing sixteen identical dead ones.
-    int used = 0;
+    // Which parts the file touches at all, so the mixer can show those and no others. A sixteen-part
+    // file has no business drawing sixty-four strips, and the ones it would draw are parts nothing
+    // can reach.
+    //
+    // The port is folded exactly as the engine folds it, because the question the mixer is asking is
+    // "which strips will make a sound", not "what does the file say". A file tagged for four ports
+    // playing on a two-port engine addresses parts on both, and its port C traffic lands on port A.
+    const int ports = std::max(1, options().ports);
+    std::vector<bool> seen(static_cast<std::size_t>(ChannelMask::channel_count), false);
     for (const auto& message : events) {
-        if (message.kind == MidiEventKind::channel) {
-            used |= 1 << message.channel();
+        if (message.kind != MidiEventKind::channel) {
+            continue;
+        }
+        const int part = ((message.port & (ports - 1)) * Sequence::channel_count) + message.channel();
+        if (part >= 0 && part < ChannelMask::channel_count) {
+            seen[static_cast<std::size_t>(part)] = true;
+        }
+    }
+
+    used_parts_.clear();
+    for (int part = 0; part < ChannelMask::channel_count; ++part) {
+        if (seen[static_cast<std::size_t>(part)]) {
+            used_parts_.push_back(part);
         }
     }
 
     song_length_ = events.empty() ? 0 : events.back().position;
-    used_channels_ = used;
     song_name_ = std::move(name);
     song_events_ = std::move(events);
 
@@ -170,7 +186,7 @@ void WebSession::unload_song()
     song_events_.clear();
     song_name_.clear();
     song_length_ = 0;
-    used_channels_ = 0;
+    used_parts_.clear();
     player_.reset();
     if (engine_) {
         engine_->reset();
@@ -288,9 +304,31 @@ void WebSession::send_channel(int status, int data1, int data2)
     }
 }
 
-void WebSession::send_control(int channel, int controller, int value)
+/// The kit each port has loaded, in port order.
+///
+/// One per port and not one overall: each port has its own drum part, so a two-port file can be
+/// playing two different kits at once, and the strip that says which is the one on that port.
+static json drum_kits_json(const ToneGenerator* engine)
 {
-    send_channel(0xB0 | (channel & 0x0F), controller, value);
+    json kits = json::array();
+    if (engine != nullptr) {
+        for (int port = 0; port < engine->ports(); ++port) {
+            kits.push_back(engine->drum_kit_for(port));
+        }
+    }
+    return kits;
+}
+
+void WebSession::send_control(int part, int controller, int value)
+{
+    send_control(part / Sequence::channel_count, part % Sequence::channel_count, controller, value);
+}
+
+void WebSession::send_control(int port, int channel, int controller, int value)
+{
+    if (engine_) {
+        engine_->send_channel(port, 0xB0 | (channel & 0x0F), controller, value);
+    }
 }
 
 std::string WebSession::snapshot_json() const
@@ -309,7 +347,12 @@ std::string WebSession::snapshot_json() const
         }
     }
 
-    for (int channel = 0; channel < ChannelMask::channel_count; ++channel) {
+    // The engine's own part count, not the mask's. `ChannelMask` is sixty-four wide because a
+    // four-port engine has that many parts to mute; this engine has as many as its ports give it,
+    // and asking for one past them reads memory that is not a part.
+    const int part_count = engine_ ? engine_->parts() : Sequence::channel_count;
+
+    for (int channel = 0; channel < part_count; ++channel) {
         if (!engine_) {
             channels.push_back(json::object());
             continue;
@@ -343,6 +386,7 @@ std::string WebSession::snapshot_json() const
                         {"activeVoices", engine_ ? engine_->active_voices() : 0},
                         {"noteCount", engine_ ? engine_->note_count() : 0},
                         {"drumKit", engine_ ? engine_->drum_kit() : -1},
+                        {"drumKits", drum_kits_json(engine_ ? &*engine_ : nullptr)},
                         {"effectiveDrumMapRow", effective_drum_map_row()},
                         {"songComplete", song_complete()},
                         {"channels", channels}};
@@ -371,7 +415,7 @@ std::string WebSession::song_info_json() const
 
     return json{{"name", song_name_},
                 {"lengthSamples", song_length_},
-                {"usedChannels", used_channels_}}
+                {"usedParts", used_parts_}}
         .dump();
 }
 
@@ -617,8 +661,8 @@ void WebSession::rebuild()
     // vintage change does not silently reset every channel to piano.
     std::vector<std::array<int, 7>> previous;
     if (engine_) {
-        previous.reserve(ChannelMask::channel_count);
-        for (int channel = 0; channel < ChannelMask::channel_count; ++channel) {
+        previous.reserve(static_cast<std::size_t>(engine_->parts()));
+        for (int channel = 0; channel < engine_->parts(); ++channel) {
             const Part& part = engine_->part(channel);
             previous.push_back({part.bank, part.program, part.volume(), part.pan,
                                 part.expression(), part.reverb_send, part.chorus_send});
@@ -652,20 +696,27 @@ void WebSession::rebuild()
 /// are still lost; only the settings survive.
 void WebSession::restore_parts(const std::vector<std::array<int, 7>>& previous)
 {
-    for (int channel = 0; channel < static_cast<int>(previous.size()); ++channel) {
+    for (int index = 0; index < static_cast<int>(previous.size()); ++index) {
         const auto& [bank, program, volume, pan, expression, reverb, chorus] = previous
-            [static_cast<std::size_t>(channel)];
+            [static_cast<std::size_t>(index)];
+
+        // A part index is not a channel. `port * 16 + channel` has to be taken apart again before
+        // it can go back out as MIDI, because a status byte carries four bits of channel and the
+        // port travels beside it -- `0xC0 | 16` is not part 17's program change, it is a channel
+        // aftertouch on part 1.
+        const int port = index / Sequence::channel_count;
+        const int channel = index % Sequence::channel_count;
 
         // Bank before program, as anything selecting a sound must: the program change is what
         // latches the pair.
-        send_control(channel, 0, bank);
-        engine_->send_channel(0xC0 | channel, program, 0);
+        send_control(port, channel, 0, bank);
+        engine_->send_channel(port, 0xC0 | channel, program, 0);
 
-        send_control(channel, 7, volume);
-        send_control(channel, 10, pan);
-        send_control(channel, 11, expression);
-        send_control(channel, 91, reverb);
-        send_control(channel, 93, chorus);
+        send_control(port, channel, 7, volume);
+        send_control(port, channel, 10, pan);
+        send_control(port, channel, 11, expression);
+        send_control(port, channel, 91, reverb);
+        send_control(port, channel, 93, chorus);
     }
 }
 
