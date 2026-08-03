@@ -306,6 +306,33 @@ Amplitude's +6.0 dB at full deflection is the doubling the law predicts, reached
 direction. Both rate destinations land in the same analysis bin as the module at every step. The
 three destinations not in the table are the thinly-measured ones under Known limits.
 
+### Measuring a random modulation
+
+The three random LFO shapes cannot be checked the way the rest are, because there is no value to
+agree on: the point of the parameter is that the value is drawn. What *can* be checked is
+everything around the draw, and each part needs its own measurement.
+
+**The timing is exact.** A held note on a patch whose LFO2 is a sample-and-hold, with the matrix
+driving its pitch depth to full scale, gives a pitch track that sits flat and steps. The module and
+this engine step at the same moments — both plateau, both break at t ≈ 336 ms into the window, both
+carry the same 5 Hz LFO1 vibrato on top of the plateau. That is the redraw-on-wrap law and the
+rate, and it either matches or it visibly does not.
+
+**The depth matches, measured as spread rather than extent.** Peak-to-peak of a random signal is
+itself random and says little — the two engines' figures scattered between 4 and 168 cents across
+one sweep. The standard deviation converges:
+
+| | Module | Here |
+|---|---|---|
+| pitch spread, route assigned | 272.9 cents | 273.0 cents |
+| pitch spread, route switched off | 21.7 cents | 22.0 cents |
+
+Four tenths of a percent on a quantity built entirely out of random draws. The control row is the
+part that makes it meaningful: with the route off, both engines fall back to the same small default
+vibrato, so the assigned row is measuring the random shape and not the patch.
+
+**The values differ**, and Known limits says why. Nothing in this section depends on them.
+
 ### What the digests should be
 
 Three per file, all from the block loop, because one number cannot say both things:
@@ -350,23 +377,25 @@ Stated plainly, because they are not covered by the numbers above:
 - **Drum tones with the 4-partial layout are not reversed** upstream. A melodic tone here has two
   partial slots (ts::Tone::partial_slots), and asking for more throws rather than guessing. General
   MIDI kits resolve to ordinary melodic tones, so the common path works.
-- **LFO random waveforms** need the engine's own RNG state and return zero, as in the reference.
-  Waveform selectors 1, 2 and 3 are the affected ones. This is not a corner: probing the control
-  matrix's LFO2 destinations across the GM set found that most patches with a running LFO2 use one
-  of the three, and only thirteen of the 128 programs have an LFO2 that both runs and uses a
-  modelled shape. On such a patch a matrix depth assigned to LFO2 is computed correctly and then
-  multiplied by a waveform that is flat, so it is inaudible here and clearly audible on the module
-  — which is worth knowing before reading that difference as a fault in the matrix.
+- **The random LFO waveforms do not draw the same numbers as the module**, though they now draw
+  from the same generator by the same law. Shapes 1, 2 and 3 are implemented (see below); what is
+  not reproduced is *which* draw a given voice gets. The generator is one shared sequence and every
+  consumer advances it — the LFO shapes, the pitch start jitter, the random pan — so aligning the
+  values would mean matching the module's consumption order voice for voice, which is an accident
+  of its allocator rather than a behaviour. The shape, rate, step timing and depth are right and
+  the particular numbers are not, which is the intended side of the "audible fidelity, not bit
+  accuracy" line: a random modulation that steps at the right moments to the right *sort* of value
+  is the parameter working.
 - **Two of the control matrix's six sources go nowhere yet.** All eleven destinations are consumed
   now, but only from four sources — the mod wheel, both aftertouches and bend. CC1 and CC2 need
   their assignable controller numbers tracked first, so every destination's clamp sees a smaller
   total than the module's would with all six deflected at once. That difference only shows at the
   rail.
-- **Three destinations are wired but thinly measured.** The two LFOs' filter depths and LFO2's
-  pitch depth agree with the module wherever they could be made to move, but no probe was found
-  that drives them hard enough to be conclusive: the patches whose filters are open enough to hear
-  a cutoff sweep barely change brightness under one, and the obvious LFO2 patches run their LFO on
-  a random waveform, which is the next limit down this list.
+- **Two destinations are wired but thinly measured.** The two LFOs' filter depths agree with the
+  module wherever they could be made to move, but no probe was found that drives them hard enough
+  to be conclusive — the patches whose filters are open enough to hear a cutoff sweep barely change
+  brightness under one. LFO2's pitch depth was in this list until the random waveforms were
+  implemented, which is what made a patch that could demonstrate it available at all.
 - **Some GS part parameters are recognised and dropped**, each because nothing under them is
   modelled: assign mode (`40 1x 14`, one voice-allocation policy here), the CC1/CC2 controller
   numbers (`40 1x 1F`/`20`), and per-key Rx note-on/off in the drum setup (`40 2x 07`/`08`), whose

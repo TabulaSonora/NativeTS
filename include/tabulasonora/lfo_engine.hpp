@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tabulasonora/engine_noise.hpp"
 #include "tabulasonora/part_modifiers.hpp"
 #include "tabulasonora/partial_parameters.hpp"
 #include "tabulasonora/table_set.hpp"
@@ -68,12 +69,23 @@ class LfoRunner;
 /// Pitch depth is in *milli-semitones*, not cents. The pitch accumulator clamps at 0x1f018, which
 /// is 127 x 1000, and that is what fixes the unit.
 ///
-/// Waveform selectors 1, 2 and 3 are the random shapes, driven by a Galois LFSR. They need the
-/// engine's RNG state and are not modelled: they return zero, as in the reference.
+/// Waveform selectors 1, 2 and 3 are the random shapes. They are **not** functions of the phase the
+/// way every other shape is — they redraw when the phase *wraps* and hold or walk toward that draw
+/// in between — so they live in ts::LfoRunner rather than in `waveform` below, which asks only
+/// where in the cycle the LFO is and cannot express them.
 class LfoEngine {
 public:
     /// Scale that maps a raw waveform value to [-1, 1].
     static constexpr double waveform_scale = 32640.0;
+
+    /// Whether a waveform is one of the three random shapes, which the runner drives.
+    [[nodiscard]] static constexpr bool is_random(int waveform) noexcept
+    {
+        return waveform >= 1 && waveform <= 3;
+    }
+
+    /// How far a slewed random shape moves toward its target in one control tick.
+    static constexpr int slew_step = 0x50;
 
     /// Depth clamp and rounding constant for a destination.
     ///
@@ -98,9 +110,20 @@ public:
     }
 
     /// Creates the engine over a loaded table set, which must outlive it.
-    explicit LfoEngine(const TableSet& tables);
+    ///
+    /// `noise` is the engine's shared generator, which the random shapes draw from; when null a
+    /// private one is used. Sharing it is not a detail — the module has exactly one generator, and
+    /// the LFO shapes, the pitch start jitter and the random pan all draw from it, so which voice
+    /// draws when is part of what the sequence is.
+    explicit LfoEngine(const TableSet& tables, EngineNoise* noise = nullptr);
+
+    /// The generator the random shapes draw from.
+    [[nodiscard]] EngineNoise& noise() const noexcept { return *noise_; }
 
     /// Evaluates a waveform at a 16-bit phase.
+    ///
+    /// The three random shapes are not evaluable this way and return zero here; ts::LfoRunner
+    /// drives them, because what they depend on is the phase having wrapped rather than the phase.
     [[nodiscard]] int waveform(int phase, int waveform_index) const noexcept;
 
     /// Reads both LFO configurations for one partial: the tone-common LFO1 and the per-partial
@@ -164,6 +187,9 @@ private:
     std::span<const std::uint8_t> wave_map_;
     std::span<const std::int16_t> wave_bank_;
     std::span<const std::uint8_t> tone_;
+
+    EngineNoise* noise_;
+    EngineNoise owned_noise_;
 };
 
 /// One LFO's running state: phase, delay and fade-in accumulators, stepped a control tick at a
@@ -218,6 +244,9 @@ public:
     [[nodiscard]] double pitch_value(double wheel_depth) const noexcept;
 
 private:
+    /// Evaluates the waveform for the tick just taken, into `output_`.
+    void advance_waveform(bool wrapped) noexcept;
+
     [[nodiscard]] int faded(int depth) const noexcept;
     [[nodiscard]] double apply(int effective, int rounding) const noexcept;
 
@@ -228,6 +257,23 @@ private:
     int delay_ = 0;
     int fade_ = 0;
     bool applied_ = false;
+
+    /// The waveform value for the last tick — `g_lfo_out`.
+    ///
+    /// Kept rather than recomputed from the phase because the random shapes cannot be recomputed:
+    /// a slewed one that has arrived at its target leaves this standing untouched, so the previous
+    /// tick's value *is* this tick's answer. For every other shape it is the same number
+    /// `LfoEngine::waveform` would return, evaluated at the tick that produced the phase.
+    int output_ = 0;
+
+    /// The random shapes' two registers, which the module keeps per voice next to the phase: the
+    /// value last drawn from the generator, and the value walking toward it.
+    ///
+    /// Both start at zero, which is the one part of this not read off the engine — its per-voice
+    /// block is loaded from voice state that a note-on has already cleared. A sample-and-hold
+    /// therefore sits at zero until its first wrap rather than opening on a random step.
+    int held_ = 0;
+    int slewed_ = 0;
 };
 
 } // namespace ts

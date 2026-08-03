@@ -22,15 +22,21 @@ namespace {
 
 } // namespace
 
-LfoEngine::LfoEngine(const TableSet& tables)
+LfoEngine::LfoEngine(const TableSet& tables, EngineNoise* noise)
     : half_sine_(tables.lfo_wave()),
       rate_table_(tables.lfo_rate()),
       cents_table_(tables.lfo_cents()),
       delay_table_(tables.lfo_delay()),
       wave_map_(tables.lfo_wave_map()),
       wave_bank_(tables.lfo_wave_bank()),
-      tone_(tables.tone())
+      tone_(tables.tone()),
+      noise_(noise)
 {
+    // A private generator when none is shared keeps the shapes random rather than silent, at the
+    // cost of running its own sequence -- the same bargain `PitchChain` makes.
+    if (noise_ == nullptr) {
+        noise_ = &owned_noise_;
+    }
 }
 
 int LfoEngine::waveform(int phase, int waveform_index) const noexcept
@@ -261,7 +267,12 @@ void LfoRunner::tick(int rate_offset) noexcept
         return;
     }
 
-    phase_ = (phase_ + increment) & 0xFFFF;
+    // The wrap is caught here rather than inferred from the phase afterwards, because it is what
+    // the random shapes are driven by -- and a phase that lands exactly on zero has wrapped while
+    // one that starts there has not.
+    const int advanced = phase_ + increment;
+    phase_ = advanced & 0xFFFF;
+    advance_waveform(advanced > 0xFFFF);
 
     if (delay_ < 0xFFFF) {
         // The LFO runs during the delay but is not applied. A zero rate never completes, which is
@@ -281,6 +292,47 @@ void LfoRunner::tick(int rate_offset) noexcept
     }
 
     applied_ = true;
+}
+
+void LfoRunner::advance_waveform(bool wrapped) noexcept
+{
+    if (!LfoEngine::is_random(config_.waveform)) {
+        output_ = engine_->waveform(phase_, config_.waveform);
+        return;
+    }
+
+    // One draw per wrap, from the generator the whole engine shares.
+    if (wrapped) {
+        held_ = fx::i16(engine_->noise().next());
+    }
+
+    // Shape 1 is sample and hold: the draw is the output until the next wrap.
+    if (config_.waveform == 1) {
+        output_ = held_;
+        return;
+    }
+
+    // Shapes 2 and 3 walk toward the draw instead of stepping to it. **They are the same shape** --
+    // the engine has two switch cases for them and the two are instruction for instruction
+    // identical, same 0x50 step and same rails. Kept as one branch here rather than duplicated to
+    // look faithful, since duplicating it would suggest a difference that is not there.
+    if (slewed_ == held_) {
+        // Arrived. The engine returns without touching its output, so the previous tick's value
+        // stands -- which is why `output_` is state and not a function of the phase.
+        return;
+    }
+
+    const bool descending = held_ <= slewed_;
+    const int stepped =
+        fx::i16(descending ? slewed_ - LfoEngine::slew_step : slewed_ + LfoEngine::slew_step);
+
+    // A step that carries the sign bit has run off the end of the 16-bit range rather than moved:
+    // the walk snaps to the target instead of appearing at the far rail.
+    const bool wrapped_past = descending ? (slewed_ < 0 && stepped > 0) : (slewed_ > 0 && stepped < 0);
+    const bool overshot = descending ? (stepped < held_) : (stepped > held_);
+
+    output_ = wrapped_past || overshot ? held_ : stepped;
+    slewed_ = output_;
 }
 
 double LfoRunner::value(LfoDestination destination, int matrix_depth) const noexcept
@@ -317,7 +369,7 @@ double LfoRunner::apply(int effective, int rounding) const noexcept
         return 0.0;
     }
 
-    const int wave = engine_->waveform(phase_, config_.waveform);
+    const int wave = output_;
 
     // Sign-magnitude fixed-point multiply: magnitudes multiply, signs compose separately.
     const int magnitude = ((std::abs(wave) * std::abs(effective) * 2) + rounding) >> 16;

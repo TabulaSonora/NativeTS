@@ -30,7 +30,7 @@ struct NoteRenderer::Impl {
           tva(tables, envelopes),
           tvf(tables, envelopes),
           pitch(tables, envelopes, &noise),
-          lfo(tables),
+          lfo(tables, &noise),
           pan(tables)
     {
         // The effect coefficients come out of the same file as everything else, so opening the

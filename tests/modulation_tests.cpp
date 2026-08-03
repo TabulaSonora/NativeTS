@@ -1062,3 +1062,135 @@ TEST_CASE("the matrix's LFO rate moves the increment, and can stop the LFO", "[d
     CHECK(stalled.is_applied());
 }
 
+
+
+TEST_CASE("the random LFO shapes redraw on the phase wrapping", "[dsp]")
+{
+    // The three random shapes are the reason the runner holds waveform state at all: what they
+    // depend on is the phase having *wrapped*, which a function of the phase cannot see.
+    const Fixture fixture = Fixture::make();
+
+    // An increment that divides 0x10000 exactly, so the wrap lands on a tick this test can name:
+    // 0x2000 wraps on every eighth. It has to stay under the 0x28f6 ceiling `tick` applies, or the
+    // clamp picks the period instead and the arithmetic here is quietly wrong.
+    LfoConfig config;
+    config.increment = 0x2000;
+    static_assert(0x2000 <= 0x28F6);
+    config.delay_rate = 0xFFFF;
+    config.fade_rate = 0xFFFF;
+    config.pitch_depth = 0;
+
+    SECTION("sample and hold steps only on the wrap")
+    {
+        config.waveform = 1;
+        LfoRunner runner = fixture.lfo().create_runner(config);
+
+        std::vector<double> values;
+        for (int tick = 0; tick < 40; ++tick) {
+            runner.tick();
+            // A patch depth of zero: everything seen here is the matrix's, which is the case a
+            // silent-random-shape engine got wrong in both directions at once.
+            values.push_back(runner.value(LfoDestination::pitch, 6000));
+        }
+
+        // The value is flat except where it steps, and it steps only on the wrap. Found rather
+        // than assumed, so the test reports the period it saw instead of failing on an assumption
+        // about which tick the first one lands on.
+        std::vector<std::size_t> steps;
+        for (std::size_t i = 1; i < values.size(); ++i) {
+            if (values[i] != values[i - 1]) {
+                steps.push_back(i);
+            }
+        }
+
+        INFO("stepped at " << steps.size() << " ticks");
+        REQUIRE(steps.size() >= 3);
+        for (std::size_t i = 1; i < steps.size(); ++i) {
+            CHECK(steps[i] - steps[i - 1] == 8);
+        }
+
+        // And it does move: a shape that returned zero throughout would pass every check above.
+        CHECK(std::set<double>(values.begin(), values.end()).size() > 2);
+    }
+
+    SECTION("the slewed shapes walk toward the draw instead of stepping to it")
+    {
+        config.waveform = 2;
+        LfoRunner runner = fixture.lfo().create_runner(config);
+
+        std::vector<double> values;
+        for (int tick = 0; tick < 24; ++tick) {
+            runner.tick();
+            values.push_back(runner.value(LfoDestination::pitch, 6000));
+        }
+
+        // The walk is 0x50 a tick against a full-scale draw, so consecutive ticks differ by a
+        // bounded step where sample-and-hold would jump the whole way at once.
+        const double ceiling = (static_cast<double>(LfoEngine::slew_step) * 6000.0 * 2.0) / 65536.0;
+        for (std::size_t i = 1; i < values.size(); ++i) {
+            INFO("tick " << i << ": " << values[i - 1] << " -> " << values[i]);
+            CHECK(std::abs(values[i] - values[i - 1]) <= ceiling + 1.0);
+        }
+        CHECK(std::set<double>(values.begin(), values.end()).size() > 1);
+    }
+
+    SECTION("shapes 2 and 3 are the same shape")
+    {
+        // Not an assumption: the engine has two switch cases for them and the two are identical
+        // instruction for instruction, same step and same rails. Pinned so that a later reading of
+        // one of them cannot quietly diverge from the other.
+        EngineNoise left;
+        EngineNoise right;
+        LfoEngine engine_two{fixture.tables(), &left};
+        LfoEngine engine_three{fixture.tables(), &right};
+
+        config.waveform = 2;
+        LfoRunner two = engine_two.create_runner(config);
+        config.waveform = 3;
+        LfoRunner three = engine_three.create_runner(config);
+
+        for (int tick = 0; tick < 32; ++tick) {
+            two.tick();
+            three.tick();
+            INFO("tick " << tick);
+            REQUIRE(two.value(LfoDestination::pitch, 6000)
+                    == three.value(LfoDestination::pitch, 6000));
+        }
+    }
+
+    SECTION("the shapes share the engine's one generator")
+    {
+        // The module has a single generator and the LFO shapes, the pitch start jitter and the
+        // random pan all draw from it, so two voices sounding together do not repeat each other.
+        EngineNoise shared;
+        LfoEngine engine{fixture.tables(), &shared};
+        config.waveform = 1;
+
+        LfoRunner first = engine.create_runner(config);
+        LfoRunner second = engine.create_runner(config);
+
+        std::vector<double> a;
+        std::vector<double> b;
+        for (int tick = 0; tick < 16; ++tick) {
+            first.tick();
+            second.tick();
+            a.push_back(first.value(LfoDestination::pitch, 6000));
+            b.push_back(second.value(LfoDestination::pitch, 6000));
+        }
+        CHECK(a != b);
+    }
+
+    SECTION("waveform() cannot evaluate them and says so by returning zero")
+    {
+        for (const int shape : {1, 2, 3}) {
+            INFO("shape " << shape);
+            CHECK(LfoEngine::is_random(shape));
+            for (const int phase : {0, 0x1234, 0x8000, 0xFFFF}) {
+                CHECK(fixture.lfo().waveform(phase, shape) == 0);
+            }
+        }
+        CHECK_FALSE(LfoEngine::is_random(0));
+        CHECK_FALSE(LfoEngine::is_random(4));
+    }
+}
+

@@ -147,6 +147,17 @@ with it. And the two rates are added to the LFO's increment, which is not merely
 an increment driven to nothing stops that LFO outright — the module skips the whole update, so the
 depths stop being applied too.
 
+**The LFOs the matrix drives are not all functions of their phase.** Most of the shapes are — ask
+where in the cycle the LFO is and the value follows. Three are not: selectors 1, 2 and 3 redraw
+from the engine's shared generator when the phase *wraps*, and either hold that draw (sample and
+hold) or walk toward it by a fixed step per tick. Selectors 2 and 3 are the same shape; the module
+has two cases for them and they are identical. This is why ts::LfoRunner carries waveform state
+rather than recomputing from the phase: a slewed shape that has arrived at its target leaves its
+output untouched, so the previous tick's value *is* this tick's answer, and there is no phase to
+recover it from. The generator is one shared sequence — ts::EngineNoise, which the pitch start
+jitter and the random pan draw from too — so which voice draws when is part of what the sequence
+is.
+
 Four of the six sources reach them. CC1 and CC2 still need their assignable controller numbers
 (`40 1x 1F` and `20`) tracked before they can reach anything at all, so every clamp here sees a
 smaller total than the module's would with all six deflected at once. That difference only shows at
