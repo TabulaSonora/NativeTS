@@ -8,6 +8,7 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <map>
 
 namespace ts::smf {
 namespace {
@@ -21,6 +22,7 @@ struct RawEvent {
     int status = 0;
     int data1 = 0;
     int data2 = 0;
+    int port = 0;
     std::vector<std::uint8_t> bytes;
 };
 
@@ -100,6 +102,11 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
     const int ticks_per_quarter = division;
     std::size_t position = 14;
     std::vector<RawEvent> merged;
+
+    // Device names to port numbers, assigned in order of first appearance and shared across
+    // tracks: two tracks naming the same output belong to the same port, which is the whole point
+    // of naming it.
+    std::map<std::string, int> device_ports;
     int order = 0;
 
     for (int track = 0; track < track_count; ++track) {
@@ -114,6 +121,11 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
         const std::size_t end = std::min(position + length, data.size());
         std::int64_t tick = 0;
         int status = 0;
+
+        // The port a track is tagged for, and it is a *prefix*: it applies to the events that
+        // follow it in the track, so a track that switches ports partway is honoured rather than
+        // being forced to one. Tracks start on port 0, which is every untagged file.
+        int track_port = 0;
 
         while (position < end) {
             int delta = 0;
@@ -139,11 +151,32 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                 int meta_length = 0;
                 position = read_variable_length(data, position, meta_length);
 
-                if (meta_type == 0x51 && meta_length >= 3) {
+                if (meta_type == 0x21 && meta_length >= 1) {
+                    // FF 21: MIDI Port. The number is taken as given -- clamping to the engine's
+                    // width belongs to the engine, which masks, and doing it here would lose the
+                    // file's intent for a wider one.
+                    track_port = data[position];
+                } else if (meta_type == 0x09 && meta_length >= 1) {
+                    // FF 09: Device Name. There is no number in it, so names are assigned ports in
+                    // order of first appearance, which is deterministic and matches what a
+                    // sequencer means by listing outputs. An explicit FF 21 later in the track
+                    // still overrides it.
+                    const std::string name(
+                        reinterpret_cast<const char*>(data.data() + position),
+                        static_cast<std::size_t>(meta_length));
+                    const auto found = device_ports.find(name);
+                    if (found != device_ports.end()) {
+                        track_port = found->second;
+                    } else {
+                        const auto assigned = static_cast<int>(device_ports.size());
+                        device_ports.emplace(name, assigned);
+                        track_port = assigned;
+                    }
+                } else if (meta_type == 0x51 && meta_length >= 3) {
                     const int tempo =
                         (data[position] << 16) | (data[position + 1] << 8) | data[position + 2];
                     merged.push_back(
-                        RawEvent{tick, order++, RawEvent::Kind::tempo, tempo, 0, 0, {}});
+                        RawEvent{tick, order++, RawEvent::Kind::tempo, tempo, 0, 0, 0, {}});
                 }
 
                 position += static_cast<std::size_t>(meta_length);
@@ -161,15 +194,21 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                  data.begin() + static_cast<std::ptrdiff_t>(position)
                                      + sysex_length);
                     merged.push_back(
-                        RawEvent{tick, order++, RawEvent::Kind::sysex, 0, 0, 0, std::move(bytes)});
+                        RawEvent{tick, order++, RawEvent::Kind::sysex, 0, 0, 0, track_port, std::move(bytes)});
                 }
 
                 position += static_cast<std::size_t>(sysex_length);
             } else {
                 const int type = message & 0xF0;
                 if (type == 0xC0 || type == 0xD0) {
-                    merged.push_back(RawEvent{
-                        tick, order++, RawEvent::Kind::channel, message, data[position], 0, {}});
+                    merged.push_back(RawEvent{tick,
+                                              order++,
+                                              RawEvent::Kind::channel,
+                                              message,
+                                              data[position],
+                                              0,
+                                              track_port,
+                                              {}});
                     position += 1;
                 } else {
                     merged.push_back(RawEvent{tick,
@@ -178,6 +217,7 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                               message,
                                               data[position],
                                               data[position + 1],
+                                              track_port,
                                               {}});
                     position += 2;
                 }
@@ -216,7 +256,8 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                        0,
                                        0,
                                        0,
-                                       std::move(entry.bytes)});
+                                       std::move(entry.bytes),
+                                       entry.port});
             break;
 
         case RawEvent::Kind::channel:
@@ -225,7 +266,8 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                        entry.status,
                                        entry.data1,
                                        entry.data2,
-                                       {}});
+                                       {},
+                                       entry.port});
             break;
         }
     }

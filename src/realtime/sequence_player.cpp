@@ -32,7 +32,7 @@ void SequencePlayer::render(std::span<float> left, std::span<float> right)
 
         // Events land on the block boundary, which is the grid the engine itself quantises them to.
         while (cursor_ < events_.size() && events_[cursor_].position <= position_) {
-            generator_->send(events_[cursor_]);
+            generator_->send(events_[cursor_].port, events_[cursor_]);
             ++cursor_;
         }
 
@@ -88,7 +88,7 @@ void SequencePlayer::seek(std::int64_t sample)
             continue;
         }
 
-        generator_->send(event);
+        generator_->send(event.port, event);
     }
 
     position_ = target;

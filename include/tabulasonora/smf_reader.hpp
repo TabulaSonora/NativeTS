@@ -30,6 +30,16 @@ struct MidiEvent {
     /// Raw bytes, for a system-exclusive message.
     std::vector<std::uint8_t> sysex;
 
+    /// Which MIDI port the event's track was tagged for.
+    ///
+    /// A file addresses more than sixteen channels by splitting them across ports, and it says
+    /// which port a track belongs to with a meta event: `FF 21` (MIDI Port) carries the number
+    /// outright, and `FF 09` (Device Name) names an output that the reader assigns numbers to in
+    /// order of first appearance. Untagged files are all port 0, which is what they have always
+    /// been. The engine masks this to the ports it was created with, so a file asking for port 3 on
+    /// a two-port engine folds onto port 1 rather than being dropped.
+    int port = 0;
+
     /// The channel a channel message addresses.
     [[nodiscard]] int channel() const noexcept { return status & 0x0F; }
 

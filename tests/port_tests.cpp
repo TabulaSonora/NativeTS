@@ -277,3 +277,146 @@ TEST_CASE("a port count that is not a power of two is refused", "[port][sccore]"
     options.ports = 3;
     CHECK_THROWS_AS(ToneGenerator(notes, options), std::invalid_argument);
 }
+
+TEST_CASE("a track's MIDI Port meta routes its events", "[port][smf]")
+{
+    // FF 21 is how a file addresses more than sixteen channels. It is a prefix, so it applies to
+    // the events that follow it rather than to the track as a whole -- a track that switches
+    // partway has to be honoured, not flattened onto one port.
+    const auto track = [](int port, std::initializer_list<std::uint8_t> body) {
+        std::vector<std::uint8_t> out{'M', 'T', 'r', 'k', 0, 0, 0, 0};
+        std::vector<std::uint8_t> data{0x00, 0xFF, 0x21, 0x01, static_cast<std::uint8_t>(port)};
+        data.insert(data.end(), body);
+        data.insert(data.end(), {0x00, 0xFF, 0x2F, 0x00});
+        const auto length = static_cast<std::uint32_t>(data.size());
+        out[4] = static_cast<std::uint8_t>(length >> 24);
+        out[5] = static_cast<std::uint8_t>(length >> 16);
+        out[6] = static_cast<std::uint8_t>(length >> 8);
+        out[7] = static_cast<std::uint8_t>(length);
+        out.insert(out.end(), data.begin(), data.end());
+        return out;
+    };
+
+    std::vector<std::uint8_t> file{'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 3, 0x01, 0xE0};
+    for (int port = 0; port < 3; ++port) {
+        // Each track sends a program change on channel 0, with a different program per port.
+        const auto bytes = track(port, {0x00, 0xC0, static_cast<std::uint8_t>(40 + port)});
+        file.insert(file.end(), bytes.begin(), bytes.end());
+    }
+
+    const std::vector<MidiEvent> events = smf::parse(file, 32000);
+    REQUIRE(events.size() == 3);
+    for (int port = 0; port < 3; ++port) {
+        INFO("port " << port);
+        CHECK(events[static_cast<std::size_t>(port)].port == port);
+        CHECK(events[static_cast<std::size_t>(port)].data1 == 40 + port);
+    }
+}
+
+TEST_CASE("an untagged file is all port zero", "[port][smf][sccore]")
+{
+    // The behaviour every existing file relies on, asserted so port tagging cannot quietly change
+    // it: no FF 21 and no FF 09 means port 0 throughout.
+    const std::vector<MidiEvent> events =
+        smf::read(testdata::repository_root() / "testdata" / "canyon.mid", 32000);
+    REQUIRE_FALSE(events.empty());
+    CHECK(std::all_of(events.begin(), events.end(),
+                      [](const MidiEvent& event) { return event.port == 0; }));
+}
+
+TEST_CASE("Africa.mid is tagged across four ports", "[port][smf][sccore]")
+{
+    // A real four-port file: 31 tracks, FF 21 throughout, and -- the reason 64 parts exist -- four
+    // separate drum tracks, one on channel 9 of each port.
+    const std::filesystem::path path = testdata::repository_root() / "testdata" / "Africa.mid";
+    if (!std::filesystem::exists(path)) {
+        SKIP("Africa.mid is not in testdata");
+    }
+
+    const std::vector<MidiEvent> events = smf::read(path, 32000);
+    REQUIRE_FALSE(events.empty());
+
+    std::array<int, 4> per_port{};
+    std::array<bool, 4> drums_on_port{};
+    for (const MidiEvent& event : events) {
+        if (event.port < 0 || event.port >= 4) {
+            continue;
+        }
+        ++per_port[static_cast<std::size_t>(event.port)];
+        if (event.kind == MidiEventKind::channel && event.message_type() == 0x90
+            && event.channel() == 9) {
+            drums_on_port[static_cast<std::size_t>(event.port)] = true;
+        }
+    }
+
+    for (int port = 0; port < 4; ++port) {
+        INFO("port " << port);
+        CHECK(per_port[static_cast<std::size_t>(port)] > 0);
+        CHECK(drums_on_port[static_cast<std::size_t>(port)]);
+    }
+}
+
+TEST_CASE("a port tag does not leak into the next track", "[port][smf]")
+{
+    // The tag belongs to the track that carries it. If it survived into the next track, a file
+    // whose first track is tagged would drag every later untagged track along with it -- and
+    // untagged tracks are the common case even in multi-port files.
+    const auto build = [](std::initializer_list<std::vector<std::uint8_t>> bodies) {
+        std::vector<std::uint8_t> file{'M', 'T', 'h', 'd', 0,   0, 0, 6,
+                                       0,   1,   0,   0,   0x01, 0xE0};
+        file[11] = static_cast<std::uint8_t>(bodies.size());
+        for (const auto& body : bodies) {
+            std::vector<std::uint8_t> data = body;
+            data.insert(data.end(), {0x00, 0xFF, 0x2F, 0x00});
+            const auto length = static_cast<std::uint32_t>(data.size());
+            file.insert(file.end(), {'M', 'T', 'r', 'k',
+                                     static_cast<std::uint8_t>(length >> 24),
+                                     static_cast<std::uint8_t>(length >> 16),
+                                     static_cast<std::uint8_t>(length >> 8),
+                                     static_cast<std::uint8_t>(length)});
+            file.insert(file.end(), data.begin(), data.end());
+        }
+        return file;
+    };
+
+    // Track 0 tags port 2; track 1 tags nothing at all.
+    const std::vector<MidiEvent> events =
+        smf::parse(build({{0x00, 0xFF, 0x21, 0x01, 0x02, 0x00, 0xC0, 0x30},
+                          {0x00, 0xC1, 0x31}}),
+                   32000);
+
+    REQUIRE(events.size() == 2);
+    CHECK(events[0].port == 2);
+    CHECK(events[1].port == 0);
+}
+
+TEST_CASE("two tracks sharing a port and channel still address one part", "[port][smf]")
+{
+    // The converse of the leak: Africa.mid has pairs of tracks on the same port and channel -- two
+    // "F Horns" tracks on port 0 channel 8, two "Piano" tracks on port 1 channel 1. Those are one
+    // part layered from two tracks, and the port must not invent a distinction between them.
+    const auto track = [](std::vector<std::uint8_t> data) {
+        data.insert(data.end(), {0x00, 0xFF, 0x2F, 0x00});
+        const auto length = static_cast<std::uint32_t>(data.size());
+        std::vector<std::uint8_t> out{'M', 'T', 'r', 'k',
+                                      static_cast<std::uint8_t>(length >> 24),
+                                      static_cast<std::uint8_t>(length >> 16),
+                                      static_cast<std::uint8_t>(length >> 8),
+                                      static_cast<std::uint8_t>(length)};
+        out.insert(out.end(), data.begin(), data.end());
+        return out;
+    };
+
+    std::vector<std::uint8_t> file{'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 2, 0x01, 0xE0};
+    for (int i = 0; i < 2; ++i) {
+        const auto bytes = track({0x00, 0xFF, 0x21, 0x01, 0x01, 0x00, 0x90, 0x3C,
+                                  static_cast<std::uint8_t>(100 + i)});
+        file.insert(file.end(), bytes.begin(), bytes.end());
+    }
+
+    const std::vector<MidiEvent> events = smf::parse(file, 32000);
+    REQUIRE(events.size() == 2);
+    CHECK(events[0].port == 1);
+    CHECK(events[1].port == 1);
+    CHECK(events[0].channel() == events[1].channel());
+}
