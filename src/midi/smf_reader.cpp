@@ -175,11 +175,14 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                     // width belongs to the engine, which masks, and doing it here would lose the
                     // file's intent for a wider one.
                     track_port = data[position];
-                } else if (meta_type == 0x09 && meta_length >= 1) {
-                    // FF 09: Device Name. There is no number in it, so names are assigned ports in
-                    // order of first appearance, which is deterministic and matches what a
-                    // sequencer means by listing outputs. An explicit FF 21 later in the track
-                    // still overrides it.
+                } else if ((meta_type == 0x09 || meta_type == 0x04) && meta_length >= 1) {
+                    // FF 09: Device Name, and FF 04: Instrument Name serving as one -- files that
+                    // predate FF 09 name their output there instead ("Modem" and "Printer", the
+                    // Mac serial ports, in the ones that prompted this). There is no number in
+                    // either, so names are assigned ports in order of first appearance, which is
+                    // deterministic and matches what a sequencer means by listing outputs. Both
+                    // metas share one table, keyed by the string exactly as stored. An explicit
+                    // FF 21 later in the track still overrides it.
                     const std::string name(
                         reinterpret_cast<const char*>(data.data() + position),
                         static_cast<std::size_t>(meta_length));

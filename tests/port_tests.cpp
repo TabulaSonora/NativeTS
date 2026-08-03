@@ -6,7 +6,9 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <ranges>
 #include <vector>
 
@@ -473,6 +475,73 @@ TEST_CASE("two tracks sharing a port and channel still address one part", "[port
     CHECK(events[0].port == 1);
     CHECK(events[1].port == 1);
     CHECK(events[0].channel() == events[1].channel());
+}
+
+TEST_CASE("device names are assigned ports in order of first appearance", "[port][smf]")
+{
+    // A file with no FF 21 at all can still be multi-port: it names its outputs instead, with
+    // FF 09 (Device Name) or -- in files older than that meta -- FF 04 (Instrument Name). The
+    // names are opaque ("Modem" and "Printer" in the files this covers, the Mac serial ports), so
+    // there is nothing to recognise; the reader stores each string as it occurs, deduplicated,
+    // and the first distinct name is port 0, the second port 1, and so on. Both metas share the
+    // one table, so a name is the same port no matter which meta carried it.
+    const auto track = [](std::uint8_t meta, const char* name, std::uint8_t program) {
+        std::vector<std::uint8_t> data{0x00, 0xFF, meta,
+                                       static_cast<std::uint8_t>(std::strlen(name))};
+        data.insert(data.end(), name, name + std::strlen(name));
+        data.insert(data.end(), {0x00, 0xC0, program, 0x00, 0xFF, 0x2F, 0x00});
+        const auto length = static_cast<std::uint32_t>(data.size());
+        std::vector<std::uint8_t> out{'M', 'T', 'r', 'k',
+                                      static_cast<std::uint8_t>(length >> 24),
+                                      static_cast<std::uint8_t>(length >> 16),
+                                      static_cast<std::uint8_t>(length >> 8),
+                                      static_cast<std::uint8_t>(length)};
+        out.insert(out.end(), data.begin(), data.end());
+        return out;
+    };
+
+    std::vector<std::uint8_t> file{'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 4, 0x01, 0xE0};
+    for (const auto& bytes : {track(0x04, "Modem", 40),    // first name seen: port 0
+                              track(0x04, "Printer", 41),  // second: port 1
+                              track(0x04, "Modem", 42),    // seen before: port 0 again
+                              track(0x09, "Printer", 43)}) // same name, other meta: still port 1
+    {
+        file.insert(file.end(), bytes.begin(), bytes.end());
+    }
+
+    const std::vector<MidiEvent> events = smf::parse(file, 32000);
+    REQUIRE(events.size() == 4);
+    CHECK(events[0].port == 0);
+    CHECK(events[1].port == 1);
+    CHECK(events[2].port == 0);
+    CHECK(events[3].port == 1);
+}
+
+TEST_CASE("lont32.mid splits onto two ports by instrument-name metas", "[port][smf][sccore]")
+{
+    // A real two-port file with not one FF 21 or FF 09 in it: every track opens with FF 04 naming
+    // "Modem" or "Printer". Thirty-two channels only exist here if those names become ports.
+    const std::filesystem::path path = testdata::repository_root() / "testdata" / "lont32.mid";
+    if (!std::filesystem::exists(path)) {
+        SKIP("lont32.mid is not in testdata");
+    }
+
+    const std::vector<MidiEvent> events = smf::read(path, 32000);
+    REQUIRE_FALSE(events.empty());
+
+    std::array<int, 2> notes_per_port{};
+    for (const MidiEvent& event : events) {
+        CHECK(event.port >= 0);
+        CHECK(event.port < 2);
+        if (event.kind == MidiEventKind::channel && event.message_type() == 0x90
+            && event.data2 > 0) {
+            ++notes_per_port[static_cast<std::size_t>(event.port & 1)];
+        }
+    }
+
+    // "Modem" is declared first, so it is port 0; the split is real, with notes on both.
+    CHECK(notes_per_port[0] > 0);
+    CHECK(notes_per_port[1] > 0);
 }
 
 TEST_CASE("running status survives a meta event", "[smf]")
