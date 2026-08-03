@@ -391,11 +391,36 @@ The base chain agrees to within half a cent and is exact in half the cases, whil
 reaches 45 milli-semitones. Everything else having been ruled out, the residual is in
 `native = root_key × 1000 + 1024 − fine_tune`.
 
-\warning **The correct law for `native` is not known**, and no simple rescaling of `1024 − fine_tune`
-fits the nine traced patches. The spec's own note is the tell: it records this formula as
-*"verified to ~0.5%"*, and half a percent is 8.6 cents — the exact range of what is left. This was
-never pinned down, and finding it is reverse engineering against the DLL rather than fitting from
-the outside.
+**The missing term is per *wave*.** Recovering the module's `native` for all 127 single-partial
+cases — `native_ours + 10 × the measured cents`, which the `base_pitch` agreement above licenses —
+and grouping by the wave each case resolves to:
+
+| wave | residual, milli-semitones |
+|---|---|
+| `Vibraphone` root 59 | +3.0, +3.0 |
+| `Fretless Bs.` root 90 | +17.3, +17.5 |
+| `Sweep Pad` root 55 | +16.8, +17.6 |
+| `Trumpet` root 56 | +56.0, +56.9 |
+| `Sitar` root 61 | −82.1, −79.7, −75.5 |
+
+Across the thirteen waves the sweep hits more than once, on different keys and different tone maps,
+the **median spread within a wave is 3.4 milli-semitones** — a third of a cent. Each wave has its
+own constant offset, and it is a function of neither `root_key` nor `fine_tune`: waves sharing a
+`fine_tune` disagree, and root 60 alone spans −9 to +47.
+
+That points somewhere specific. A descriptor record is `0x16` bytes and this port reads eleven of
+them — three 20-bit positions, the root, the fine tune, the flags. **Bytes 0x0E to 0x15 are never
+read at all.** Two of them look exactly like what is missing: `0x0E`/`0x0F` form a second 16-bit
+field whose distribution mirrors `fine_tune`'s and whose most common value is `0x0400` — **1024,
+the same neutral**, on 3,814 of 4,259 records.
+
+\warning **It is not simply a second addend.** Subtracting `1024 − fine2` from the residual leaves
+the median unchanged, so whatever role that field plays is not `native −= (1024 − fine2)`. Its sign
+does track the extremes — every large negative residual has `fine2` above 1024 and most large
+positives below it — so it is implicated rather than exonerated. Settling it means reading the
+DLL's own pitch path, not fitting from the outside. The spec's note says why nobody had: it records
+this formula as *"verified to ~0.5%"*, and half a percent is 8.6 cents, the exact range of what is
+left.
 
 ### Now it is measured
 

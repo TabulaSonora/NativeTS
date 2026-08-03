@@ -502,7 +502,7 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
                     vibrato = std::abs(lfo1.pitch_depth) + std::abs(lfo2.pitch_depth);
                 }
                 // ratio / base_pitch / native / coarse byte / jitter depth / envelope sustain /
-                // LFO pitch depth / loop length / root key / fine tune.
+                // LFO pitch depth / loop length / root key / fine tune / wave number.
                 //
                 // This is the field that localised the tuning error, by elimination. Across the
                 // whole sweep the jitter depth and the envelope sustain are zero for every partial
@@ -517,8 +517,8 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
                           << '/' << base << '/' << native << '/' << coarse << '/' << jitter
                           << '/' << sustain << '/' << vibrato << '/'
                           << (voice.descriptor.start - voice.descriptor.end) << '/'
-                          << voice.descriptor.root_key << '/' << voice.descriptor.fine_tune
-                          << std::setprecision(6);
+                          << voice.descriptor.root_key << '/' << voice.descriptor.fine_tune << '/'
+                          << voice.wave << std::setprecision(6);
             }
             std::cout << " pitch " << std::setprecision(10) << ours.pitch_hz << std::setprecision(6)
                       << " partials " << resolved.partials.size() << " rms "
