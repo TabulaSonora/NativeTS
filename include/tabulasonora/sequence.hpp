@@ -191,6 +191,32 @@ struct PartTimelines {
     ControllerTimeline program;
     /// Bank select MSB.
     ControllerTimeline bank;
+
+    /// The GS part modify offsets, in `PartModifiers` order, latched at note-on.
+    ///
+    /// Each has three writers, exactly as the live path does: a sound controller (CC#71-78), an
+    /// NRPN, and the part SysEx `40 1x 30`-`37`. TVF resonance is absent because the engine never
+    /// reads it — see `PartModifiers`.
+    ControllerTimeline vibrato_rate;
+    ControllerTimeline vibrato_depth;
+    ControllerTimeline vibrato_delay;
+    ControllerTimeline tvf_cutoff;
+    ControllerTimeline env_attack;
+    ControllerTimeline env_decay;
+    ControllerTimeline env_release;
+
+    /// GS velocity sense depth and offset (`40 1x 1A`/`1B`), latched at note-on.
+    ControllerTimeline velocity_depth;
+    ControllerTimeline velocity_offset;
+
+    /// Channel aftertouch, and the control matrix's two pitch routes that this path can reach.
+    ///
+    /// Only the pitch destination of the mod wheel and channel aftertouch are carried: those are
+    /// the two continuous sources whose amount this path already tracks. The rest of the matrix is
+    /// stored by the real-time path and has no offline counterpart yet.
+    ControllerTimeline channel_pressure;
+    ControllerTimeline matrix_modulation_pitch;
+    ControllerTimeline matrix_pressure_pitch;
 };
 
 /// A parsed sequence: controller timelines, notes, and the global effect selections.

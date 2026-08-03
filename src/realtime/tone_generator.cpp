@@ -2,6 +2,7 @@
 
 #include "dsp/simd.hpp"
 #include "realtime/partial_voice.hpp"
+#include "tabulasonora/control_decode.hpp"
 #include "tabulasonora/equalizer.hpp"
 #include "tabulasonora/send_effects.hpp"
 
@@ -1044,8 +1045,9 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // The static tune rides in with the bend: the engine folds RPN and key-shift tuning into one
     // per-part milli-semitone offset added to every voice's pitch, and the master tune and key
     // shift sit on top of that globally.
-    const double pitch_offset =
-        part.bend_milli_semitones() + part.tune_milli_semitones() + master_tune_milli_semitones();
+    const double pitch_offset = part.bend_milli_semitones() + part.tune_milli_semitones()
+                                + part.matrix_pitch_milli_semitones()
+                                + master_tune_milli_semitones();
     voice.render(block, pitch_offset, part.mod_wheel_depth());
 
     // A silenced channel contributes nothing at all -- not to the dry mix and not to the sends
@@ -1481,6 +1483,110 @@ void ToneGenerator::Impl::flush_part_voices(int channel)
     }
 }
 
+/// Applies a decoded parameter to a live part, through the Rx gate that guards it.
+///
+/// The decode is shared with the offline path; this is not, and should not be. A running part has
+/// receive switches and level setters that a timeline has no notion of, so what a message *means*
+/// is common and what it *does* is each front end's own. Returns false for a target this function
+/// does not own, which leaves the caller's own handling to run.
+[[nodiscard]] bool apply_control_update(Part& part, const ControlUpdate& update)
+{
+    const int value = update.value;
+    switch (update.target) {
+    case ControlTarget::bank:
+        if (part.rx.bank_msb) {
+            part.bank = value;
+        }
+        return true;
+    case ControlTarget::modulation:
+        if (part.rx.modulation) {
+            part.modulation = value;
+        }
+        return true;
+    case ControlTarget::volume:
+        if (part.rx.volume) {
+            part.set_volume(value);
+        }
+        return true;
+    case ControlTarget::pan:
+        if (part.rx.panpot) {
+            part.pan = value;
+        }
+        return true;
+    case ControlTarget::expression:
+        if (part.rx.expression) {
+            part.set_expression(value);
+        }
+        return true;
+    case ControlTarget::reverb_send:
+        part.reverb_send = value;
+        return true;
+    case ControlTarget::chorus_send:
+        part.chorus_send = value;
+        return true;
+    case ControlTarget::delay_send:
+        part.delay_send = value;
+        return true;
+    case ControlTarget::bend_range:
+        part.bend_range = std::clamp(value, 0, 24);
+        return true;
+
+    case ControlTarget::vibrato_rate:
+        part.vibrato_rate = value;
+        return true;
+    case ControlTarget::vibrato_depth:
+        part.vibrato_depth = value;
+        return true;
+    case ControlTarget::vibrato_delay:
+        part.vibrato_delay = value;
+        return true;
+    case ControlTarget::tvf_cutoff:
+        part.tvf_cutoff = value;
+        return true;
+    case ControlTarget::env_attack:
+        part.env_attack = value;
+        return true;
+    case ControlTarget::env_decay:
+        part.env_decay = value;
+        return true;
+    case ControlTarget::env_release:
+        part.env_release = value;
+        return true;
+
+    case ControlTarget::velocity_depth:
+        part.velocity_depth = value;
+        return true;
+    case ControlTarget::velocity_offset:
+        part.velocity_offset = value;
+        return true;
+    case ControlTarget::channel_pressure:
+        part.channel_pressure = value;
+        return true;
+
+    case ControlTarget::matrix_modulation_pitch:
+        part.control.at(ControlMatrix::Source::modulation, ControlMatrix::Destination::pitch) =
+            value;
+        return true;
+    case ControlTarget::matrix_pressure_pitch:
+        part.control.at(ControlMatrix::Source::channel_pressure,
+                        ControlMatrix::Destination::pitch) = value;
+        return true;
+
+    case ControlTarget::eq_enabled:
+        part.eq_enabled = value != 0;
+        return true;
+
+    // Damper's release behaviour and the global EQ block are the caller's.
+    case ControlTarget::damper:
+    case ControlTarget::eq_low_frequency:
+    case ControlTarget::eq_low_gain:
+    case ControlTarget::eq_high_frequency:
+    case ControlTarget::eq_high_gain:
+        return false;
+    }
+    return false;
+}
+
 void ToneGenerator::Impl::control_change(int channel, Part& part, int controller, int value)
 {
     // Every controller handler in the engine opens with a test of the part's Rx-CC gate; only the
@@ -1489,27 +1595,21 @@ void ToneGenerator::Impl::control_change(int channel, Part& part, int controller
         return;
     }
 
-    switch (controller) {
-    case 0:
-        if (part.rx.bank_msb) {
-            part.bank = value;
+    // What the controller means is decided once, in the decoder both front ends share; what it
+    // does to a live part is decided here.
+    if (const std::optional<ControlUpdate> update =
+            decode_control_change(channel, controller, value)) {
+        if (apply_control_update(part, *update)) {
+            return;
         }
-        break;
+    }
+
+    switch (controller) {
     // Bank select LSB is the tone-map select on this module: 1-4 name a vintage, 0 keeps the
     // default. Stored raw here and interpreted at resolution time (`tone_map_for`).
     case 32:
         if (part.rx.bank_lsb) {
             part.bank_lsb = value;
-        }
-        break;
-    case 1:
-        if (part.rx.modulation) {
-            part.modulation = value;
-        }
-        break;
-    case 7:
-        if (part.rx.volume) {
-            part.set_volume(value);
         }
         break;
     // CC#10 zero is stored as one, so the wheel cannot reach the random position: only the GS

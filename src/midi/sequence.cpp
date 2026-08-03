@@ -1,5 +1,7 @@
 #include "tabulasonora/sequence.hpp"
 
+#include "tabulasonora/control_decode.hpp"
+
 #include <algorithm>
 
 namespace ts {
@@ -269,6 +271,100 @@ void State::close_note(int channel, int note, std::int64_t off_position)
     });
 }
 
+/// Records a decoded parameter against the timeline that holds it.
+///
+/// The whole point of the shared decoder is that this function is the only place the offline path
+/// decides *where* a parameter lives; which message produced it is not its business. A target with
+/// no timeline is one the offline renderer has no use for, and falls through silently.
+void record(const ControlUpdate& update, std::int64_t position, State& state)
+{
+    if (update.is_global()) {
+        // The offline mixer has no EQ stage yet, so the system EQ block is decoded and dropped
+        // here rather than silently mis-stored.
+        return;
+    }
+
+    const auto slot = static_cast<std::size_t>(update.channel % Sequence::channel_count);
+    PartTimelines& part = state.sequence.parts[slot];
+    const int value = update.value;
+
+    switch (update.target) {
+    case ControlTarget::volume:
+        part.volume.add(position, value);
+        break;
+    case ControlTarget::expression:
+        part.expression.add(position, value);
+        break;
+    case ControlTarget::pan:
+        part.pan.add(position, value);
+        break;
+    case ControlTarget::modulation:
+        part.modulation.add(position, value);
+        break;
+    case ControlTarget::reverb_send:
+        part.reverb_send.add(position, value);
+        break;
+    case ControlTarget::chorus_send:
+        part.chorus_send.add(position, value);
+        break;
+    case ControlTarget::delay_send:
+        part.delay_send.add(position, value);
+        break;
+    case ControlTarget::bank:
+        part.bank.add(position, value);
+        break;
+    case ControlTarget::bend_range:
+        part.bend_range.add(position, value);
+        break;
+    case ControlTarget::vibrato_rate:
+        part.vibrato_rate.add(position, value);
+        break;
+    case ControlTarget::vibrato_depth:
+        part.vibrato_depth.add(position, value);
+        break;
+    case ControlTarget::vibrato_delay:
+        part.vibrato_delay.add(position, value);
+        break;
+    case ControlTarget::tvf_cutoff:
+        part.tvf_cutoff.add(position, value);
+        break;
+    case ControlTarget::env_attack:
+        part.env_attack.add(position, value);
+        break;
+    case ControlTarget::env_decay:
+        part.env_decay.add(position, value);
+        break;
+    case ControlTarget::env_release:
+        part.env_release.add(position, value);
+        break;
+    case ControlTarget::velocity_depth:
+        part.velocity_depth.add(position, value);
+        break;
+    case ControlTarget::velocity_offset:
+        part.velocity_offset.add(position, value);
+        break;
+    case ControlTarget::channel_pressure:
+        part.channel_pressure.add(position, value);
+        break;
+    case ControlTarget::matrix_modulation_pitch:
+        part.matrix_modulation_pitch.add(position, value);
+        break;
+    case ControlTarget::matrix_pressure_pitch:
+        part.matrix_pressure_pitch.add(position, value);
+        break;
+
+    // Damper is decoded but not recorded here: it has side effects on the sustained-note list that
+    // the caller performs, and it appends to the timeline itself.
+    case ControlTarget::damper:
+    case ControlTarget::eq_enabled:
+    case ControlTarget::eq_low_frequency:
+    case ControlTarget::eq_low_gain:
+    case ControlTarget::eq_high_frequency:
+    case ControlTarget::eq_high_gain:
+        break;
+    }
+}
+
 void apply_control_change(const MidiEvent& event, int channel, State& state)
 {
     PartTimelines& part = state.sequence.parts[static_cast<std::size_t>(channel)];
@@ -276,32 +372,19 @@ void apply_control_change(const MidiEvent& event, int channel, State& state)
     const int controller = event.data1;
     const int value = event.data2;
 
+    // Anything the shared decoder recognises is stored by the shared recorder, so the two front
+    // ends cannot disagree about what a controller means. Damper is the one decoded target that
+    // still falls through: releasing the notes it was holding is this path's own business.
+    if (const std::optional<ControlUpdate> update =
+            decode_control_change(channel, controller, value);
+        update && update->target != ControlTarget::damper) {
+        record(*update, event.position, state);
+        return;
+    }
+
     switch (controller) {
-    case 1:
-        part.modulation.add(event.position, value);
-        break;
-    case 7:
-        part.volume.add(event.position, value);
-        break;
-    // CC#10 zero is stored as one, so the wheel cannot reach the random position: only the GS
-    // SysEx panpot writes a true zero, which is what RND is.
-    case 10:
-        part.pan.add(event.position, value == 0 ? 1 : value);
-        break;
-    case 11:
-        part.expression.add(event.position, value);
-        break;
-    case 91:
-        part.reverb_send.add(event.position, value);
-        break;
-    case 93:
-        part.chorus_send.add(event.position, value);
-        break;
 
     // Bank select MSB carries the variation; the LSB is unused by this engine.
-    case 0:
-        part.bank.add(event.position, value);
-        break;
     case 32:
         break;
 
@@ -405,6 +488,12 @@ void apply_sysex(const MidiEvent& event, State& state)
         return;
     }
 
+    // Same decoder the live path uses, so a GS address means one thing in this engine.
+    if (const std::optional<ControlUpdate> update = decode_gs_sysex(b)) {
+        record(*update, event.position, state);
+        return;
+    }
+
     const int a1 = b[5];
     const int a2 = b[6];
     const int a3 = b[7];
@@ -418,9 +507,6 @@ void apply_sysex(const MidiEvent& event, State& state)
         } else if (a3 == 0x50 && value <= 9) {
             state.sequence.delay_type.add(event.position, value);
         }
-    } else if (a1 == 0x40 && (a2 & 0xF0) == 0x10 && a3 == 0x2C) {
-        state.sequence.parts[static_cast<std::size_t>(channel_from_block(a2 & 0x0F))]
-            .delay_send.add(event.position, value);
     }
 }
 
@@ -488,6 +574,12 @@ Sequence build(std::span<const MidiEvent> events)
 
         case 0xC0:
             part.program.add(event.position, event.data1);
+            break;
+
+        // Channel aftertouch. The offline path tracks it for one reason: the control matrix can
+        // route it to pitch, and `sc50nn.mid` does exactly that.
+        case 0xD0:
+            part.channel_pressure.add(event.position, event.data1);
             break;
 
         case 0xE0:

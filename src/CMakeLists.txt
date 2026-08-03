@@ -18,6 +18,7 @@ add_library(tabulasonora
     effects/effect_programmer.cpp
     effects/equalizer.cpp
     effects/send_effects.cpp
+    midi/control_decode.cpp
     midi/sequence.cpp
     midi/smf_reader.cpp
     patches/drum_kit_table.cpp

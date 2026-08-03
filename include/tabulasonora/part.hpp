@@ -7,7 +7,9 @@
 #include "tabulasonora/sequence.hpp"
 #include "tabulasonora/tva_chain.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <vector>
 
 namespace ts {
@@ -289,6 +291,35 @@ public:
         return LfoEngine::mod_wheel_depth(
             modulation,
             control.at(ControlMatrix::Source::modulation, ControlMatrix::Destination::lfo1_pitch));
+    }
+
+    /// The control matrix's contribution to pitch, in milli-semitones.
+    ///
+    /// `part_mod_depth_recalc` sums the pitch entry of five sources — mod wheel, bend, channel
+    /// aftertouch, CC1 and CC2 — clamps the total to ±0xbe8 and scales it. That clamp is not a
+    /// round number by accident: 0xbe8 is 3048, which is 127 × 24, exactly the largest value
+    /// `amount × (depth − 0x40)` can reach. The scale then works out to 24 semitones at the rail,
+    /// which is what fixes the unit as milli-semitones.
+    ///
+    /// **Two of the five are missing here, deliberately.** Bend's term comes from the bipolar
+    /// apply, which is not transcribed yet, and this engine already applies bend through
+    /// `bend_range` — adding it again would double it. CC1 and CC2 need their controller values
+    /// tracked, which they are not. So the sum runs over the mod wheel and channel aftertouch, and
+    /// the clamp sees a smaller total than the engine's would when bend is also deflected. That is
+    /// a real difference and it only shows at the rail.
+    [[nodiscard]] double matrix_pitch_milli_semitones() const noexcept
+    {
+        const int sum =
+            control.applied_linear(ControlMatrix::Source::modulation, modulation).pitch
+            + control.applied_linear(ControlMatrix::Source::channel_pressure, channel_pressure)
+                  .pitch;
+        if (sum == 0) {
+            return 0.0;
+        }
+
+        const int magnitude = std::min(std::abs(sum), 0xBE8);
+        const int scaled = ((magnitude << 3) * 0xFBF8) >> 16;
+        return static_cast<double>(sum < 0 ? -scaled : scaled);
     }
 
     /// The bend offset in milli-semitones.
