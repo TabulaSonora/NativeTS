@@ -40,7 +40,7 @@ add_library(tabulasonora
     realtime/tone_generator.cpp
     realtime/wave_reader.cpp
     render/note_renderer.cpp
-    render/sequence_renderer.cpp
+    render/render_options.cpp
     render/wav_writer.cpp
     ${TS_MANIFEST_SOURCE}
 )

@@ -5,7 +5,7 @@
 #include "tabulasonora/patch_directory.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/rom_locator.hpp"
-#include "tabulasonora/sequence_renderer.hpp"
+#include "tabulasonora/render_options.hpp"
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>

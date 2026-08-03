@@ -6,7 +6,8 @@
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/rom_locator.hpp"
-#include "tabulasonora/sequence_renderer.hpp"
+#include "tabulasonora/sequence_player.hpp"
+#include "tabulasonora/tone_generator.hpp"
 
 #include <CLI/CLI.hpp>
 
@@ -117,8 +118,26 @@ int play(const std::string& dll,
         std::cout << "Rendering " << midi.filename().string() << " ..." << std::flush;
         const auto started = std::chrono::steady_clock::now();
 
-        ts::SequenceRenderer renderer{notes};
-        ts::RenderResult result = renderer.render_file(midi, options);
+        // The block loop, as everywhere else. Prerendering is now only about *when* the work
+        // happens, not about which engine does it -- unlimited polyphony so nothing is stolen
+        // ahead of a listen that has all the time in the world.
+        ts::ToneGeneratorOptions engine_options;
+        engine_options.map = options.map;
+        engine_options.drum_channel = options.drum_channel;
+        engine_options.reverb = options.reverb;
+        engine_options.chorus = options.chorus;
+        engine_options.delay = options.delay;
+        engine_options.reverb_type = options.reverb_type;
+        engine_options.chorus_type = options.chorus_type;
+        engine_options.delay_type = options.delay_type;
+        engine_options.drum_ring_seconds = options.drum_ring_seconds;
+        engine_options.output_gain = options.output_gain;
+        engine_options.polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
+
+        ts::ToneGenerator generator{notes, engine_options};
+        generator.set_drum_map_row(options.drum_map_row);
+        ts::SequencePlayer player = ts::SequencePlayer::from_file(generator, midi);
+        ts::RenderResult result = player.render_to_end(options.tail_seconds, options.end_seconds);
 
         const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - started;
         const double seconds = static_cast<double>(result.left.size()) / result.sample_rate;

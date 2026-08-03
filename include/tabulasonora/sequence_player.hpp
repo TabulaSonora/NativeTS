@@ -1,6 +1,6 @@
 #pragma once
 
-#include "tabulasonora/sequence_renderer.hpp"
+#include "tabulasonora/render_options.hpp"
 #include "tabulasonora/tone_generator.hpp"
 
 #include <cstdint>

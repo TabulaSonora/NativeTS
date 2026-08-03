@@ -2,7 +2,7 @@
 
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/part.hpp"
-#include "tabulasonora/sequence_renderer.hpp"
+#include "tabulasonora/render_options.hpp"
 #include "tabulasonora/smf_reader.hpp"
 #include "tabulasonora/voice_pool.hpp"
 
@@ -69,7 +69,7 @@ struct ToneGeneratorOptions {
 /// that the effects then process. Nothing about a note has to be known in advance, so a note can be
 /// held indefinitely and released whenever.
 ///
-/// It shares its DSP with `SequenceRenderer` rather than reimplementing it: the same envelopes, the
+/// It shares its DSP with the note renderer rather than reimplementing it: the same envelopes, the
 /// same sampler, the same tables. The two differ in what they can express, not in how they sound —
 /// the offline path renders each note whole and never runs out of polyphony, while this one
 /// enforces the engine's own limit and can be driven live.

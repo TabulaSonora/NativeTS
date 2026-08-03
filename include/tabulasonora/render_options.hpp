@@ -1,5 +1,9 @@
 #pragma once
 
+// The render vocabulary -- channel mask, options and result -- that outlived the whole-note
+// renderer these types were declared in. See the verification article for why that path was
+// retired.
+
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/sequence.hpp"
 
@@ -111,22 +115,5 @@ struct RenderResult {
 /// Renders a whole sequence note by note and mixes the send effects over it.
 ///
 /// Every note is rendered whole and summed into one buffer, so polyphony is unbounded here — the
-/// hardware's 64-voice limit belongs to the block loop, which has a notion of *now* that this path
-/// does not.
-class SequenceRenderer {
-public:
-    /// Creates a renderer over a note renderer, which must outlive it.
-    explicit SequenceRenderer(NoteRenderer& notes) : notes_(&notes) {}
-
-    /// Renders a Standard MIDI File.
-    [[nodiscard]] RenderResult render_file(const std::filesystem::path& path,
-                                           const RenderOptions& options = {});
-
-    /// Renders a parsed sequence.
-    [[nodiscard]] RenderResult render(const Sequence& sequence, const RenderOptions& options = {});
-
-private:
-    NoteRenderer* notes_;
-};
 
 } // namespace ts

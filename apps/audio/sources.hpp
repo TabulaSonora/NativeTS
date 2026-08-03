@@ -4,7 +4,7 @@
 
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/sequence_player.hpp"
-#include "tabulasonora/sequence_renderer.hpp"
+#include "tabulasonora/render_options.hpp"
 #include "tabulasonora/tone_generator.hpp"
 
 #include <filesystem>

@@ -1,9 +1,9 @@
 #include "tabulasonora/note_renderer.hpp"
+#include "tabulasonora/render_options.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/rom_locator.hpp"
 #include "tabulasonora/send_effects.hpp"
 #include "tabulasonora/sequence_player.hpp"
-#include "tabulasonora/sequence_renderer.hpp"
 #include "tabulasonora/smf_reader.hpp"
 #include "tabulasonora/table_manifest.hpp"
 #include "tabulasonora/wav_writer.hpp"
@@ -395,10 +395,7 @@ int bench_command(const std::string& dll, const fs::path& midi, int iterations)
     const double seconds =
         static_cast<double>(sequence.last_event_position) / ts::NoteRenderer::sample_rate;
 
-    ts::SequenceRenderer renderer{notes};
-    report("offline sequence", seconds, iterations, [&] { (void)renderer.render(sequence); });
-
-    report("block loop (stream)", seconds, iterations, [&] {
+    report("block loop (64 voices)", seconds, iterations, [&] {
         ts::ToneGenerator generator{notes};
         ts::SequencePlayer player = ts::SequencePlayer::from_file(generator, midi);
         (void)player.render_to_end(/*tail_seconds=*/2.2);

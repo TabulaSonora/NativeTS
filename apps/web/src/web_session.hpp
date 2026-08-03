@@ -3,7 +3,7 @@
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/sequence_player.hpp"
-#include "tabulasonora/sequence_renderer.hpp"
+#include "tabulasonora/render_options.hpp"
 #include "tabulasonora/smf_reader.hpp"
 #include "tabulasonora/tone_generator.hpp"
 
