@@ -365,11 +365,37 @@ which was the leading candidate. **Whatever is wrong is a per-patch term.** Read
 at a time: a longer baseline crosses a loop wrap and the read position jumps backwards, which turns
 a sound measurement into a wild one.
 
-\warning The remaining candidates are the per-partial coarse-tune byte (block +0x11, applied here
-as `(raw − 0x40) × 10` milli-semitones), the key-follow table term, and the pitch start jitter —
-which is applied as a *permanent* offset on a patch with no pitch envelope, and whose first draw
-from the shared generator is 0x4f95, landing on the negative branch. That is the wrong direction to
-explain a sharp engine, but not the wrong direction for every patch.
+**It is the native pitch, and nothing else.** The error was localised by elimination, every step
+measured rather than argued:
+
+| candidate | verdict |
+|---|---|
+| the `1024` neutral, or anything shared | `Trombone` matches the module's ratio to 0.001 cents |
+| pitch start jitter | **depth is zero for every partial in the sweep** — it never fires |
+| pitch-envelope sustain | **zero for every partial** |
+| per-partial coarse tune | neutral on 162 of 177 cases, which still miss by a median 2.47 cents |
+| the estimator, confused by vibrato or beating | no-vibrato single-partial cases still miss by a median 1.88 cents |
+| a loop off by one sample | error × loop length is nowhere near a multiple of 1731 cents·samples |
+| the base-pitch chain | see below |
+
+That last one is the decisive measurement. `scdec portatrace` reads the module's *own* computed
+pitch out of `voice+0x6c`, so it can be compared against `base_pitch` directly instead of inferred:
+
+| patch | module's `voice+0x6c` | our `base_pitch` | |
+|---|---|---|---|
+| `Sweep Pad`, `Vibraphone`, `Nylon Gt.` | 59989 / 72003 | 59989 / 72003 | **exact** |
+| `Piano 1` | 59988 / 72004 | 59989 / 72003 | 1 milli-semitone |
+| `Harpsichord`, `Church Org.1` | 59994 / 72002 | 59989 / 72003 | 5 milli-semitones |
+
+The base chain agrees to within half a cent and is exact in half the cases, while the whole error
+reaches 45 milli-semitones. Everything else having been ruled out, the residual is in
+`native = root_key × 1000 + 1024 − fine_tune`.
+
+\warning **The correct law for `native` is not known**, and no simple rescaling of `1024 − fine_tune`
+fits the nine traced patches. The spec's own note is the tell: it records this formula as
+*"verified to ~0.5%"*, and half a percent is 8.6 cents — the exact range of what is left. This was
+never pinned down, and finding it is reverse engineering against the DLL rather than fitting from
+the outside.
 
 ### Now it is measured
 

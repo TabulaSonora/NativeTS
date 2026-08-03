@@ -483,14 +483,42 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
                 const double native = (voice.descriptor.root_key * 1000.0) + 1024.0
                                       - voice.descriptor.fine_tune;
                 double base = 0.0;
+                int coarse = 0x40;
+                int jitter = 0;
+                int sustain = 0;
+                int vibrato = 0;
                 if (tone && voice.partial_index < static_cast<int>(tone->partials().size())) {
                     const PartialParameters& partial =
                         tone->partials()[static_cast<std::size_t>(voice.partial_index)];
                     base = notes.pitch().base_pitch_milli_semitones(partial, which.note,
                                                                     partial.key_center());
+                    coarse = partial.coarse_tune_raw();
+                    jitter = partial.raw()[0x1A];
+                    if (const auto envelope = notes.pitch().envelope_offsets(
+                            partial, std::clamp(which.note, 0, 0x7F), which.velocity)) {
+                        sustain = envelope->targets[3];
+                    }
+                    const auto [lfo1, lfo2] = notes.lfo().configure(*tone_number, partial);
+                    vibrato = std::abs(lfo1.pitch_depth) + std::abs(lfo2.pitch_depth);
                 }
+                // ratio / base_pitch / native / coarse byte / jitter depth / envelope sustain /
+                // LFO pitch depth / loop length / root key / fine tune.
+                //
+                // This is the field that localised the tuning error, by elimination. Across the
+                // whole sweep the jitter depth and the envelope sustain are zero for every partial
+                // and the coarse byte is neutral for 162 of 177 cases, so none of the three can be
+                // the cause; the LFO depth and partial count show the residual is not the pitch
+                // estimator being confused by vibrato or beating; and the loop length bears no
+                // integer relation to it, so it is not a loop off by a sample. What is left is
+                // `base_pitch` and `native`, and `scdec portatrace` reads the module's own pitch
+                // out of `voice+0x6c`: it agrees with `base_pitch` to within 5 milli-semitones and
+                // is exact in half the cases, while the whole error reaches 45. It is `native`.
                 std::cout << ' ' << std::setprecision(10) << std::pow(2.0, (base - native) / 12000.0)
-                          << '/' << base << '/' << native << std::setprecision(6);
+                          << '/' << base << '/' << native << '/' << coarse << '/' << jitter
+                          << '/' << sustain << '/' << vibrato << '/'
+                          << (voice.descriptor.start - voice.descriptor.end) << '/'
+                          << voice.descriptor.root_key << '/' << voice.descriptor.fine_tune
+                          << std::setprecision(6);
             }
             std::cout << " pitch " << std::setprecision(10) << ours.pitch_hz << std::setprecision(6)
                       << " partials " << resolved.partials.size() << " rms "
