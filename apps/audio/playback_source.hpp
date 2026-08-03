@@ -18,6 +18,8 @@ struct PartSnapshot {
     int voices = 0;
     bool muted = false;
     bool soloed = false;
+    /// Whether the file addresses this part at all. A mixer lists these and hides the rest.
+    bool present = false;
 };
 
 /// What the engine was doing when the render thread last looked.
@@ -33,7 +35,9 @@ struct EngineSnapshot {
     int active_voices = 0;
     int note_count = 0;
     int drum_kit = 0;
-    std::array<PartSnapshot, 16> parts{};
+    /// Parts the engine was created with; only the first this many of `parts` are meaningful.
+    int part_count = 16;
+    std::array<PartSnapshot, 64> parts{};
 };
 
 /// Something the transport can play: a position, a length, and blocks on demand.

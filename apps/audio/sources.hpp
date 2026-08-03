@@ -86,6 +86,8 @@ private:
     std::vector<float> left_;
     std::vector<float> right_;
     const ChannelMask* channels_ = nullptr;
+    /// Parts the file addresses, computed once so the mixer can list only those.
+    std::vector<int> addressed_;
 };
 
 } // namespace ts::player

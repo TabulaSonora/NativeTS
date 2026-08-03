@@ -23,6 +23,14 @@ public:
     SequencePlayer(ToneGenerator& generator, std::vector<MidiEvent> events);
 
     /// Reads a Standard MIDI File and creates a player for it.
+    /// Which parts the file actually addresses, as `port * 16 + channel`.
+    ///
+    /// A mixer wants the channels a file uses, not sixteen rows of which four are silent -- and a
+    /// four-port file has sixty-four to choose from, so showing them all would be worse than
+    /// useless. Computed once from the event list, so it is what the file contains rather than what
+    /// has been reached so far.
+    [[nodiscard]] std::vector<int> addressed_parts() const;
+
     [[nodiscard]] static SequencePlayer from_file(ToneGenerator& generator,
                                                   const std::filesystem::path& path);
 

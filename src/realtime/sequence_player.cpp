@@ -1,5 +1,7 @@
 #include "tabulasonora/sequence_player.hpp"
 
+#include <set>
+
 #include "tabulasonora/smf_reader.hpp"
 
 #include <algorithm>
@@ -68,6 +70,27 @@ RenderResult SequencePlayer::render_to_end(double tail_seconds, std::optional<do
     result.note_count = generator_->note_count();
     result.peak = peak;
     return result;
+}
+
+std::vector<int> SequencePlayer::addressed_parts() const
+{
+    std::set<int> seen;
+    for (const MidiEvent& event : events_) {
+        if (event.kind != MidiEventKind::channel) {
+            continue;
+        }
+        // Note-offs and all-notes-off alone do not make a part present -- a file that only ever
+        // silences a channel is not using it.
+        const int type = event.message_type();
+        if (type == 0x80) {
+            continue;
+        }
+        if (type == 0x90 && event.data2 == 0) {
+            continue;
+        }
+        seen.insert((event.port * Sequence::channel_count) + event.channel());
+    }
+    return {seen.begin(), seen.end()};
 }
 
 void SequencePlayer::seek(std::int64_t sample)

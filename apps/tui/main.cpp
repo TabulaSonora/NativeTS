@@ -133,6 +133,26 @@ struct Ui {
     int drum_channel = 9;
 
     int selected = 0;
+
+    /// The parts the file addresses, in order; the mixer lists exactly these.
+    std::vector<int> listed;
+
+    /// The next listed part in a direction, or the current one at either end.
+    [[nodiscard]] int neighbour(int part, int direction) const
+    {
+        if (listed.empty()) {
+            return std::clamp(part + direction, 0, 15);
+        }
+        const auto at = std::find(listed.begin(), listed.end(), part);
+        if (at == listed.end()) {
+            return listed.front();
+        }
+        const auto index = static_cast<std::ptrdiff_t>(at - listed.begin()) + direction;
+        if (index < 0 || index >= static_cast<std::ptrdiff_t>(listed.size())) {
+            return part;
+        }
+        return listed[static_cast<std::size_t>(index)];
+    }
     float held_left = 0.0F;
     float held_right = 0.0F;
 };
@@ -207,9 +227,30 @@ struct Ui {
 
     const bool soloing = ui.channels != nullptr && ui.channels->any_soloed();
 
+    // Only the parts the file addresses. A four-port score has sixty-four to choose from and
+    // typically uses a third of them; listing the rest would bury the ones that matter. A file that
+    // uses one port still shows its channels in the order it always did.
+    std::vector<int>& listed = ui.listed;
+    listed.clear();
+    for (int part = 0; part < state.part_count && part < static_cast<int>(state.parts.size());
+         ++part) {
+        if (state.parts[static_cast<std::size_t>(part)].present) {
+            listed.push_back(part);
+        }
+    }
+    if (listed.empty()) {
+        // Before the first event lands there is nothing to list, and an empty mixer reads as a
+        // fault. Fall back to the first port, which is what every single-port file will settle on.
+        for (int part = 0; part < 16; ++part) {
+            listed.push_back(part);
+        }
+    }
+
+    const bool multi_port = !listed.empty() && listed.back() >= 16;
+
     Elements rows;
     rows.push_back(hbox({
-                       text(" ch ") | dim,
+                       text(multi_port ? " port ch " : " ch ") | dim,
                        text("program      ") | dim,
                        text(" bank") | dim,
                        text("  vol") | dim,
@@ -220,8 +261,11 @@ struct Ui {
                    })
                    | bold);
 
-    for (int channel = 0; channel < 16; ++channel) {
-        const ts::player::PartSnapshot& part = state.parts[static_cast<std::size_t>(channel)];
+    for (std::size_t row_index = 0; row_index < listed.size(); ++row_index) {
+        const int part_index = listed[row_index];
+        const int channel = part_index % 16;
+        const int port = part_index / 16;
+        const ts::player::PartSnapshot& part = state.parts[static_cast<std::size_t>(part_index)];
         const bool drums = channel == ui.drum_channel;
         const bool audible = soloing ? part.soloed : !part.muted;
 
@@ -230,6 +274,11 @@ struct Ui {
         label.resize(13, ' ');
 
         std::ostringstream number;
+        if (multi_port) {
+            // Ports are labelled A..D the way a multi-port interface labels them, which reads
+            // better beside a channel number than two numbers would.
+            number << ' ' << static_cast<char>('A' + port) << "   ";
+        }
         number << (channel + 1 < 10 ? " " : "") << (channel + 1);
 
         Element row = hbox({
@@ -253,9 +302,9 @@ struct Ui {
         if (!audible) {
             row = row | dim;
         }
-        if (channel == ui.selected) {
-            // `focus` is what scrolls the frame below: on a terminal too short for sixteen
-            // channels the selected row is the one guaranteed to stay visible.
+        if (part_index == ui.selected) {
+            // `focus` is what scrolls the frame below: on a terminal too short for the list the
+            // selected row is the one guaranteed to stay visible.
             row = row | inverted | focus;
         }
         rows.push_back(row);
@@ -287,6 +336,14 @@ int run(const std::string& dll,
     ts::NoteRenderer notes{rom};
 
     ts::ToneGeneratorOptions engine;
+
+    // Four ports by default here, unlike the CLI. A player is asked to play whatever it is given,
+    // and a four-port score folded onto two collides its parts silently -- the one failure mode a
+    // listener cannot diagnose. The polyphony goes up to match, since sixty-four parts sharing the
+    // hardware's sixty-four voices would steal without pause.
+    engine.ports = ts::ToneGenerator::max_port_count;
+    engine.polyphony = 256;
+
     engine.map = options.map;
     engine.drum_channel = options.drum_channel;
     engine.reverb = options.reverb;
@@ -371,11 +428,13 @@ int run(const std::string& dll,
                    return true;
                }
                if (event == Event::ArrowUp) {
-                   ui.selected = std::max(0, ui.selected - 1);
+                   // Step through the parts the file uses, not the index space: on a four-port
+                   // file most indices are empty and arrowing through them would feel broken.
+                   ui.selected = ui.neighbour(ui.selected, -1);
                    return true;
                }
                if (event == Event::ArrowDown) {
-                   ui.selected = std::min(15, ui.selected + 1);
+                   ui.selected = ui.neighbour(ui.selected, +1);
                    return true;
                }
                if (event == Event::Character('m')) {
@@ -430,7 +489,8 @@ void apply_channels(ts::ChannelMask& mask, const std::vector<std::string>& lists
             }
             const int channel = std::stoi(item) - 1;
             if (channel < 0 || channel >= ts::ChannelMask::channel_count) {
-                throw std::runtime_error("Channel '" + item + "' is outside 1-16.");
+                throw std::runtime_error("Channel '" + item + "' is outside 1-"
+                                         + std::to_string(ts::ChannelMask::channel_count) + ".");
             }
             if (mute) {
                 mask.set_muted(channel, true);
@@ -478,7 +538,8 @@ int main(int argc, char** argv)
     app.add_flag("--no-reverb", no_reverb, "Disable the reverb send");
     app.add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     app.add_flag("--no-delay", no_delay, "Disable the delay send");
-    app.add_option("--mute", muted, "Start with these channels silenced (1-16)");
+    app.add_option("--mute", muted,
+                   "Start with these channels silenced (1-64; 17+ are ports B-D)");
     app.add_option("--solo", soloed, "Start with only these channels audible");
 
     CLI11_PARSE(app, argc, argv);

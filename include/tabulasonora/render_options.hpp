@@ -26,7 +26,12 @@ namespace ts {
 /// `Volatile` bought too.
 class ChannelMask {
 public:
-    static constexpr int channel_count = 16;
+    /// Parts the mask covers: sixty-four, `port * 16 + channel`.
+    ///
+    /// Sixteen for as long as the engine had one port. A four-port file addresses sixty-four
+    /// parts and every one of them has to be mutable, or the mixer would silently refuse to touch
+    /// three quarters of a score. Files that use one port only ever index the first sixteen.
+    static constexpr int channel_count = 64;
 
     /// Whether a channel should sound.
     ///

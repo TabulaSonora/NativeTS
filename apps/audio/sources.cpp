@@ -38,6 +38,7 @@ StreamingSource::StreamingSource(NoteRenderer& notes,
     length_ = player_.last_event_position()
               + static_cast<std::int64_t>(tail_seconds * ToneGenerator::sample_rate);
     channels_ = options.channels;
+    addressed_ = player_.addressed_parts();
 }
 
 void StreamingSource::capture(EngineSnapshot& into) const
@@ -47,6 +48,16 @@ void StreamingSource::capture(EngineSnapshot& into) const
     into.active_voices = generator_.active_voices();
     into.note_count = generator_.note_count();
     into.drum_kit = generator_.drum_kit();
+    into.part_count = generator_.parts();
+
+    for (PartSnapshot& part : into.parts) {
+        part.present = false;
+    }
+    for (const int part : addressed_) {
+        if (part >= 0 && part < static_cast<int>(into.parts.size())) {
+            into.parts[static_cast<std::size_t>(part)].present = true;
+        }
+    }
 
     for (PartSnapshot& part : into.parts) {
         part.voices = 0;
@@ -60,7 +71,9 @@ void StreamingSource::capture(EngineSnapshot& into) const
         }
     }
 
-    for (std::size_t i = 0; i < into.parts.size(); ++i) {
+    const auto limit =
+        std::min(into.parts.size(), static_cast<std::size_t>(generator_.parts()));
+    for (std::size_t i = 0; i < limit; ++i) {
         const Part& part = generator_.part(static_cast<int>(i));
         PartSnapshot& slot = into.parts[i];
 
