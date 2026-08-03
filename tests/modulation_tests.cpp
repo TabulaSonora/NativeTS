@@ -338,6 +338,58 @@ TEST_CASE("the neutral resonance byte gives exactly unity damping", "[dsp][sccor
     CHECK(fixture.tvf().damping_coefficient(0, 0x60, 1) > 1.0);
 }
 
+TEST_CASE("the f-coefficient ceiling is the filter's stability bound", "[dsp][sccore]")
+{
+    // g_svf_f_ceil is indexed by the raw damping value's top bits, and what it holds is
+    // Chamberlin's own bound, sqrt(q^2 + 4) − q: the largest f the loop stays stable at for that q.
+    // The engine clamps f to it in voice_ctrl_ramp_d, which is why the table is loaded at all.
+    Fixture fixture = Fixture::make();
+    const auto ceiling = fixture.tables().svf_f_ceil();
+
+    REQUIRE(ceiling.size() == 1024);
+    for (std::size_t index = 32; index <= 1016; ++index) {
+        const double q = static_cast<double>(index) * 256.0 / 131072.0;
+        INFO("index " << index << " q " << q);
+        REQUIRE_THAT(static_cast<double>(ceiling[index]),
+                     WithinAbs(std::sqrt((q * q) + 4.0) - q, 0.002));
+    }
+
+    // Monotone decreasing: more resonance, less headroom.
+    for (std::size_t index = 1; index < ceiling.size(); ++index) {
+        REQUIRE(ceiling[index] <= ceiling[index - 1]);
+    }
+
+    // The clamp itself, driven past the point the cutoff units can actually reach: f saturates at
+    // 2.0 and the most resonant byte holds it to 0.832.
+    const TvfChain& tvf = fixture.tvf();
+    CHECK(tvf.frequency_coefficient(0x3FFFF) > 1.9);
+    CHECK_THAT(tvf.coefficients(0x3FFFF, 0x7F, 1).frequency,
+               WithinAbs(static_cast<double>(ceiling[0x7F * 8]), 1e-12));
+    CHECK_THAT(tvf.coefficients(0x3FFFF, 0x7F, 1).damping,
+               WithinAbs(tvf.damping_coefficient(0x3FFFF, 0x7F, 1), 1e-12));
+}
+
+TEST_CASE("the f-coefficient ceiling never engages in the reachable range", "[dsp][sccore]")
+{
+    // The cutoff ceiling already holds f below the stability bound for every resonance byte, filter
+    // type and cutoff the engine can produce, so this stage is inert -- it is implemented because
+    // it is a real stage, not because it changes a render. A failure here means something upstream
+    // now drives the filter past the point the engine considers safe, which is worth knowing about.
+    Fixture fixture = Fixture::make();
+    const TvfChain& tvf = fixture.tvf();
+
+    for (int resonance = 4; resonance <= 0x7F; ++resonance) {
+        for (int type : {0, 1, 2, 4, 5, 6}) {
+            for (int cutoff = 0; cutoff <= 0x7FFF; cutoff += 16) {
+                const int units = tvf.cutoff_units(cutoff, resonance);
+                INFO("resonance " << resonance << " type " << type << " cutoff " << cutoff);
+                REQUIRE(tvf.coefficients(units, resonance, type).frequency
+                        == tvf.frequency_coefficient(units));
+            }
+        }
+    }
+}
+
 TEST_CASE("the noise generator reproduces the engine's reset sequence", "[dsp]")
 {
     // Needs no DLL. The sequence is deterministic from engine reset; what polyphony changes is only

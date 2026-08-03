@@ -24,6 +24,7 @@ TvfChain::TvfChain(const TableSet& tables, const EnvelopeMachine& envelope)
       q_low_pass_(tables.tvf_q_lp()),
       q_type6_(tables.tvf_q_t6()),
       ramp_exp_(tables.ramp_exp()),
+      f_ceiling_(tables.svf_f_ceil()),
       velocity_sensitivity_(tables.vel_sens())
 {
 }
@@ -88,19 +89,35 @@ double TvfChain::frequency_coefficient(int units) const noexcept
     return static_cast<double>(std::min<std::int64_t>(0x7FFF, value >> 3)) / 16384.0;
 }
 
+int TvfChain::damping_raw(int units, int resonance_byte_value, int filter_type) const noexcept
+{
+    if (filter_type == 0 && resonance_byte_value == 0x40) {
+        return q_low_pass_[static_cast<std::size_t>((units >> 2) >> 8)] << 2;
+    }
+    if (filter_type == 6) {
+        return q_type6_[static_cast<std::size_t>((units >> 2) >> 8)] << 2;
+    }
+    return resonance_byte_value << 11;
+}
+
 double
 TvfChain::damping_coefficient(int units, int resonance_byte_value, int filter_type) const noexcept
 {
-    int raw = 0;
-    if (filter_type == 0 && resonance_byte_value == 0x40) {
-        raw = q_low_pass_[static_cast<std::size_t>((units >> 2) >> 8)] << 2;
-    } else if (filter_type == 6) {
-        raw = q_type6_[static_cast<std::size_t>((units >> 2) >> 8)] << 2;
-    } else {
-        raw = resonance_byte_value << 11;
-    }
+    return damping_raw(units, resonance_byte_value, filter_type) / static_cast<double>(0x20000);
+}
 
-    return raw / static_cast<double>(0x20000);
+TvfChain::Coefficients
+TvfChain::coefficients(int units, int resonance_byte_value, int filter_type) const noexcept
+{
+    const int raw = damping_raw(units, resonance_byte_value, filter_type);
+
+    // The index cannot leave the 1024-entry table: the constant branch reaches 32..1016 (resonance
+    // byte 4..127, eight entries apart) and the two cutoff-driven branches top out at 1023, since
+    // their source tables are 16-bit and the raw value is only shifted up by two.
+    const auto ceiling = static_cast<double>(f_ceiling_[static_cast<std::size_t>(raw >> 8)]);
+
+    return Coefficients{std::min(frequency_coefficient(units), ceiling),
+                        raw / static_cast<double>(0x20000)};
 }
 
 double
@@ -316,8 +333,7 @@ void TvfChain::apply(std::span<float> signal,
 
         const int units =
             cutoff_units(sum / static_cast<double>(end - start), resonance_byte_value);
-        const double f = frequency_coefficient(units);
-        const double q = damping_coefficient(units, resonance_byte_value, filter_type);
+        const auto [f, q] = coefficients(units, resonance_byte_value, filter_type);
 
         for (std::size_t n = start; n < end; ++n) {
             // The filter runs in double and the signal is float; the widening and the single

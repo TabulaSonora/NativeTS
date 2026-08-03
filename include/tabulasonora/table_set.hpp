@@ -74,6 +74,7 @@ public:
         static constexpr std::string_view ramp_divider = "ramp_divider_a03e00.bin";
         static constexpr std::string_view ramp_exp = "ramp_exp_986420.bin";
         static constexpr std::string_view ramp_flagword = "ramp_flagword_a84d8.bin";
+        static constexpr std::string_view svf_f_ceil = "svf_fceil_986860.bin";
         static constexpr std::string_view tone = "tone_a.bin";
         static constexpr std::string_view tvf_cutoff_ceil = "tvf_ceil_a7ed0.bin";
         static constexpr std::string_view tvf_q_lp = "tvf_q_lp_a7cd0.bin";
@@ -316,6 +317,12 @@ public:
         return ramp_flagword_;
     }
 
+    /// `g_svf_f_ceil` — 1024 entries; the stability ceiling the filter's `f` is clamped to, indexed
+    /// by the damping coefficient's raw integer shifted right by 8. The curve is Chamberlin's own
+    /// bound, `sqrt(q^2 + 4) − q`, to within 0.002 — it is neither a make-up nor a gain, despite
+    /// the `g_svf_makeup_gain_tbl` label the decompile carries.
+    [[nodiscard]] std::span<const float> svf_f_ceil() const noexcept { return svf_f_ceil_; }
+
     /// `g_tone_table` — tone records of stride 0x100: 0x24 header plus partial blocks of 0x6e.
     [[nodiscard]] std::span<const std::uint8_t> tone() const noexcept { return tone_; }
 
@@ -402,6 +409,7 @@ private:
     std::span<const std::uint8_t> ramp_divider_;
     std::vector<std::int32_t> ramp_exp_;
     std::span<const std::uint8_t> ramp_flagword_;
+    std::vector<float> svf_f_ceil_;
     std::span<const std::uint8_t> tone_;
     std::vector<std::uint16_t> tvf_cutoff_ceil_;
     std::vector<std::uint16_t> tvf_q_lp_;

@@ -27,7 +27,7 @@ TEST_CASE("every table in the manifest is addressable", "[manifest]")
 {
     const TableManifest& manifest = TableManifest::defaults();
 
-    REQUIRE(manifest.cached_tables().size() == 49);
+    REQUIRE(manifest.cached_tables().size() == 50);
 
     for (const TableEntry& entry : manifest.cached_tables()) {
         INFO("table " << entry.name);

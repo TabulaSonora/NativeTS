@@ -155,6 +155,7 @@ void TableSet::bind()
     ramp_divider_ = raw(names::ramp_divider);
     ramp_exp_ = reinterpret_as<std::int32_t>(raw(names::ramp_exp));
     ramp_flagword_ = raw(names::ramp_flagword);
+    svf_f_ceil_ = reinterpret_as<float>(raw(names::svf_f_ceil));
     tone_ = raw(names::tone);
     tvf_cutoff_ceil_ = reinterpret_as<std::uint16_t>(raw(names::tvf_cutoff_ceil));
     tvf_q_lp_ = reinterpret_as<std::uint16_t>(raw(names::tvf_q_lp));

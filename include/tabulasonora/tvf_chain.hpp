@@ -43,6 +43,12 @@ public:
         int base_cutoff = 0;
     };
 
+    /// The pair of coefficients the filter runs on for one control block.
+    struct Coefficients {
+        double frequency = 0.0;
+        double damping = 0.0;
+    };
+
     /// Creates the chain over a loaded table set and the shared machine, both of which must outlive
     /// it.
     TvfChain(const TableSet& tables, const EnvelopeMachine& envelope);
@@ -80,6 +86,21 @@ public:
     /// values are more resonant — effectively `Q = 64 / resonance_byte`.
     [[nodiscard]] double
     damping_coefficient(int units, int resonance_byte, int filter_type) const noexcept;
+
+    /// Both coefficients at once, with `f` clamped to the stability ceiling `q` selects.
+    ///
+    /// The engine couples the two: `voice_ctrl_ramp_d` ramps `q` and, from the same value, clamps
+    /// the `f` that `voice_ctrl_ramp_c` has just written — `f = min(f, g_svf_f_ceil[q_raw >> 8])`.
+    /// The ceiling is Chamberlin's own stability bound, `sqrt(q^2 + 4) − q`, so the clamp keeps the
+    /// filter out of the region where the loop diverges. Anything that runs the filter must take
+    /// its coefficients from here rather than from the two accessors separately.
+    ///
+    /// The clamp is inert over every cutoff and resonance the engine can reach: `cutoff_units`
+    /// already holds `f` below the ceiling for all three `q` branches, though only just — filter
+    /// type 6 at resonance byte 4 comes within 0.78%. It is implemented because it is a real stage,
+    /// not because it changes a render.
+    [[nodiscard]] Coefficients
+    coefficients(int units, int resonance_byte, int filter_type) const noexcept;
 
     /// The cutoff in Hz. Diagnostic only — the filter never needs it.
     [[nodiscard]] double
@@ -160,6 +181,9 @@ private:
     [[nodiscard]] int env_depth_word(int offset) const;
     [[nodiscard]] int pitch_bias(int magnitude) const;
 
+    /// The damping coefficient before its scaling — the integer the ceiling is indexed by.
+    [[nodiscard]] int damping_raw(int units, int resonance_byte, int filter_type) const noexcept;
+
     const EnvelopeMachine* envelope_machine_;
     std::span<const std::uint8_t> env_depth_;
     std::span<const std::uint8_t> pitch_env_;
@@ -172,6 +196,7 @@ private:
     std::span<const std::uint16_t> q_low_pass_;
     std::span<const std::uint16_t> q_type6_;
     std::span<const std::int32_t> ramp_exp_;
+    std::span<const float> f_ceiling_;
     std::span<const std::uint8_t> velocity_sensitivity_;
 };
 

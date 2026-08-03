@@ -254,8 +254,9 @@ void PartialVoice::control(double bend_milli_semitones, double mod_wheel_depth, 
         }
 
         const int units = tvf_->cutoff_units(total / control_block, resonance_byte_);
-        frequency_ = tvf_->frequency_coefficient(units);
-        damping_ = tvf_->damping_coefficient(units, resonance_byte_, filter_type_);
+        const auto coefficients = tvf_->coefficients(units, resonance_byte_, filter_type_);
+        frequency_ = coefficients.frequency;
+        damping_ = coefficients.damping;
     }
 }
 
