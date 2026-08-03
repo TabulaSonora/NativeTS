@@ -374,7 +374,19 @@ Stated plainly, because they are not covered by the numbers above:
 
 ## Methodology worth borrowing
 
-Two habits earned their place during development:
+Three habits earned their place during development:
+
+**Run the suite on every toolchain you ship from.** This is a fixed-point engine, and the one thing
+it cannot afford is arithmetic that depends on the compiler. It found exactly that:
+ts::PitchChain::start_jitter_milli_semitones tests the sign of a value truncated to sixteen bits,
+written as C# spells it — `(short)(draw << 1) >= 0`, which is bit 14. **MSVC compiles that as bit
+15 under optimisation.** The same source is correct at `/Od`, correct under GCC and clang at every
+level, and correct even in the miscompiled build if the truncation is evaluated into a variable one
+line away; it is wrong only when it feeds the branch directly. The effect was that every Windows
+render of a patch with a non-zero pitch-envelope jitter byte differed from every Linux one, in a
+way no single-platform run could see. The fix is to test the bit rather than the cast — nothing
+left to optimise wrongly — and the range sweep that caught it now also pins the four boundary draws
+by name, so a recurrence says *which* bit rather than only that the range moved.
 
 **Guard against passing vacuously.** Twelve of the twenty-six effect comparisons were once green
 while testing nothing at all — the fixture windows were shorter than the delays, so both sides were

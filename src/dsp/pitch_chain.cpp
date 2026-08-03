@@ -303,7 +303,19 @@ int PitchChain::start_jitter_milli_semitones(int depth, std::uint16_t draw) noex
     // Bit 14 picks the sign, and the magnitude slice is asymmetric: 7 bits positive, 8 negative.
     // The rounding term is added before the shift, not after -- parenthesised because that is the
     // precedence C# gives it too, and the two must not drift.
-    if (fx::i16(draw << 1) >= 0) {
+    //
+    // The sign test is spelled as the bit it tests rather than as the C# original's
+    // `(short)(draw << 1) >= 0`, and that is not a tidy-up. The two are the same predicate --
+    // shifting left by one puts bit 14 into a signed 16-bit sign position -- but **MSVC
+    // miscompiles the cast form under optimisation**. At `/O2` it takes the positive branch for
+    // every draw below 0x8000, which is bit *15*, so half the negative range is unreachable and
+    // the positive range doubles: swept over all 65536 draws at depth 10 the reachable range came
+    // out [-100, +100] where it should be [-50, +50]. The same binary built at `/Od` is correct,
+    // as is GCC at any level, and `fx::i16` evaluated into a variable one line away is correct
+    // even in the miscompiled build -- it is only wrong when it feeds this branch directly.
+    // Renders therefore differed by platform on any patch with a non-zero pitch-envelope jitter
+    // byte. Testing the bit says the same thing with nothing left to optimise wrongly.
+    if ((draw & 0x4000) == 0) {
         return (((((draw & 0x7FFF) >> 7) * depth) + 0x80) >> 8) * 10;
     }
     return ((((static_cast<std::uint16_t>(draw * -2) >> 8) * depth) + 0x80) >> 8) * -10;

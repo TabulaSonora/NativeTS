@@ -18,6 +18,14 @@
 /// passes `-fwrapv`, but that is belt-and-braces: routing the arithmetic through these functions is
 /// what keeps the intent visible at the call site and the behaviour independent of the toolchain.
 /// An ordinary `a * b` in this codebase should be read as a claim that the product fits.
+///
+/// One caveat, paid for. Being well-defined is not the same as being compiled correctly:
+/// `i16(x) >= 0` as a **branch condition** was miscompiled by MSVC under optimisation, which tested
+/// the wrong bit and made Windows renders differ from Linux ones. Every helper here is defined
+/// behaviour and every toolchain agrees on what it means; that only guarantees the *intent* is
+/// unambiguous. Where one of these feeds a comparison that decides a branch, prefer saying which
+/// bit is being tested — and run the suite on both toolchains, because a single-platform run cannot
+/// see this class of defect at all. \ref verification has the case.
 namespace ts::fx {
 
 /// Wrapping addition.

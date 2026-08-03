@@ -488,6 +488,21 @@ TEST_CASE("start jitter's reachable range is narrower than documented", "[dsp]")
 
     // A zero depth draws nothing and contributes nothing.
     CHECK(PitchChain::start_jitter_milli_semitones(0, 0x1234) == 0);
+
+    // Which bit picks the sign, said directly. The sweep above is what caught MSVC compiling the
+    // sign test as bit 15 under optimisation, but it could only report that the range had doubled;
+    // these four draws name the predicate, so the next time it moves the failure says which bit.
+    // Each pair differs in bit 14 alone, and 0x4000 and 0x7f80 are the two the miscompile sent
+    // down the positive branch.
+    CHECK(PitchChain::start_jitter_milli_semitones(10, 0x3FFF) == 50);  // bit 14 clear: positive
+    CHECK(PitchChain::start_jitter_milli_semitones(10, 0x4000) == -50); // bit 14 set: negative
+    CHECK(PitchChain::start_jitter_milli_semitones(10, 0x7F80) == 0);
+    CHECK(PitchChain::start_jitter_milli_semitones(10, 0x0080) == 0);
+
+    // Bit 15 does not pick it, which is the thing that was silently untrue on one toolchain: these
+    // two differ in bit 15 alone and land on the same branch, so they agree.
+    CHECK(PitchChain::start_jitter_milli_semitones(10, 0x4000)
+          == PitchChain::start_jitter_milli_semitones(10, 0xC000));
 }
 
 TEST_CASE("the pitch accumulator clamps at 127 semitones", "[dsp]")
@@ -1046,3 +1061,4 @@ TEST_CASE("the matrix's LFO rate moves the increment, and can stop the LFO", "[d
     stalled.tick(0);
     CHECK(stalled.is_applied());
 }
+
