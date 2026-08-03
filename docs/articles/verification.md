@@ -156,6 +156,32 @@ can render every note in a file. The per-note renderer no longer does anything t
 and `render` still reaches the block loop only through `--stream`. Flipping that default changes
 what every existing invocation produces, so it is a deliberate step rather than a cleanup.
 
+### Three tiers of digest, in order of authority
+
+The digests are being re-based onto three tiers, which are **not** equal and should never be
+collapsed into one number:
+
+1. **Historical** — the existing fixtures, generated from the archived C# engine. Kept as a record
+   of what the old reference produced, not as a target. They are the only digests that exist today,
+   and every gate currently measures against them.
+2. **Authoritative** — generated from `SCCore.dll` itself, driven through its own exported API
+   (`TG_initialize`, `TG_LongMidiIn`, `TG_Process`) under wine. This is the real target: agreement
+   with the black box rather than with another reimplementation.
+3. **Constrained** — this engine at the hardware's 64 voices, which is the tier directly comparable
+   to (2). The gap between them is the measurement that matters, and it answers a question worth
+   asking precisely: *how much of the difference is missing features?* Every remaining gap in this
+   engine — insertion EFX above all — should show up here as a specific, attributable divergence
+   rather than as a vague dissatisfaction.
+
+The unlimited and 256-voice digests sit alongside (3) as regression checks on this engine only.
+Nothing in the DLL can produce them, because the DLL has 64 voices.
+
+\note The harness for tier 2 mostly exists: `tools/decoder` in the spec repository already loads the
+real DLL and drives it through the exported API, and has a `song` mode. What it does not yet do is
+render an **arbitrary Standard MIDI File** — `song` takes a program number and plays a built-in
+sequence. Extending it to feed a parsed SMF through `TG_ShortMidiIn`/`TG_LongMidiIn` on the same
+sample grid is what stands between here and an authoritative digest for the test corpus.
+
 ### What the digests should be
 
 Three per file, all from the block loop, because one number cannot say both things:
