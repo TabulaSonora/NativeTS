@@ -49,6 +49,41 @@ SONGS = [
     ("panwet.mid", 1),
     ("th07_19_user_gm.mid", 1),
     ("onestop.mid", 4),
+
+    # Chosen by coverage rather than by taste: a scan of a 128,000-file archive found 288 files
+    # that genuinely drive the control matrix, and these ten are the smallest set that assigns
+    # every route any of them assigns -- all eleven destinations from all six sources -- while also
+    # between them carrying polyphonic and channel aftertouch, two ports, the part EQ, drum setup,
+    # insertion EFX selection and the sound controllers. Every one of them was checked to render
+    # through the DLL before being added; the oracle faults on some inputs and a corpus entry that
+    # cannot be rendered is worse than none.
+    #
+    # They are ordinary MIDI files off the internet and are **not** redistributed with this repo --
+    # `testdata/` is gitignored. Anyone rebuilding this fixture supplies their own corpus; what is
+    # worth keeping is the selection method, in `tools/scan_midi_archive.py`.
+    ("it_must_have_been_love.mid", 4),
+    ("bigben.mid", 4),
+    ("rainy.mid", 4),
+    ("macross2.mid", 4),
+    ("robyn_show_me_love.mid", 4),
+    ("shangai.mid", 4),
+    ("dreaming_i_was_dreaming.mid", 4),
+    ("ff5_1_16_harvest.mid", 4),
+    ("pchoral3.mid", 4),
+    ("rockarn12.mid", 4),
+
+    # Roland's own demonstration disks, at the map each was written for. These are the general
+    # fidelity backbone rather than a feature hunt: they are densely and competently sequenced by
+    # the people who built the module, so they exercise ordinary playing -- twenty programs at a
+    # time, real bend and modulation, drums throughout -- in a way an internet file selected for
+    # one SysEx address does not. `roland_sc88_y05` alone touches 43 programs.
+    ("roland_allstars.mid", 1),
+    ("roland_suplex.mid", 1),
+    ("roland_deadend.mid", 1),
+    ("roland_sc55_demo03.mid", 1),
+    ("roland_sc55_demo13.mid", 1),
+    ("roland_sc88_y03.mid", 2),
+    ("roland_sc88_y05.mid", 2),
 ]
 
 

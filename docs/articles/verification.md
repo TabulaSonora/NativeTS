@@ -360,6 +360,39 @@ Two method notes. The probe uses the **amplitude** destination rather than pitch
 reported noise — while a tremolo rides on a level track that is easy to measure. And the level has
 to be detrended, or the note's own attack envelope dominates the window that matters most.
 
+### Choosing a corpus by coverage, and what widening it found
+
+The authoritative gate ran on **one file** for a long time, and one file cannot tell you what it is
+not exercising. `tools/scan_midi_archive.py` picks a corpus by coverage instead of by ear: it
+byte-scans an archive for Roland GS SysEx, parses the shortlist to see what each file would
+actually drive, and runs a greedy set cover. Over a 128,000-file archive it found 20,688 files
+carrying GS SysEx, of which **288 genuinely drive the control matrix** — and those 288 assign every
+one of the eleven destinations from every one of the six sources, including the three destinations
+that could previously only be measured thinly. Ten files cover every route they use.
+
+Beside them sit seven of Roland's own demonstration disks, at the map each was written for. Those
+are the general backbone rather than a feature hunt: densely and competently sequenced by the
+people who built the module, so they exercise ordinary playing in a way a file selected for one
+SysEx address does not. One of them touches 43 programs.
+
+The corpus went from one file to eighteen, and the first thing it found was a fault in the
+**measurement**, not the engine. The harness drives the DLL through a single port; this engine
+defaults to two, which spreads a multi-port file's tracks over thirty-two parts instead of folding
+them onto sixteen. That is a different arrangement of the same notes and not a comparison at all.
+It could not show up while the corpus was one single-port file. The first multi-port song added put
+the low band 10 dB out and the level 4 dB down; pinning the gate to one port took the worst band to
+1.3 dB.
+
+What remains is recorded per song in `known_deviations`, as a ratchet: each bound is the measured
+deviation plus a little headroom, so nothing may get worse and closing one means tightening its
+row. Three of the fourteen are already attributed to one gap — the matrix's CC1 and CC2 sources are
+parsed and dropped, and those songs assign them and then drive them. The sharpest of the rest is
+`roland_sc88_y03`, which is about 6.5 dB light at 63 Hz and 5 dB at 125 Hz *by the same amount at
+every tone map*, so it is not patch resolution: some bass is not arriving.
+
+That is the argument for coverage over taste. One file said 1.94 dB in the top octave. Eighteen say
+where to look.
+
 ### What the digests should be
 
 Three per file, all from the block loop, because one number cannot say both things:
@@ -413,8 +446,10 @@ Stated plainly, because they are not covered by the numbers above:
   the particular numbers are not, which is the intended side of the "audible fidelity, not bit
   accuracy" line: a random modulation that steps at the right moments to the right *sort* of value
   is the parameter working.
-- **Two of the control matrix's six sources go nowhere yet.** All eleven destinations are consumed
-  now, but only from four sources — the mod wheel, both aftertouches and bend. CC1 and CC2 need
+- **Two of the control matrix's six sources go nowhere yet**, and the corpus now measures the cost.
+  Three songs in it assign CC1 or CC2 and then drive them; `shangai` puts both on amplitude and a
+  fifth of its spectrum's energy lands in the wrong octave as a result. All eleven destinations are
+  consumed, but only from four sources — the mod wheel, both aftertouches and bend. CC1 and CC2 need
   their assignable controller numbers tracked first, so every destination's clamp sees a smaller
   total than the module's would with all six deflected at once. That difference only shows at the
   rail.
