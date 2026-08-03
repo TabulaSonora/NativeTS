@@ -38,6 +38,15 @@ public:
     static constexpr std::int32_t max_sample_count = 2'000'000;
 
     /// Regions of real ROM data in bank A.
+    ///
+    /// **`region_base` does not enforce this, and descriptors exist that exceed it.** Wave 4010
+    /// (TR-808 open hat) declares bank 0 region 12 and wave 2092 (Bim Hit) region 14, both past the
+    /// twelve regions this bound describes, so their reads run off the end of the declared bank.
+    /// Both decode measurably wrong; every wave measured inside the bound decodes exactly. Compared
+    /// against the reference's own filter-input buffer, per 32-sample window: waves 2818 (region 5)
+    /// and 4008 (bank 1) match at r = 1.00000, wave 4010 at 0.88, wave 2092 at 0.81 and falling.
+    /// Wave 4010's error is a constant +0.28-sample offset, which is what makes the open hat render
+    /// about 1.1 dB loud and bright. Unreversed: what the engine's own region map does past 11.
     static constexpr int bank_a_region_count = 12;
 
     /// Regions of real ROM data in bank B — eight, not twelve.
@@ -85,6 +94,14 @@ public:
     ///
     /// The descriptor's field names are as recovered, and they are confusing: `loop` is the data
     /// start, `end` is the loop point, and `start` is the physical end.
+    ///
+    /// **`aligned_loop = loop & ~0x1F` is suspect for the waves it actually truncates.** Nearly
+    /// every `loop` is already a multiple of 32, but wave 2092's is 896066, and rounding it down by
+    /// two shifts every shift-exponent block against the deltas it scales. Since the decoder is a
+    /// pure delta accumulator with no DC blocker anywhere downstream, one wrongly-scaled block
+    /// displaces the running predictor for the rest of the wave rather than colouring 32 samples —
+    /// which matches the progressive divergence measured on that wave, as distinct from the constant
+    /// offset seen on wave 4010. Not yet confirmed against the reference's own decode.
     [[nodiscard]] std::optional<WaveStreams> read_streams(int region, int loop, int start) const;
 
 private:
