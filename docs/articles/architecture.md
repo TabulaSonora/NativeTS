@@ -147,6 +147,14 @@ with it. And the two rates are added to the LFO's increment, which is not merely
 an increment driven to nothing stops that LFO outright — the module skips the whole update, so the
 depths stop being applied too.
 
+**An LFO's delay does not hold back a controller.** It holds back the *fade-in*, and the fade
+scales the patch's own depth — so while it sits at zero the patch contributes nothing whichever way
+one models it, but a matrix depth is summed past the fade and reaches the voice from the note's
+first tick. Suppressing the whole update during the delay looks equivalent and is not, which is
+exactly what it did here until the module was asked: on a patch whose LFO1 delay runs 710 ms,
+driving that LFO's amplitude depth from the mod wheel, the module modulates immediately and this
+engine was flat for 710 ms and then agreed exactly.
+
 **The LFOs the matrix drives are not all functions of their phase.** Most of the shapes are — ask
 where in the cycle the LFO is and the value follows. Three are not: selectors 1, 2 and 3 redraw
 from the engine's shared generator when the phase *wraps*, and either hold that draw (sample and

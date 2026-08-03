@@ -212,7 +212,11 @@ public:
     /// The configuration this runner steps.
     [[nodiscard]] const LfoConfig& config() const noexcept { return config_; }
 
-    /// Whether the delay has elapsed, so the LFO is being applied.
+    /// Whether the last tick ran an update at all, so the LFO has an output to give.
+    ///
+    /// This is **not** "the delay has elapsed" — the delay holds the fade-in at zero but does not
+    /// stop the LFO being applied, since a matrix depth is summed past the fade. What turns it off
+    /// is an increment of nothing, which is the one case the module skips outright.
     [[nodiscard]] bool is_applied() const noexcept { return applied_; }
 
     /// Advances one control tick.

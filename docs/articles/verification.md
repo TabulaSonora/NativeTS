@@ -333,6 +333,33 @@ vibrato, so the assigned row is measuring the random shape and not the patch.
 
 **The values differ**, and Known limits says why. Nothing in this section depends on them.
 
+### What the LFO delay does and does not hold back
+
+Wiring the matrix into the LFO depths exposed a difference that had been invisible while the mod
+wheel was the only controller reaching them. An LFO's delay gates its fade-in, and the fade scales
+the *patch's* depth; a controller's depth is summed after it. So during the delay the module
+modulates at full controller strength, and this engine — which suppressed the whole update until
+the delay elapsed — did not.
+
+Measured on program 43, whose LFO1 delay runs 710 ms, with the mod wheel driving that LFO's
+amplitude depth. Tremolo depth as the standard deviation of the level track with the note's own
+envelope detrended away:
+
+| Window | Module | Before | After |
+|---|---|---|---|
+| inside the delay, 0.2–0.6 s | 14.73 | **0.51** | 14.31 |
+| across it, 0.6–0.9 s | 13.72 | 10.03 | 12.83 |
+| after it, 1.0–2.0 s | 12.12 | 12.12 | 12.00 |
+
+The bottom row is what makes the top row a finding rather than a mismeasurement: the depth law was
+already right, and agreed to one per cent as soon as the delay was out of the way. Only the gate
+was wrong.
+
+Two method notes. The probe uses the **amplitude** destination rather than pitch, because a
+600-cent vibrato defeats every cheap pitch estimator — the tracker jumped between harmonics and
+reported noise — while a tremolo rides on a level track that is easy to measure. And the level has
+to be detrended, or the note's own attack envelope dominates the window that matters most.
+
 ### What the digests should be
 
 Three per file, all from the block loop, because one number cannot say both things:

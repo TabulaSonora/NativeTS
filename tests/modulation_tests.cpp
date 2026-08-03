@@ -1194,3 +1194,40 @@ TEST_CASE("the random LFO shapes redraw on the phase wrapping", "[dsp]")
     }
 }
 
+
+
+TEST_CASE("an LFO's delay holds back the patch's depth, not a controller's", "[dsp]")
+{
+    const Fixture fixture = Fixture::make();
+
+    // A saw, so a tick that reports nothing really is nothing rather than a zero crossing.
+    LfoConfig config;
+    config.waveform = 5;
+    config.increment = 0x1000;
+    config.delay_rate = 0x0400;   // 0xffff / 0x400, so the delay completes on the 64th tick
+    config.fade_rate = 0xFFFF;
+    config.pitch_depth = 6000;
+
+    const auto peak_over = [](LfoRunner& runner, int ticks, int matrix_depth) {
+        double seen = 0.0;
+        for (int tick = 0; tick < ticks; ++tick) {
+            runner.tick();
+            seen = std::max(seen, std::abs(runner.value(LfoDestination::pitch, matrix_depth)));
+        }
+        return seen;
+    };
+
+    // The patch's own depth is scaled by the fade-in, and the fade does not start until the delay
+    // has run out -- so for the first sixty-odd ticks the patch contributes nothing.
+    LfoRunner patch_only = fixture.lfo().create_runner(config);
+    CHECK(peak_over(patch_only, 8, 0) == 0.0);
+
+    // A controller's depth is summed *past* the fade, so it sounds from the first tick. This is the
+    // distinction the engine draws and this one did not: suppressing the whole update during the
+    // delay silences the controller too, which the module was measured not to do.
+    LfoRunner controlled = fixture.lfo().create_runner(config);
+    CHECK(peak_over(controlled, 8, 6000) > 1000.0);
+
+    // And once the delay elapses the patch's own depth arrives, so the delay is still a delay.
+    CHECK(peak_over(patch_only, 70, 0) > 1000.0);
+}

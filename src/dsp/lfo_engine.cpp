@@ -274,20 +274,29 @@ void LfoRunner::tick(int rate_offset) noexcept
     phase_ = advanced & 0xFFFF;
     advance_waveform(advanced > 0xFFFF);
 
+    // The delay gates the **fade-in**, not the application, and the difference is invisible until a
+    // controller is involved. The fade scales the patch's own depth, so while it sits at zero the
+    // patch contributes nothing whichever way this is modelled -- but a matrix depth is summed
+    // *after* the fade, so on the module it reaches the voice at full strength from the first tick,
+    // delay or no delay. Suppressing the whole update instead is what this did until the module was
+    // asked: on a patch whose LFO1 delay is 710 ms, driving that LFO's amplitude depth from the mod
+    // wheel, the module modulates from the note's first tick and this engine was flat for 710 ms
+    // and then agreed exactly.
+    //
+    // A zero delay rate still never completes, which is how a patch switches its own LFO off. A
+    // matrix depth still reaches it, as on the module.
+    bool delaying = false;
     if (delay_ < 0xFFFF) {
-        // The LFO runs during the delay but is not applied. A zero rate never completes, which is
-        // how a patch switches an LFO off entirely.
         if (config_.delay_rate == 0) {
-            return;
-        }
-
-        delay_ = std::min(0xFFFF, delay_ + config_.delay_rate);
-        if (delay_ < 0xFFFF) {
-            return;
+            delaying = true;
+        } else {
+            delay_ = std::min(0xFFFF, delay_ + config_.delay_rate);
+            delaying = delay_ < 0xFFFF;
         }
     }
 
-    if (fade_ < 0xFFFF) {
+    // The fade advances on the tick the delay completes, not the one after it.
+    if (!delaying && fade_ < 0xFFFF) {
         fade_ = std::min(0xFFFF, fade_ + config_.fade_rate);
     }
 
