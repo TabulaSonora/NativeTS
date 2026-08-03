@@ -617,9 +617,30 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
         }
 
         if ((a2 & 0xF0) == 0x20) {
-            // The controller assignment matrix (`sysex_part_control_matrix`): CC1/CC2, bend and
-            // aftertouch routing into the modulation matrix. Placeholder -- this engine models
-            // only the mod wheel's LFO1 route so far.
+            // The controller assignment matrix (`sysex_part_control_matrix`). The address splits
+            // into a source in the high nibble and a destination in the low one.
+            const int index =
+                Impl::part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+            Part& part = impl_->parts[static_cast<std::size_t>(index)];
+
+            const int source = a3 >> 4;
+            const int destination = a3 & 0x0F;
+            if (source >= ControlMatrix::source_count
+                || destination >= ControlMatrix::destination_count) {
+                return;
+            }
+
+            // Bend's pitch depth is the bend range, in the engine and so here: one byte, written
+            // by this message and by RPN 00/00 alike, clamped to 0-24 semitones by both.
+            if (source == static_cast<int>(ControlMatrix::Source::bend)
+                && destination == static_cast<int>(ControlMatrix::Destination::pitch)) {
+                part.bend_range = std::clamp(value - 0x40, 0, 24);
+                return;
+            }
+
+            part.control
+                .depth[static_cast<std::size_t>(source)][static_cast<std::size_t>(destination)] =
+                value;
             return;
         }
         return;

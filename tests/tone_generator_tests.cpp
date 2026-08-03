@@ -1,3 +1,4 @@
+#include "tabulasonora/control_matrix.hpp"
 #include "tabulasonora/sequence_player.hpp"
 #include "tabulasonora/tone_generator.hpp"
 
@@ -683,4 +684,79 @@ TEST_CASE("the four-band EQ engages only when a part opts in", "[stream][sccore]
 
     // Both together, and a low note loses energy.
     CHECK(render(true, true) < plain * 0.95);
+}
+
+TEST_CASE("the control matrix arrives over SysEx", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    using Source = ControlMatrix::Source;
+    using Destination = ControlMatrix::Destination;
+
+    // Power-on: everything centred or zero, with the one exception that gives a GM file's mod
+    // wheel its vibrato without being asked.
+    const Part& part = generator.part(0);
+    CHECK(part.control.at(Source::modulation, Destination::pitch) == 0x40);
+    CHECK(part.control.at(Source::modulation, Destination::lfo1_pitch) == 0x0A);
+    CHECK(part.control.at(Source::modulation, Destination::lfo1_tva) == 0x00);
+    CHECK(part.control.at(Source::cc2, Destination::lfo2_rate) == 0x40);
+
+    // The address is a source in the high nibble and a destination in the low one. Block 1 is
+    // channel 0; `40 21 26` is CC1 -> LFO1 TVA depth.
+    generator.send_sysex(dt1({0x40, 0x21, 0x46, 0x50}));
+    CHECK(part.control.at(Source::cc1, Destination::lfo1_tva) == 0x50);
+
+    generator.send_sysex(dt1({0x40, 0x21, 0x04, 0x7F}));
+    CHECK(part.control.at(Source::modulation, Destination::lfo1_pitch) == 0x7F);
+
+    // Bend's pitch depth is not a matrix cell here, because it is not one in the engine: it is the
+    // same byte RPN 00/00 writes, so `40 2x 10` sets the bend range and nothing else.
+    CHECK(part.bend_range == 2);
+    generator.send_sysex(dt1({0x40, 0x21, 0x10, 0x4C}));
+    CHECK(part.bend_range == 12);
+
+    // And the reverse: the RPN sets what the SysEx would have read back.
+    generator.send_channel(0xB0, 101, 0);
+    generator.send_channel(0xB0, 100, 0);
+    generator.send_channel(0xB0, 6, 7);
+    CHECK(part.bend_range == 7);
+
+    // Both clamp at 24 semitones, which is where the engine clamps.
+    generator.send_sysex(dt1({0x40, 0x21, 0x10, 0x7F}));
+    CHECK(part.bend_range == 24);
+
+    // Addresses past the matrix are ignored rather than written past the end.
+    generator.send_sysex(dt1({0x40, 0x21, 0x0B, 0x7F}));
+    generator.send_sysex(dt1({0x40, 0x21, 0x60, 0x7F}));
+    CHECK(part.control.at(Source::cc2, Destination::lfo2_tva) == 0x00);
+}
+
+TEST_CASE("the mod wheel's depth comes from the matrix", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    const auto depth_at = [&](int assigned) {
+        ToneGenerator generator{notes};
+        if (assigned >= 0) {
+            generator.send_sysex(dt1({0x40, 0x21, 0x04, assigned}));
+        }
+        generator.send_channel(0xB0, 1, 127);
+        return generator.part(0).mod_wheel_depth();
+    };
+
+    // Untouched, the matrix's 0x0a is what the engine assumed all along, so a stream that never
+    // addresses `40 2x 04` is unchanged.
+    const double power_on = depth_at(-1);
+    CHECK(depth_at(0x0A) == power_on);
+    CHECK(power_on > 0.0);
+
+    // Assigning more deepens it and assigning nothing silences it -- neither of which happened
+    // before the matrix was wired in.
+    CHECK(depth_at(0x40) > power_on * 3.0);
+    CHECK(depth_at(0x00) == 0.0);
 }

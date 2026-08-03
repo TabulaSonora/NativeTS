@@ -18,6 +18,7 @@ void Part::reset()
     delay_send = 0;
     bend = 8192;
     bend_range = 2;
+    control.reset();
     fine_tune = 0x2000;
     coarse_tune = 0x40;
     key_shift = 0x40;

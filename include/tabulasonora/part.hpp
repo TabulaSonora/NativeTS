@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tabulasonora/control_matrix.hpp"
 #include "tabulasonora/lfo_engine.hpp"
 #include "tabulasonora/part_modifiers.hpp"
 #include "tabulasonora/pitch_chain.hpp"
@@ -98,6 +99,12 @@ public:
     int coarse_tune = 0x40;
     /// GS part key shift (`40 1x 16`), 0x40 centred; the engine clamps it to 0x28-0x58.
     int key_shift = 0x40;
+
+    /// The controller assignment matrix (`40 2x`), which decides what each source modulates.
+    ///
+    /// Bend's pitch depth is the one route that lives elsewhere: it is `bend_range` above, because
+    /// the engine stores it in the same byte RPN 00/00 writes. See `ControlMatrix`.
+    ControlMatrix control;
 
     /// Channel aftertouch, stored but not yet routed: the engine feeds it to the modulation
     /// matrix (`channel_pressure_apply`), which this port does not model beyond the mod wheel.
@@ -273,9 +280,15 @@ public:
     [[nodiscard]] double volume_scale() const noexcept { return volume_scale_; }
 
     /// The mod wheel's contribution to LFO1 pitch depth, in milli-semitones.
+    ///
+    /// The depth is the matrix's own (`40 2x 04`) rather than a constant. Its power-on value is
+    /// 0x0A, which is what `LfoEngine::mod_wheel_depth` had been assuming — so a stream that never
+    /// touches the matrix sounds exactly as before, and one that does is no longer ignored.
     [[nodiscard]] double mod_wheel_depth() const noexcept
     {
-        return LfoEngine::mod_wheel_depth(modulation);
+        return LfoEngine::mod_wheel_depth(
+            modulation,
+            control.at(ControlMatrix::Source::modulation, ControlMatrix::Destination::lfo1_pitch));
     }
 
     /// The bend offset in milli-semitones.
