@@ -481,8 +481,42 @@ Two more measured leads from the same pass, both unfixed:
   about 0.4% of a segment ahead — a flat **0.38 dB** wherever the shape is steep. `g_env_shape` is
   258 entries rather than 256, and the extra two exist for precisely the `shape[k+1]` the module
   needs at `k = 255`, which is what settles the reading.
-- **This engine starts every note about 128 samples early.** Median 128 across all 238 cases, 4 ms
-  at 32 kHz. Systematic, unexplained, and not yet chased.
+- **This engine starts every note 128 samples early**, and \ref the-midi-pipeline-costs-128-samples
+  says why.
+
+### The MIDI pipeline costs 128 samples {#the-midi-pipeline-costs-128-samples}
+
+The module's first sounding sample lands at **exactly 128 after the note-on, in all 238 cases** —
+not a median, not a spread, the same integer every time. This engine's lands at 1. Measured by first
+departure from the idle level rather than by a fraction of the peak, so the attack rate cannot
+contaminate it.
+
+It is not an artefact of how the gate drives either side. `scdec onsetprobe` sweeps the render chunk
+size across 32, 64, 128, 160, 320 and 512 frames and the answer is 128 every time, so it is not
+block-boundary quantisation of the caller's calls. Sweeping the frames rendered *between the program
+change and the note-on* is what shows the shape: at 0, 16 and 32 frames the onset lands at a fixed
+128 samples from the program change, and from 64 frames on it is 128 samples from the note-on.
+
+`TG_Process` says what it is. The MIDI ring is drained **after** `render_block()`, and each queued
+event carries a timestamp gated against a block counter that only advances once per rendered block.
+The decompilation's own traced chain has the event crossing four stages — the ready buffer, the
+per-port FIFO, the parser state machine, then `part_start_voices` — and each is advanced by one
+per-block callback. Four blocks of 32 samples is 128.
+
+Cross-correlating the two renders confirms it end to end: `Syn.Bass 1` peaks at **r = 0.92 at a lag
+of 128–129 samples**, so our render is very nearly the module's, advanced.
+
+The other host rates are the same latency seen through the module's resampler — it runs at 32 kHz
+internally and converts on the way out, so 64 kHz reads 255 and 16 kHz reads 48. At 32 kHz, which is
+what this engine renders at and what both gates compare, the number is 128 and it is exact.
+
+**It is not implemented, and that is a decision rather than an omission.** Modelling it faithfully
+means queueing events against a block counter the way `TG_Process` does — which makes
+`ToneGenerator::send_channel` asynchronous, so a program change no longer takes effect before the
+next call returns. A good deal of the suite reads state back immediately after sending, and every
+one of those would have to render four blocks first. The equivalent shortcut, delaying the output by
+128 samples, is exactly the same thing for a time-invariant engine and is one line — but it buys the
+alignment by asserting a latency the engine does not actually have.
 
 ### The engine plays sharp {#the-engine-plays-sharp}
 
