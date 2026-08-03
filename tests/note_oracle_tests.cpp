@@ -150,16 +150,21 @@ struct KnownDeviation {
 ///
 /// They fall into two groups, and the split is informative:
 ///
-///  - **Patches that deviate in *time* while their spectrum and level agree.** `Bass & Lead` is the
-///    clearest, and the only one where the cause is legible from the numbers alone: the module's
-///    envelope dips 8 dB partway through the note and recovers, which is tremolo, and this engine's
-///    dip lands in a different window -- 12 dB apart at the worst one while the spectrum stays
-///    inside 2.6 dB and the level inside 0.5 dB. Nothing about the *tone* is wrong. That points at
-///    the same unresolved LFO starting phase the song gate names for the effect LFOs, met one level
-///    down where it is much easier to look at. `Nylon Gt.` and `Syn.Bass 1` deviate the same way
-///    but 20 dB into the decay, where a release rate would do it too; `Vibraphone` and `Tenor Sax`
-///    miss on the peak alone and pass everything else, which is weaker evidence still. Only the
-///    first is diagnosed. The rest are grouped by *shape*, which is a hypothesis, not a finding.
+///  - **Patches that deviate in *time* while their spectrum and level agree**, which is **beating
+///    between two detuned partials, at the wrong rate**. `Bass & Lead` was measured: the module's
+///    two partials sit at 1043.8 and 1045.5 Hz, 1.7 Hz apart, and this engine's at 1045.9 and
+///    1048.3 Hz, 2.4 Hz apart. Their envelopes then modulate at 1.75 and 2.33 Hz respectively --
+///    the beat, not an LFO -- so the dips land in different windows and the envelope metric reads
+///    12 dB while the spectrum stays inside 2.6 dB and the level inside 0.5 dB.
+///
+///    It looked like an LFO starting phase and is not. `Bass & Lead`'s LFO1 carries a TVA depth of
+///    682 against a 0x7F00 full scale, which is 0.18 dB, and runs at 6 Hz -- too shallow to see and
+///    far too fast to survive an 87 ms RMS window. Traced live with `scdec lfotrace`.
+///
+///    The beat is wrong because **the partials are**: both of this engine's sit sharp of the
+///    module's, by 3.5 and 4.6 cents, and a detune error is a beat-rate error. See
+///    `docs/articles/verification.md` for how far that generalises -- it is not confined to this
+///    patch, and it is the largest thing this gate found.
 ///  - **Patches with a noise component**: `Whistle`, `Synth Drum`, `Seashore`, `Atmosphere`. The
 ///    obvious explanation is that the shared pseudo-random source is at a different point when the
 ///    note starts, and **that was measured and is not it** -- returning the generator to its seed
@@ -172,11 +177,11 @@ struct KnownDeviation {
 /// is read off when it is due to be tightened. Not a test mode -- a ruler.
 constexpr std::array<KnownDeviation, 9> known_deviations{{
     {11, {1.0, 0.06, 3.0, 6.0}, "Vibraphone; peak alone -- level, spectrum and envelope all pass"},
-    {24, {1.6, 0.01, 7.0, 11.5}, "Nylon Gt.; envelope, 20 dB into the decay tail"},
-    {38, {1.3, 0.01, 3.0, 11.5}, "Syn.Bass 1; envelope in the tail, and the sweep's highest floor"},
+    {24, {1.6, 0.01, 7.0, 11.5}, "Nylon Gt.; decays about 1.5x too fast, 20 dB into the tail"},
+    {38, {1.3, 0.01, 3.0, 11.5}, "Syn.Bass 1; beat rate, and the sweep's highest noise floor"},
     {66, {1.0, 0.04, 3.0, 6.0}, "Tenor Sax; peak alone -- level, spectrum and envelope all pass"},
     {78, {2.5, 0.13, 23.0, 6.0}, "Whistle; lead -- 21 dB in a band the note reaches"},
-    {87, {1.0, 0.02, 3.0, 13.5}, "Bass & Lead; envelope dip in the wrong window, spectrum inside 2.6 dB"},
+    {87, {1.0, 0.02, 3.0, 13.5}, "Bass & Lead; beats at 2.33 Hz where the module beats at 1.75"},
     {99, {1.6, 0.01, 4.5, 9.0}, "Atmosphere; noise layer"},
     {118, {1.0, 0.045, 7.0, 6.0}, "Synth Drum; noise layer"},
     {122, {1.0, 0.01, 6.0, 6.0}, "Seashore; noise is the whole patch"},
@@ -207,7 +212,8 @@ constexpr std::array<KnownDeviation, 9> known_deviations{{
                                   const Case& which,
                                   double hold,
                                   double tail,
-                                  int rate)
+                                  int rate,
+                                  const fs::path& audio_path = {})
 {
     // The pseudo-random source lives in the renderer, which outlives the generator, so a fresh
     // `ToneGenerator` does *not* return it to its seed -- and the sweep shares one renderer. Without
@@ -259,6 +265,16 @@ constexpr std::array<KnownDeviation, 9> known_deviations{{
         generator.render(std::span{left}.subspan(position, count),
                          std::span{right}.subspan(position, count));
         position += count;
+    }
+
+    // Interleaved float32, byte for byte what `notebatch` wrote for the oracle, so the two renders
+    // of a failing case can be measured against each other rather than only counted apart.
+    if (!audio_path.empty()) {
+        std::ofstream out{audio_path, std::ios::binary};
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            const std::array<float, 2> frame{left[i], right[i]};
+            out.write(reinterpret_cast<const char*>(frame.data()), sizeof(frame));
+        }
     }
 
     return measure(left, right, rate);
@@ -313,7 +329,22 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
         INFO("program " << which.program << " note " << which.note << " velocity "
                         << which.velocity << " map " << which.map);
 
-        const Metrics ours = render_case(notes, which, hold, tail, rate);
+        // `TS_NOTE_AUDIO=<dir>` writes this engine's render of every case beside the oracle's, under
+        // the same `caseNNNN.f32` name. What a failure means is rarely legible from four numbers,
+        // and the oracle audio is already on disk for exactly this reason.
+        fs::path audio_path;
+        if (const char* directory = std::getenv("TS_NOTE_AUDIO"); directory != nullptr) {
+            fs::create_directories(directory);
+            // Split on either separator by hand: the fixture is written by whichever host generated
+            // it, so a Windows-generated path is read back under Linux where `\` is an ordinary
+            // character and `fs::path::filename` would hand back the whole string.
+            const auto stored = entry.at("audio").get<std::string>();
+            const auto cut = stored.find_last_of("/\\");
+            audio_path = fs::path{directory}
+                         / (cut == std::string::npos ? stored : stored.substr(cut + 1));
+        }
+
+        const Metrics ours = render_case(notes, which, hold, tail, rate, audio_path);
 
         // Length is exact here, unlike the song gate's: the test chooses how many frames to render
         // rather than a sequence deciding when it ends. What this asserts is that both sides
@@ -384,24 +415,25 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
 
         // The ruler. 180 cases is too many to read through failures alone -- what a bound should be
         // is a question about the whole distribution, not about the cases that happen to miss.
+        //
+        // What it prints is this engine's own measurements, undifferenced. The fixture beside it
+        // holds the module's, so anything worth asking -- a delta, a distribution, the shape of one
+        // note's envelope against the module's -- can be asked afterwards without running again.
         if (std::getenv("TS_NOTE_REPORT") != nullptr) {
+            const ResolvedTone resolved = notes.directory().resolve_midi(
+                which.program, which.note, which.velocity, static_cast<ToneMap>(which.map), 0);
+
             std::cout << "case " << which.program << ' ' << which.note << ' ' << which.velocity
-                      << ' ' << which.map << " rms "
-                      << (expected_rms > 1e-6 ? 20.0 * std::log10(ours.rms / expected_rms) : 0.0)
-                      << " peak " << (ours.peak - expected_peak) << " bands";
-            for (std::size_t band = 0; band < ours.bands.size(); ++band) {
-                std::cout << ' '
-                          << (expected_bands[band] < -60.0
-                                  ? 0.0
-                                  : ours.bands[band] - expected_bands[band]);
+                      << ' ' << which.map << " partials " << resolved.partials.size() << " rms "
+                      << ours.rms << " peak " << ours.peak << " bands";
+            for (const double band : ours.bands) {
+                std::cout << ' ' << band;
             }
-            std::cout << " env " << worst << ' ' << worst_window << ' '
-                      << (ours.envelope[worst_window] - expected_envelope[worst_window]) << " name "
-                      << notes.directory()
-                             .resolve_midi(which.program, which.note, which.velocity,
-                                           static_cast<ToneMap>(which.map), 0)
-                             .name
-                      << '\n';
+            std::cout << " env";
+            for (const double window : ours.envelope) {
+                std::cout << ' ' << window;
+            }
+            std::cout << " name " << resolved.name << '\n';
         }
 
         ++compared;

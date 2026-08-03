@@ -301,15 +301,10 @@ creep up into audibility unnoticed. **This engine's floor is the higher of the t
 
 The nine programs that do need an allowance fall into two groups:
 
-- **Patches that deviate in *time* while their spectrum and level agree.** `Bass & Lead` is the
-  clearest, and the only one diagnosed: the module's envelope dips 8 dB partway through the note and
-  recovers — that is tremolo — and this engine's dip lands in a different window, 12 dB apart at the
-  worst one while the spectrum stays inside 2.6 dB and the level inside 0.5 dB. Nothing about the
-  tone is wrong. That points at the same unresolved LFO starting phase the song gate names for the
-  effect LFOs, met one level down where it is far easier to look at. `Nylon Gt.` and `Syn.Bass 1`
-  deviate the same way but 20 dB into the decay, where a release rate would do it too; `Vibraphone`
-  and `Tenor Sax` miss on the peak alone. Those four are grouped by shape, which is a hypothesis
-  rather than a finding.
+- **Patches that deviate in *time* while their spectrum and level agree.** `Bass & Lead` was chased
+  to the bottom, and what it found is in \ref the-engine-plays-sharp below: the two engines beat at
+  different rates because their partials are tuned differently. `Nylon Gt.` is a separate defect —
+  it decays about 1.5× too fast, a clean monotonic drift of −0.96 dB per envelope window.
 - **Patches with a noise component** — `Whistle`, `Synth Drum`, `Seashore`, `Atmosphere`. The
   obvious explanation is that the shared pseudo-random source is at a different point when the note
   starts, and that was measured and **is not it**: returning the generator to its seed before every
@@ -317,7 +312,53 @@ The nine programs that do need an allowance fall into two groups:
   anyway, so that no case depends on the ones that ran before it, but the cause lies elsewhere.
 
 `Whistle` is the outlier of the four by a wide margin — 21 dB in a band the note genuinely reaches
-and 2 dB of overall level. It is the sharpest lead this gate produced.
+and 2 dB of overall level. It remains unexplained.
+
+### The engine plays sharp {#the-engine-plays-sharp}
+
+`Bass & Lead` deviates in the envelope and nowhere else, which looked like an LFO starting at a
+phase this port cannot derive — the same thing the song gate names for the effect LFOs. It is not.
+Tracing the module's own LFO object with `scdec lfotrace` shows LFO1 running at 6 Hz with a TVA
+depth of 682 against a 0x7F00 full scale: 0.18 dB, far too shallow to see, and far too fast to
+survive an 87 ms RMS window in the first place.
+
+What actually modulates is **beating between the patch's two partials**, and the two engines beat at
+different rates:
+
+| | module | here |
+|---|---|---|
+| partials near C6 | 1043.8 and 1045.5 Hz | 1045.9 and 1048.3 Hz |
+| spacing | 1.7 Hz | 2.4 Hz |
+| envelope modulation, over a 6 s note | 1.75 Hz | 2.33 Hz |
+
+The spacing and the modulation agree in each engine, which is what identifies the mechanism. The
+spacing differs because *both partials are sharp* — by 3.5 and 4.6 cents — and unequally, so the
+interval between them opens up.
+
+That is not confined to one patch. Comparing the fundamental of every pitched case in the sweep
+against the module's own render of the same note:
+
+| | |
+|---|---|
+| single-partial cases, note ≥ 72 | median **+2.47 cents**, 11 of 51 within a cent |
+| multi-partial cases | median +3.47 cents, standard deviation 1.0 |
+| measured over 0.0–0.5 s | +2.67 cents |
+| measured over 0.5–1.0 s | +2.48 cents |
+
+Holding across both halves of the note rules out a pitch-envelope attack artefact: it is steady
+tuning. The direction is consistent — this engine is sharp, the module flat of equal temperament.
+
+\warning **The cause is not yet known.** The candidates are the `1024` neutral in
+`native = root_key × 1000 + 1024 − fine_tune` (25 milli-semitones would account for it, but 1049 is
+not a plausible constant), the per-wave fine-tune term, and the pitch start jitter, whose first draw
+from the shared generator is 0x4f95 and lands on the negative branch — the wrong direction to
+explain a sharp engine.
+
+Two things about *how this was missed* are worth keeping. **No gate in this project measures
+pitch.** Level, spectrum and envelope all pass: 2.5 cents is far inside a third-octave band, moves
+no RMS, and changes no envelope — except on a patch where it changes a beat rate, which is the only
+reason it surfaced at all. And the note gate found it only because a single note has one
+fundamental to measure; a song has sixteen parts and no measurable pitch at all.
 
 ### Measuring the control matrix against the module
 
