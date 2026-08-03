@@ -33,6 +33,14 @@ struct ToneGeneratorOptions {
     /// requirement is to be right.
     int polyphony = 64;
 
+    /// MIDI ports to accept input on: 1, 2 or 4, giving 16, 32 or 64 parts.
+    ///
+    /// Two is the hardware and the default. Four is a deliberate extension past what the module can
+    /// do -- see `ToneGenerator::max_port_count` -- and wants a raised `polyphony` beside it, since
+    /// sixty-four parts sharing sixty-four voices would steal without pause. Values that are not
+    /// 1, 2 or 4 are rejected: the part index is formed by masking, which needs a power of two.
+    int ports = 2;
+
     /// Which vintage's tone map program changes resolve against.
     ToneMap map = ToneMap::sc8820;
 
@@ -87,7 +95,7 @@ public:
     /// Samples per control tick, at 100 Hz.
     static constexpr int control_block = NoteRenderer::control_block;
 
-    /// How many MIDI ports the engine accepts input on.
+    /// How many MIDI ports the *hardware* accepts input on.
     ///
     /// Two, because the module has thirty-two parts and addresses them as `port * 16 + channel`. It
     /// allocates all thirty-two unconditionally — the part count global is initialised to `0x20`
@@ -97,8 +105,26 @@ public:
     /// second port and no more, which is what this engine implements.
     static constexpr int port_count = 2;
 
-    /// How many parts the engine has: sixteen per port.
+    /// How many parts the hardware has: sixteen per port.
     static constexpr int part_count = port_count * Sequence::channel_count;
+
+    /// The widest this engine can be asked to run, past what the module can do.
+    ///
+    /// `ToneGeneratorOptions::ports` accepts 1, 2 or 4, giving 16, 32 or 64 parts, and the default
+    /// is the hardware's 2. Four is an **extension, not a fidelity feature**: the module allocates
+    /// thirty-two parts and no more, so nothing above `port_count` reproduces anything it does. It
+    /// exists for the same reason `unlimited_polyphony` does -- a host driving more than
+    /// thirty-two channels of material through one engine, where being able to play the file
+    /// matters more than matching a module that could not have played it either.
+    ///
+    /// Pair it with the polyphony. Thirty-two parts share the hardware's 64 voices already; sixty-
+    /// four parts asking for the same 64 will steal continuously and sound nothing like the extra
+    /// parts were worth having. Something like 256 is the sensible companion, and
+    /// `unlimited_polyphony` for offline work.
+    static constexpr int max_port_count = 4;
+
+    /// Parts at `max_port_count`.
+    static constexpr int max_part_count = max_port_count * Sequence::channel_count;
 
     /// Creates an engine over a note renderer's loaded tables, which must outlive it.
     explicit ToneGenerator(NoteRenderer& notes, const ToneGeneratorOptions& options = {});
@@ -115,6 +141,12 @@ public:
     /// the block loop, so no voice, effect or feedback path sees it. `reset` leaves it alone.
     [[nodiscard]] double output_gain() const noexcept;
     void set_output_gain(double gain) noexcept;
+
+    /// How many ports this engine was created with; parts are `ports() * 16`.
+    [[nodiscard]] int ports() const noexcept;
+
+    /// How many parts this engine was created with.
+    [[nodiscard]] int parts() const noexcept;
 
     /// How many samples have been rendered since the last reset.
     [[nodiscard]] std::int64_t position() const noexcept;

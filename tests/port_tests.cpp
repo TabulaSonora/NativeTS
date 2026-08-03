@@ -209,3 +209,71 @@ TEST_CASE("reset clears both ports", "[port][sccore]")
     CHECK(generator.part(0).volume() != 40);
     CHECK(generator.part(channels).volume() != 40);
 }
+
+TEST_CASE("sixty-four parts are reachable and independent", "[port][sccore]")
+{
+    // An extension past the module, which has thirty-two. What has to hold is that the extra ports
+    // are real parts and not aliases of the first two: the index is formed by masking the port
+    // field, and a mask one bit too narrow would fold port C onto port A silently.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    ToneGeneratorOptions options;
+    options.ports = ToneGenerator::max_port_count;
+    options.polyphony = 256; // sixty-four parts sharing sixty-four voices would steal without pause
+    ToneGenerator generator{notes, options};
+
+    REQUIRE(generator.ports() == 4);
+    REQUIRE(generator.parts() == 64);
+
+    // A distinct program on the same channel of every port, then read all four back.
+    for (int port = 0; port < generator.ports(); ++port) {
+        generator.send_channel(port, 0xC0, 20 + port, 0);
+        generator.send_channel(port, 0xB0, 7, 30 + port);
+    }
+    for (int port = 0; port < generator.ports(); ++port) {
+        INFO("port " << port);
+        CHECK(generator.part(port * channels).program == 20 + port);
+        CHECK(generator.part(port * channels).volume() == 30 + port);
+    }
+
+    // And every one of the sixty-four can sound, which the part array being wide enough is only
+    // half of -- the note path has to address them too.
+    for (int part = 0; part < generator.parts(); ++part) {
+        const int channel = part % channels;
+        if (channel == 9) {
+            continue; // the drum channel of each port takes a different path
+        }
+        generator.send_channel(part / channels, 0x90 | channel, 60, 100);
+    }
+    std::vector<float> left(ToneGenerator::block_size);
+    std::vector<float> right(ToneGenerator::block_size);
+    generator.render(left, right);
+    CHECK(generator.note_count() == 60);
+    CHECK(generator.active_voices() > 32);
+}
+
+TEST_CASE("the default stays at the hardware's two ports", "[port][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    CHECK(generator.ports() == ToneGenerator::port_count);
+    CHECK(generator.parts() == ToneGenerator::part_count);
+}
+
+TEST_CASE("a port count that is not a power of two is refused", "[port][sccore]")
+{
+    // The part index is formed by masking, so three ports would alias rather than fail, and a
+    // silent alias is worse than a refusal.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    ToneGeneratorOptions options;
+    options.ports = 3;
+    CHECK_THROWS_AS(ToneGenerator(notes, options), std::invalid_argument);
+}

@@ -19,6 +19,17 @@ namespace ts {
 struct ToneGenerator::Impl {
     Impl(NoteRenderer& renderer, const ToneGeneratorOptions& opts) : notes(&renderer), options(opts)
     {
+        // The part index is formed by masking the port field, so the count has to be a power of
+        // two. Anything else would silently alias one port onto another, which is worse than
+        // refusing it.
+        if (opts.ports != 1 && opts.ports != 2 && opts.ports != ToneGenerator::max_port_count) {
+            throw std::invalid_argument(
+                "ToneGeneratorOptions::ports must be 1, 2 or "
+                + std::to_string(ToneGenerator::max_port_count) + ", not "
+                + std::to_string(opts.ports));
+        }
+        port_count = opts.ports;
+
         output_gain = opts.output_gain;
         reverb_type = opts.reverb_type;
         chorus_type = opts.chorus_type;
@@ -31,16 +42,21 @@ struct ToneGenerator::Impl {
         pool.stealing = [this](int index) { steal(index); };
         slots.resize(static_cast<std::size_t>(pool.capacity()));
 
-        for (int i = 0; i < ToneGenerator::part_count; ++i) {
-            parts[static_cast<std::size_t>(i)].rx_channel = i % Sequence::channel_count;
+        parts.resize(static_cast<std::size_t>(port_count * Sequence::channel_count));
+        drum_kit.assign(static_cast<std::size_t>(port_count), 0);
+        for (std::size_t i = 0; i < parts.size(); ++i) {
+            parts[i].rx_channel = static_cast<int>(i) % Sequence::channel_count;
         }
     }
 
     NoteRenderer* notes;
     ToneGeneratorOptions options;
 
+    /// Ports this engine runs, always a power of two so `part_of` can mask.
+    int port_count = ToneGenerator::port_count;
+
     VoicePool pool;
-    std::array<Part, ToneGenerator::part_count> parts;
+    std::vector<Part> parts;
 
     /// One voice per slot, or empty. Recycled through `spare` rather than reallocated per note.
     /// One voice per slot, sized to the pool. A growing pool resizes this alongside itself.
@@ -124,7 +140,7 @@ struct ToneGenerator::Impl {
     double output_gain = 1.0;
     std::optional<int> drum_map_row;
     // One per port: each port's channel 10 is its own drum part, with its own kit.
-    std::array<int, ToneGenerator::port_count> drum_kit{};
+    std::vector<int> drum_kit;
     std::int64_t position = 0;
     int note_count = 0;
 
@@ -158,9 +174,9 @@ struct ToneGenerator::Impl {
     void recycle(int index);
 
     // Parts are addressed the way the module addresses them: port times sixteen, plus channel.
-    [[nodiscard]] static constexpr int part_of(int port, int channel) noexcept
+    [[nodiscard]] int part_of(int port, int channel) const noexcept
     {
-        return ((port & (ToneGenerator::port_count - 1)) * Sequence::channel_count) + channel;
+        return ((port & (port_count - 1)) * Sequence::channel_count) + channel;
     }
 
     // Every port has its own drum part, on the same channel within that port -- unless SysEx
@@ -259,6 +275,16 @@ void ToneGenerator::set_output_gain(double gain) noexcept
     impl_->output_gain = gain;
 }
 
+int ToneGenerator::ports() const noexcept
+{
+    return impl_->port_count;
+}
+
+int ToneGenerator::parts() const noexcept
+{
+    return impl_->port_count * Sequence::channel_count;
+}
+
 std::int64_t ToneGenerator::position() const noexcept
 {
     return impl_->position;
@@ -312,7 +338,7 @@ int ToneGenerator::drum_kit() const noexcept
 
 int ToneGenerator::drum_kit_for(int port) const noexcept
 {
-    return impl_->drum_kit[static_cast<std::size_t>(port & (port_count - 1))];
+    return impl_->drum_kit[static_cast<std::size_t>(port & (impl_->port_count - 1))];
 }
 
 std::optional<int> ToneGenerator::drum_map_row() const noexcept
@@ -343,7 +369,7 @@ void ToneGenerator::reset()
     impl_->dying.clear();
     impl_->pool.reset();
 
-    for (int i = 0; i < part_count; ++i) {
+    for (int i = 0; i < impl_->port_count * Sequence::channel_count; ++i) {
         Part& part = impl_->parts[static_cast<std::size_t>(i)];
         part.reset();
         part.rx_channel = i % Sequence::channel_count;
@@ -362,7 +388,7 @@ void ToneGenerator::reset()
         impl_->delay->reset();
     }
 
-    impl_->drum_kit.fill(0);
+    std::fill(impl_->drum_kit.begin(), impl_->drum_kit.end(), 0);
     impl_->position = 0;
     impl_->block_offset = block_size;
     impl_->note_count = 0;
@@ -399,7 +425,7 @@ void ToneGenerator::send_channel(int port, int status, int data1, int data2)
     // walks a per-channel list of listening parts: SysEx can point several parts at one channel,
     // or detach a part entirely.
     const int incoming = status & 0x0F;
-    const int base = (port & (port_count - 1)) * Sequence::channel_count;
+    const int base = (port & (impl_->port_count - 1)) * Sequence::channel_count;
     for (int i = 0; i < Sequence::channel_count; ++i) {
         const int index = base + i;
         Part& part = impl_->parts[static_cast<std::size_t>(index)];
@@ -672,7 +698,7 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
         if ((a2 & 0xF0) == 0x10) {
             // Part parameters, port-relative block addressing.
             const int index =
-                Impl::part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+                impl_->part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
             impl_->gs_part_parameter(
                 index, impl_->parts[static_cast<std::size_t>(index)], a3, data);
             return;
@@ -684,7 +710,7 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
             // read it. `00`/`01` are the SysEx form of the tone map number, which this engine takes
             // from its options and CC#32 instead.
             const int index =
-                Impl::part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+                impl_->part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
             Part& part = impl_->parts[static_cast<std::size_t>(index)];
             if (a3 == 0x20) {
                 part.eq_enabled = value != 0;
@@ -696,7 +722,7 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
             // The controller assignment matrix (`sysex_part_control_matrix`). The address splits
             // into a source in the high nibble and a destination in the low one.
             const int index =
-                Impl::part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+                impl_->part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
             Part& part = impl_->parts[static_cast<std::size_t>(index)];
 
             const int source = a3 >> 4;
@@ -921,7 +947,7 @@ void ToneGenerator::Impl::gs_drum_setup(int port,
 {
     // The engine keeps one drum-setup buffer per map, shared by every part on that map; here the
     // overrides live on the parts, so the write lands on each of the port's rhythm parts.
-    const int base = (port & (ToneGenerator::port_count - 1)) * Sequence::channel_count;
+    const int base = (port & (port_count - 1)) * Sequence::channel_count;
     for (int i = 0; i < Sequence::channel_count; ++i) {
         const int index = base + i;
         if (!is_drum_part(index)) {
@@ -986,7 +1012,7 @@ void ToneGenerator::Impl::stream_reset()
     }
     pool.reset();
 
-    for (int i = 0; i < ToneGenerator::part_count; ++i) {
+    for (int i = 0; i < port_count * Sequence::channel_count; ++i) {
         Part& part = parts[static_cast<std::size_t>(i)];
         part.reset();
         part.rx_channel = i % Sequence::channel_count;
@@ -999,7 +1025,7 @@ void ToneGenerator::Impl::stream_reset()
     master_tune = 0x400;
     master_key_shift = 0x40;
     master_pan = 0x40;
-    drum_kit.fill(0);
+    std::fill(drum_kit.begin(), drum_kit.end(), 0);
 
     // The EQ returns to flat and drops its filter memory with it. Keeping the memory would only
     // matter if a later message switched the EQ back on, and what it would then contribute is one

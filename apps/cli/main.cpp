@@ -210,7 +210,8 @@ int render_command(const std::string& dll,
                    int map,
                    const ts::RenderOptions& base,
                    bool hardware_polyphony,
-                   int polyphony)
+                   int polyphony,
+                   int ports)
 {
     const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
     ts::NoteRenderer notes{rom};
@@ -230,6 +231,7 @@ int render_command(const std::string& dll,
     bool limited = false;
     {
         ts::ToneGeneratorOptions engine_options;
+        engine_options.ports = ports;
         engine_options.map = options.map;
         engine_options.drum_channel = options.drum_channel;
         engine_options.reverb = options.reverb;
@@ -481,6 +483,7 @@ int main(int argc, char** argv)
     bool no_delay = false;
     bool stream = false;
     int polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
+    int ports = ts::ToneGeneratorOptions{}.ports;
     CLI::App* render = app.add_subcommand("render", "Render a Standard MIDI File to a WAV.");
     add_dll(render);
     render->add_option("midi", midi_path, "Input .mid path")->required();
@@ -500,6 +503,9 @@ int main(int argc, char** argv)
     render->add_flag("--stream", stream, "Limit polyphony to the hardware's 64 voices");
     render->add_option(
         "--polyphony", polyphony, "Voice limit; 0 grows on demand instead of stealing (default)");
+    render->add_option("--ports", ports,
+                       "MIDI ports: 1, 2 (hardware, default) or 4. Four gives 64 parts, past what "
+                       "the module has -- raise --polyphony to suit");
 
     std::vector<std::string> muted;
     std::vector<std::string> soloed;
@@ -558,7 +564,7 @@ int main(int argc, char** argv)
             }
 
             return render_command(
-                dll, midi_path, output_file, map, render_options, stream, polyphony);
+                dll, midi_path, output_file, map, render_options, stream, polyphony, ports);
         }
         if (bench->parsed()) {
             return bench_command(dll, midi_path, iterations);
