@@ -1124,6 +1124,9 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // matrix sources and clamps the total, so applying bend separately would escape that clamp.
     const double pitch_offset = part.tune_milli_semitones() + part.matrix_pitch_milli_semitones()
                                 + master_tune_milli_semitones();
+    // Refreshed per block, not latched at note-on: a filter sweep has to reach notes that are
+    // already sounding.
+    voice.set_cutoff_offset(part.modifiers().cutoff_offset());
     voice.render(block, pitch_offset, part.mod_wheel_depth());
 
     // A silenced channel contributes nothing at all -- not to the dry mix and not to the sends

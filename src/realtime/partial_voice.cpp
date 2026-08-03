@@ -247,10 +247,10 @@ void PartialVoice::control(double bend_milli_semitones, double mod_wheel_depth, 
         // paths measurably parted company.
         double total = 0.0;
         for (int n = 0; n < control_block; ++n) {
-            total +=
-                std::clamp(cutoff_base_ + cutoff_->value_at(envelope_sample(sample_ + n)) + lfo_tvf,
-                           0.0,
-                           static_cast<double>(0x7FFF));
+            total += std::clamp(cutoff_base_ + cutoff_offset_
+                                    + cutoff_->value_at(envelope_sample(sample_ + n)) + lfo_tvf,
+                                0.0,
+                                static_cast<double>(0x7FFF));
         }
 
         const int units = tvf_->cutoff_units(total / control_block, resonance_byte_);

@@ -139,6 +139,9 @@ public:
     /// is ten blocks long, so the coefficient refresh always lands on a block boundary.
     void render(std::span<float> destination, double bend_milli_semitones, double mod_wheel_depth);
 
+    /// Sets the part's live cutoff offset, in the 15-bit cutoff units the filter sums.
+    void set_cutoff_offset(double offset) noexcept { cutoff_offset_ = offset; }
+
 private:
     void release(int damper = 0);
     void control(double bend_milli_semitones, double mod_wheel_depth, bool first);
@@ -172,6 +175,14 @@ private:
     bool finished_ = true;
 
     int cutoff_base_ = 0;
+
+    /// The part's cutoff modify offset, refreshed every block rather than latched at note-on.
+    ///
+    /// CC#74, NRPN `01 20` and `40 1x 32` all move this, and files move it *during* notes -- one
+    /// commercial file sweeps it 268 times in five minutes. Sampling it once per note leaves every
+    /// sounding voice behind the sweep, which is a difference at the scale of notes rather than of
+    /// cycles.
+    double cutoff_offset_ = 0.0;
     int resonance_byte_ = 0x40;
     int filter_type_ = 0;
     FilterTap tap_ = FilterTap::bypass;
