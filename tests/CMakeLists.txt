@@ -12,6 +12,7 @@ add_executable(ts_tests
     patch_directory_tests.cpp
     port_tests.cpp
     sampler_tests.cpp
+    song_oracle_tests.cpp
     wave_codec_tests.cpp
     rom_image_tests.cpp
     sequence_tests.cpp

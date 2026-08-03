@@ -28,16 +28,18 @@ a fixture generated from the C# CLI:
 | single note | `[render][sccore][gate]` | SHA-256 of the whole render plus eight literal samples |
 | block loop, real time | `[stream][sccore][gate]` | a whole WAV, sample by sample: worst error ≤ 1 LSB, under 0.02% differing |
 | predictor stream | `[sampler][sccore][gate]` | against an independent decoder |
+| **whole song, against the DLL** | `[song][oracle][sccore][gate]` | length, level, octave bands and a coarse envelope, within stated tolerances |
 
-Only the real-time gate has any tolerance at all, and it is one LSB. A fourth, `[song]`, compared
-whole songs rendered offline; it was retired with the renderer that produced them.
+Only the real-time gate has any tolerance against the C# engine, and it is one LSB. A fifth,
+`[song]`, compared whole songs rendered offline; it was retired with the renderer that produced
+them, and the oracle gate above is what replaced it.
 
-Two of the three are now partly historical, and \ref past-the-csharp-engine says why. The note
+Two of those three are now partly historical, and \ref past-the-csharp-engine says why. The note
 gate's fixture predates the exact-start wave decode, so every case whose wave begins mid-block is
 skipped as **superseded** rather than failed, leaving 111 the fixture can still speak for; the
-stream gate has no unaffected case at all, and its references are this engine's own output kept as
+stream gate has no unaffected case at all, so its references are this engine's own output, kept as
 a regression baseline. The archived C# checkout cannot be re-run to refresh either, which is the
-whole reason the oracle work below matters.
+whole reason the oracle gate matters.
 
 The fixtures are Roland-derived and so are not committed. Each pins the DLL's SHA-256 and is
 regenerated locally by the scripts in `tools/`; a gate whose fixture index is missing skips with the
@@ -158,10 +160,11 @@ pitch envelope drops 6.671 semitones inside block 0 — and against the DLL it m
 correlation of 0.859 to 0.99999, taking a +1.11 dB error down to +0.03 dB. ts::PitchRamp is the
 implementation.
 
-The fixture fallout was handled by counting it rather than hiding it: the note gate marks the cases
-that touch a mid-block wave as superseded, and the stream gate — whose four cases *all* do — has no
-unaffected case left, so it stands as a regression baseline against this engine's own output until
-the DLL-derived gate replaces it.
+The fixture fallout was handled by counting it rather than hiding it. The note gate marks the cases
+that touch a mid-block wave as superseded. The stream gate has no unaffected case at all, so
+`tools/dump_stream_renders.py` generates from *this* engine now rather than from the archived one,
+and what it feeds is a **regression baseline**: it catches a change nobody meant to make, and it
+cannot catch a mistake both sides share. The gate that has an outside opinion is the oracle one.
 
 ## Where the reference departs from its own manual
 
@@ -215,11 +218,11 @@ collapsed into one number:
    of what the old reference produced, not as a target. They are what every gate in the suite
    currently measures against.
 2. **Authoritative** — generated from `SCCore.dll` itself, driven through its own exported API
-   (`TG_initialize`, `TG_LongMidiIn`, `TG_Process`) under wine. This is the real target: agreement
-   with the black box rather than with another reimplementation. The generators exist:
-   `tools/dump_note_renders_oracle.py` sweeps 180 single notes across every tone map and
-   `tools/dump_song_renders_oracle.py` drives the song corpus, both through the spec repository's
-   harness. No gate consumes them yet.
+   (`TG_initialize`, `TG_LongMidiIn`, `TG_Process`). This is the real target: agreement with the
+   black box rather than with another reimplementation. `tools/dump_note_renders_oracle.py` sweeps
+   180 single notes across every tone map and `tools/dump_song_renders_oracle.py` drives the song
+   corpus, both through the spec repository's `scdec` harness — natively on Windows, under wine
+   elsewhere. The song half is **live**: `[song][oracle][sccore][gate]`.
 3. **Constrained** — this engine at the hardware's 64 voices, which is the tier directly comparable
    to (2). The gap between them is the measurement that matters, and it answers a question worth
    asking precisely: *how much of the difference is missing features?* Every remaining gap in this
@@ -238,10 +241,29 @@ generators here drive.
 chorus and reverb, whose LFOs the DLL starts at a phase this port cannot yet derive, so two renders
 that agree on every note still diverge sample by sample: whole-song correlation against the oracle
 sits near 0.18 while every octave band agrees to a tenth of a dB. Sample identity is therefore not
-merely unreachable, it is the wrong question. What the fixtures record is frame count exactly, and
-peak, RMS, per-octave level and a coarse RMS envelope within tolerance — the envelope catching a
-note that goes missing or arrives late without being sensitive to phase. The oracle audio is kept
-beside them so a failure can be measured rather than only counted.
+merely unreachable, it is the wrong question. What the gate compares is length, then peak, RMS,
+per-octave level and a coarse RMS envelope — the envelope catching a note that goes missing or
+arrives late without being sensitive to phase. The oracle audio is kept beside the fixture so a
+failure can be measured rather than only counted.
+
+### What the first authoritative measurement says
+
+`onestop.mid` at the SC-8820 map, this engine at the hardware's 64 voices against the DLL's own
+render of the same file:
+
+| | |
+|---|---|
+| length | 29 samples in 7.9 million — the two round the same intent differently, one to the sample and one to the 32-sample block |
+| peak | within 0.0009 of full scale |
+| RMS | **0.05 dB** |
+| octave bands | within 0.5 dB in seven of eight; **1.94 dB** at 8 kHz |
+| envelope, worst 1/64th | **1.72 dB** |
+
+The top octave is where the residual lives, which is what one would expect of an engine whose
+remaining gaps — insertion EFX above all — are bright. That is the number to watch as those close.
+
+\note The comparison is run at 64 voices deliberately. The DLL has that many and steals; a render
+with more of them is measuring a different instrument, however much better it may sound.
 
 ### What the digests should be
 

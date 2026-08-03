@@ -48,6 +48,7 @@ SONGS = [
     ("test_poly_bend.mid", 1),
     ("panwet.mid", 1),
     ("th07_19_user_gm.mid", 1),
+    ("onestop.mid", 4),
 ]
 
 
@@ -154,8 +155,12 @@ def main():
         command = runner + [str(arguments.scdec), str(arguments.dll), "smf",
                             str(source.resolve()), str(audio.resolve()),
                             str(tone_map), str(arguments.tail)]
-        result = subprocess.run(command, capture_output=True, text=True,
-                                env={"WINEDEBUG": "-all", "PATH": "/usr/bin:/bin"})
+        # The pared-down environment is for wine, which is noisy and picks up the host's PATH.
+        # Windows runs the harness directly and needs its own environment intact -- handing it a
+        # POSIX PATH and nothing else fails before the DLL is even opened.
+        environment = None if sys.platform == "win32" else {"WINEDEBUG": "-all",
+                                                            "PATH": "/usr/bin:/bin"}
+        result = subprocess.run(command, capture_output=True, text=True, env=environment)
         if result.returncode != 0 or not audio.exists():
             # One bad file must not cost the whole sweep. The reference itself faults on some
             # inputs -- th07_19_user_gm.mid takes it down with an access violation -- and that is

@@ -317,8 +317,12 @@ TEST_CASE("an untagged file is all port zero", "[port][smf][sccore]")
 {
     // The behaviour every existing file relies on, asserted so port tagging cannot quietly change
     // it: no FF 21 and no FF 09 means port 0 throughout.
-    const std::vector<MidiEvent> events =
-        smf::read(testdata::repository_root() / "testdata" / "canyon.mid", 32000);
+    const std::filesystem::path path = testdata::repository_root() / "testdata" / "canyon.mid";
+    if (!std::filesystem::exists(path)) {
+        SKIP("canyon.mid is not in testdata");
+    }
+
+    const std::vector<MidiEvent> events = smf::read(path, 32000);
     REQUIRE_FALSE(events.empty());
     CHECK(std::all_of(events.begin(), events.end(),
                       [](const MidiEvent& event) { return event.port == 0; }));

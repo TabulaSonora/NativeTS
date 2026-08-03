@@ -80,7 +80,11 @@ TEST_CASE("the block loop reproduces the reference to within one LSB", "[stream]
     REQUIRE(stream);
     const nlohmann::json document = nlohmann::json::parse(stream);
     const auto& cases = document.at("cases");
-    REQUIRE(cases.size() == 4);
+
+    // However many the generator was pointed at. It used to be exactly four, because it was always
+    // canyon across four maps; now that the references come from this engine the corpus is whoever
+    // ran it, and a fixture with three files in it is not a broken fixture.
+    REQUIRE_FALSE(cases.empty());
 
     std::size_t limit = cases.size();
     if (const char* requested = std::getenv("TS_SONG_GATE_VARIANTS")) {
