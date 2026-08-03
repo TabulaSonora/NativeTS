@@ -119,6 +119,23 @@ after sounding.
 load-bearing for a byte-identical render, so a regression in either shows up as a failed SHA-256,
 but the failure will not name the cause.
 
+## Where the reference departs from its own manual
+
+**Part EQ defaults off, and the SC-8820 manual says on.** The manual's parameter table gives
+`40 4x 20` (EQ ON/OFF) a default of `01 ON`. In the reference engine the part reset writes
+`part+0x450` to zero, and **nothing anywhere in the binary ever writes one to it** — the only path
+that sets it is the SysEx handler itself. A module that is never told to switch the EQ on therefore
+never does.
+
+This engine follows the binary, in ts::Part::eq_enabled. The disagreement is silent until a stream
+also sends a non-flat `40 02`: a flat EQ is exactly transparent, so with the block at its defaults
+both readings sound identical. On a stream that sets an EQ curve without ever addressing
+`40 4x 20`, they differ completely — one hears the EQ on every part, the other on none.
+
+\warning This has not been checked against the DLL as an oracle, only read out of it. It is the
+one claim on this page resting on absence of evidence rather than measurement, and a file that sets
+`40 02` and no part EQ would settle it in a single render.
+
 ## Known limits
 
 Stated plainly, because they are not covered by the numbers above:

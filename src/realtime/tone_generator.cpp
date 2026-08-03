@@ -2,6 +2,7 @@
 
 #include "dsp/simd.hpp"
 #include "realtime/partial_voice.hpp"
+#include "tabulasonora/equalizer.hpp"
 #include "tabulasonora/send_effects.hpp"
 
 #include <algorithm>
@@ -49,6 +50,14 @@ struct ToneGenerator::Impl {
     std::array<float, block_size> block_left{};
     std::array<float, block_size> block_right{};
 
+    /// The dry path of the parts that switched the EQ on, kept apart until it has been filtered.
+    ///
+    /// The engine expresses this as a bus number rather than a buffer: a voice's dry destination is
+    /// bus `0x33` when its part has the EQ on and `0x3a` when it does not. The sends are untouched
+    /// either way -- only the dry path detours.
+    std::array<float, block_size> eq_left{};
+    std::array<float, block_size> eq_right{};
+
     // How much of the current block has been handed out. Blocks are always rendered whole, whatever
     // the caller asks for, because a voice's control tick is counted in them.
     int block_offset = block_size;
@@ -56,6 +65,11 @@ struct ToneGenerator::Impl {
     std::optional<Reverb> reverb;
     std::optional<Chorus> chorus;
     std::optional<SystemDelay> delay;
+
+    /// The four-band EQ, which is one block for the whole module rather than one per part -- parts
+    /// opt into it, they do not each get their own.
+    Equalizer equalizer{EffectPresets::defaults()};
+
     std::optional<int> reverb_type;
     std::optional<int> chorus_type;
     std::optional<int> delay_type;
@@ -550,8 +564,24 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
         }
 
         if (a2 == 0x02) {
-            // The four-band EQ block (`sysex_eq_params`). Placeholder: the render graph has no EQ
-            // stage yet.
+            // The four-band EQ block (`sysex_eq_params`): low frequency and gain, then high. Each
+            // setter applies the engine's own range test and ignores anything outside it.
+            switch (a3) {
+            case 0x00:
+                impl_->equalizer.set_low_frequency(value);
+                break;
+            case 0x01:
+                impl_->equalizer.set_low_gain(value);
+                break;
+            case 0x02:
+                impl_->equalizer.set_high_frequency(value);
+                break;
+            case 0x03:
+                impl_->equalizer.set_high_gain(value);
+                break;
+            default:
+                break;
+            }
             return;
         }
 
@@ -569,6 +599,20 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
                 Impl::part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
             impl_->gs_part_parameter(
                 index, impl_->parts[static_cast<std::size_t>(index)], a3, data);
+            return;
+        }
+
+        if ((a2 & 0xF0) == 0x40) {
+            // The extended part block. `20` switches this part through the EQ; `22` is the
+            // insertion-EFX assignment, which is recognised and stored against the chain that will
+            // read it. `00`/`01` are the SysEx form of the tone map number, which this engine takes
+            // from its options and CC#32 instead.
+            const int index =
+                Impl::part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+            Part& part = impl_->parts[static_cast<std::size_t>(index)];
+            if (a3 == 0x20) {
+                part.eq_enabled = value != 0;
+            }
             return;
         }
 
@@ -859,6 +903,11 @@ void ToneGenerator::Impl::stream_reset()
     master_key_shift = 0x40;
     master_pan = 0x40;
     drum_kit.fill(0);
+
+    // The EQ returns to flat and drops its filter memory with it. Keeping the memory would only
+    // matter if a later message switched the EQ back on, and what it would then contribute is one
+    // block of a signal from before the reset -- so dropping it is both simpler and righter.
+    equalizer.reset();
 }
 
 void ToneGenerator::send_packet(std::uint32_t packet)
@@ -930,6 +979,8 @@ void ToneGenerator::Impl::render_block()
     reverb_bus.fill(0.0F);
     chorus_bus.fill(0.0F);
     delay_bus.fill(0.0F);
+    eq_left.fill(0.0F);
+    eq_right.fill(0.0F);
 
     for (int i = 0; i < VoicePool::max_voices; ++i) {
         auto& slot = slots[static_cast<std::size_t>(i)];
@@ -947,6 +998,16 @@ void ToneGenerator::Impl::render_block()
             spare.push_back(std::move(dying[i]));
             dying.erase(dying.begin() + static_cast<std::ptrdiff_t>(i));
         }
+    }
+
+    // The EQ'd parts are filtered as one block and folded back into the dry mix. Summing rather
+    // than having written straight through costs nothing when no part has the EQ on: the buffers
+    // are cleared to +0 and adding +0 to a float leaves it exactly as it was, so a stream that
+    // never touches `40 4x 20` renders identically to one compiled without any of this.
+    equalizer.process(eq_left, eq_right);
+    for (int n = 0; n < block_size; ++n) {
+        left[static_cast<std::size_t>(n)] += eq_left[static_cast<std::size_t>(n)];
+        right[static_cast<std::size_t>(n)] += eq_right[static_cast<std::size_t>(n)];
     }
 
     mix_effects(left, right);
@@ -990,8 +1051,13 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // The voice gain stays a separate multiply from the pan and send levels: collapsing them would
     // be the cheaper kernel and a silently different render, since float multiplication is no more
     // associative than addition is.
-    simd::mix_scaled(block, gain, pan_left, left);
-    simd::mix_scaled(block, gain, pan_right, right);
+    //
+    // A part with the EQ on lands in the EQ buffers instead of the output, and is filtered and
+    // summed in later. Only the dry path moves; the sends below are fed the same either way.
+    std::span<float> dry_left = part.eq_enabled ? std::span<float>{eq_left} : left;
+    std::span<float> dry_right = part.eq_enabled ? std::span<float>{eq_right} : right;
+    simd::mix_scaled(block, gain, pan_left, dry_left);
+    simd::mix_scaled(block, gain, pan_right, dry_right);
 
     // A send at zero is skipped rather than multiplied out, which drops three of the five passes
     // over the block on a part with no sends. That is exact rather than merely harmless: the buses

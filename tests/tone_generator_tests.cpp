@@ -538,8 +538,21 @@ TEST_CASE("GS part parameters arrive over SysEx", "[stream][sccore]")
     CHECK(generator.part(0).key_shift == 0x28);
 
     // Scale tuning arrives as a run of twelve.
-    generator.send_sysex(dt1({0x40, 0x11, 0x40, 0x40, 0x42, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40,
-                              0x40, 0x40, 0x40, 0x40}));
+    generator.send_sysex(dt1({0x40,
+                              0x11,
+                              0x40,
+                              0x40,
+                              0x42,
+                              0x40,
+                              0x40,
+                              0x40,
+                              0x40,
+                              0x40,
+                              0x40,
+                              0x40,
+                              0x40,
+                              0x40,
+                              0x40}));
     CHECK(generator.part(0).scale_tuning[1] == 0x42);
     CHECK_THAT(generator.part(0).scale_offset_milli_semitones(61), WithinAbs(20.0, 1e-9));
 
@@ -626,4 +639,48 @@ TEST_CASE("the NRPN-dropped crash still sounds on the SC-55 map", "[stream][scco
     CHECK(plain > 6000);
     CHECK(dropped < plain);
     CHECK(dropped > 2000);
+}
+
+TEST_CASE("the four-band EQ engages only when a part opts in", "[stream][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // Renders the same note, optionally switching the part's EQ on and cutting the low band hard.
+    const auto render = [&](bool part_eq, bool cut_low) {
+        ToneGenerator generator{notes};
+        if (part_eq) {
+            generator.send_sysex(dt1({0x40, 0x41, 0x20, 0x01}));
+        }
+        if (cut_low) {
+            generator.send_sysex(dt1({0x40, 0x02, 0x01, 0x34}));
+        }
+        CHECK(generator.part(0).eq_enabled == part_eq);
+
+        generator.send_channel(0x90, 40, 100);
+        std::vector<float> left(32000);
+        std::vector<float> right(32000);
+        generator.render(left, right);
+
+        double energy = 0.0;
+        for (const float sample : left) {
+            energy += static_cast<double>(sample) * sample;
+        }
+        return energy;
+    };
+
+    const double plain = render(false, false);
+    REQUIRE(plain > 0.0);
+
+    // Switching the EQ on with nothing set changes nothing: flat is exactly transparent, and a
+    // part on the EQ bus has to sound the same as one that is not.
+    CHECK(render(true, false) == plain);
+
+    // Cutting the low band while no part is on the EQ bus also changes nothing, which is the half
+    // that catches an EQ wired into the main mix by accident.
+    CHECK(render(false, true) == plain);
+
+    // Both together, and a low note loses energy.
+    CHECK(render(true, true) < plain * 0.95);
 }

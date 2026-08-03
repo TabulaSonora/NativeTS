@@ -170,6 +170,17 @@ public:
     int key_low = 0;
     int key_high = 0x7F;
 
+    /// Whether this part runs through the four-band EQ (`40 4x 20`), which is `part+0x450`.
+    ///
+    /// **Off by default, which contradicts the SC-8820 manual.** The manual gives this parameter a
+    /// default of `01 ON`; in this engine the part reset writes the byte to zero and *nothing
+    /// anywhere sets it to one* except the SysEx handler, so a module that is never told to switch
+    /// the EQ on never switches it on. That is a difference without a sound until a file also sends
+    /// a non-flat `40 02`, since a flat EQ is exactly transparent either way — but on such a file
+    /// it decides whether the EQ is heard at all, so it is worth an oracle check before it is
+    /// trusted.
+    bool eq_enabled = false;
+
     /// GS velocity sense depth and offset (`40 1x 1A`/`1B`), applied by `effective_velocity`.
     int velocity_depth = 0x40;
     int velocity_offset = 0x40;
