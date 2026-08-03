@@ -1,3 +1,4 @@
+#include "tabulasonora/control_matrix.hpp"
 #include "tabulasonora/lfo_engine.hpp"
 #include "tabulasonora/part.hpp"
 #include "tabulasonora/patch_directory.hpp"
@@ -602,5 +603,144 @@ TEST_CASE("the part modify offsets reach the chains that consume them", "[dsp][s
             CHECK(lfo2.delay_rate == base2.delay_rate);
             CHECK(lfo2.pitch_depth == base2.pitch_depth);
         }
+    }
+}
+
+TEST_CASE("the control matrix's linear apply routes each destination to itself", "[dsp][sccore]")
+{
+    using Source = ControlMatrix::Source;
+    using Destination = ControlMatrix::Destination;
+
+    // Reads one named output of the modulation, so a test can name a destination twice -- once as
+    // the address it writes and once as the field it expects -- and fail if the two disagree.
+    const auto field = [](const ControlMatrix::Modulation& m, Destination destination) {
+        switch (destination) {
+        case Destination::pitch:
+            return m.pitch;
+        case Destination::tvf_cutoff:
+            return m.tvf_cutoff;
+        case Destination::amplitude:
+            return m.amplitude;
+        case Destination::lfo1_rate:
+            return m.lfo1_rate;
+        case Destination::lfo1_pitch:
+            return m.lfo1_pitch;
+        case Destination::lfo1_tvf:
+            return m.lfo1_tvf;
+        case Destination::lfo1_tva:
+            return m.lfo1_tva;
+        case Destination::lfo2_rate:
+            return m.lfo2_rate;
+        case Destination::lfo2_pitch:
+            return m.lfo2_pitch;
+        case Destination::lfo2_tvf:
+            return m.lfo2_tvf;
+        case Destination::lfo2_tva:
+            return m.lfo2_tva;
+        }
+        return 0;
+    };
+
+    constexpr std::array<Destination, ControlMatrix::destination_count> all{
+        Destination::pitch,
+        Destination::tvf_cutoff,
+        Destination::amplitude,
+        Destination::lfo1_rate,
+        Destination::lfo1_pitch,
+        Destination::lfo1_tvf,
+        Destination::lfo1_tva,
+        Destination::lfo2_rate,
+        Destination::lfo2_pitch,
+        Destination::lfo2_tvf,
+        Destination::lfo2_tva,
+    };
+
+    SECTION("a source assigned nothing contributes nothing")
+    {
+        ControlMatrix matrix;
+        // Power-on has one non-zero route, so clear it before claiming silence.
+        matrix.at(Source::modulation, Destination::lfo1_pitch) = 0;
+        const ControlMatrix::Modulation m = matrix.applied_linear(Source::modulation, 127);
+        for (const Destination destination : all) {
+            INFO("destination " << static_cast<int>(destination));
+            CHECK(field(m, destination) == 0);
+        }
+    }
+
+    SECTION("a controller at rest contributes nothing whatever is assigned")
+    {
+        ControlMatrix matrix;
+        for (const Destination destination : all) {
+            matrix.at(Source::cc1, destination) = 0x7F;
+        }
+        const ControlMatrix::Modulation m = matrix.applied_linear(Source::cc1, 0);
+        for (const Destination destination : all) {
+            CHECK(field(m, destination) == 0);
+        }
+    }
+
+    SECTION("moving one destination moves exactly that one output")
+    {
+        // The engine permutes twice between the address and the output -- once writing the block
+        // and once reading it -- and each LFO group comes back reversed. This is the test that a
+        // mistake in either permutation cannot survive: assign one route, and the field that moves
+        // has to be the field the address names.
+        for (const Destination assigned : all) {
+            ControlMatrix matrix;
+            for (const Destination destination : all) {
+                matrix.at(Source::cc2, destination) =
+                    destination == Destination::lfo1_rate || destination == Destination::lfo2_rate
+                            || destination == Destination::pitch
+                            || destination == Destination::tvf_cutoff
+                            || destination == Destination::amplitude
+                        ? ControlMatrix::neutral
+                        : 0;
+            }
+            matrix.at(Source::cc2, assigned) = 0x7F;
+
+            const ControlMatrix::Modulation m = matrix.applied_linear(Source::cc2, 100);
+            for (const Destination destination : all) {
+                INFO("assigned " << static_cast<int>(assigned) << ", looked at "
+                                 << static_cast<int>(destination));
+                if (destination == assigned) {
+                    CHECK(field(m, destination) != 0);
+                } else {
+                    CHECK(field(m, destination) == 0);
+                }
+            }
+        }
+    }
+
+    SECTION("the three scalings are what the published ranges imply")
+    {
+        ControlMatrix matrix;
+        for (const Destination destination : all) {
+            matrix.at(Source::cc1, destination) = 0x7F;
+        }
+        const ControlMatrix::Modulation m = matrix.applied_linear(Source::cc1, 64);
+
+        // Pitch takes the product whole; cutoff and the rates take it halved. Both are measured
+        // from 0x40, so a full-scale depth is 0x3f away from centre.
+        CHECK(m.pitch == 0x3F * 64);
+        CHECK(m.tvf_cutoff == (0x3F * 64) >> 1);
+        CHECK(m.lfo1_rate == (0x3F * 64) >> 1);
+
+        // The LFO depths are amounts, not offsets: they are quartered and measured from zero, so a
+        // full-scale depth is the whole 0x7f.
+        CHECK(m.lfo1_pitch == (0x7F * 64) >> 2);
+        CHECK(m.lfo2_tva == (0x7F * 64) >> 2);
+    }
+
+    SECTION("a negative depth mirrors a positive one exactly")
+    {
+        // The halving is a magnitude shift with the sign reapplied, not an arithmetic shift: an
+        // arithmetic shift of a negative rounds toward minus infinity, which would make the two
+        // sides of centre disagree by a count.
+        ControlMatrix positive;
+        ControlMatrix negative;
+        positive.at(Source::cc1, Destination::tvf_cutoff) = ControlMatrix::neutral + 0x1F;
+        negative.at(Source::cc1, Destination::tvf_cutoff) = ControlMatrix::neutral - 0x1F;
+        CHECK(positive.applied_linear(Source::cc1, 33).tvf_cutoff
+              == -negative.applied_linear(Source::cc1, 33).tvf_cutoff);
     }
 }

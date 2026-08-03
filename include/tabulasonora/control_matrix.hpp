@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdlib>
 
 namespace ts {
 
@@ -75,6 +76,75 @@ struct ControlMatrix {
     [[nodiscard]] int at(Source source, Destination destination) const noexcept
     {
         return depth[static_cast<std::size_t>(source)][static_cast<std::size_t>(destination)];
+    }
+
+    /// What one source contributes, once its depths have been scaled by its current amount.
+    ///
+    /// Named fields rather than an array, deliberately. The engine's own output is eleven shorts in
+    /// an order that is neither the SysEx order nor the storage order — within each LFO group it
+    /// runs TVA, TVF, pitch, the reverse of how the messages arrive. Handing consumers an index
+    /// would hand them that permutation to get wrong; handing them names retires it here.
+    struct Modulation {
+        int pitch = 0;      ///< added to the voice's pitch
+        int tvf_cutoff = 0; ///< added to the cutoff sum
+        int amplitude = 0;  ///< scales the voice's level
+        int lfo1_rate = 0;
+        int lfo1_pitch = 0;
+        int lfo1_tvf = 0;
+        int lfo1_tva = 0;
+        int lfo2_rate = 0;
+        int lfo2_pitch = 0;
+        int lfo2_tvf = 0;
+        int lfo2_tva = 0;
+    };
+
+    /// Scales this source's depths by a controller amount — `modmatrix_apply_linear`.
+    ///
+    /// Used by every source except bend, which has its own law (`modmatrix_apply_bipolar`, a
+    /// per-destination 16-bit scale rather than a shift) and is not this function.
+    ///
+    /// This reads more simply than the engine's version, and the reason is worth knowing rather
+    /// than trusting. The engine permutes **twice**: `sysex_part_control_matrix` writes SysEx
+    /// destination 3 to block byte 4 and destination 10 to block byte 11, skipping byte 3
+    /// altogether; then `modmatrix_apply_linear` reads block byte 5 into output 6 and byte 7 into
+    /// output 4, running each LFO group backwards. Composed, the two cancel — storing by SysEx
+    /// index and naming the outputs makes both disappear. The check that this is a real
+    /// cancellation and not a coincidence is that the laws then line up with the published ranges:
+    /// every destination that comes out bipolar is one the manual documents as ±something, and
+    /// every quartered one is documented as a 0-upward amount.
+    ///
+    /// Three scalings, not one. Pitch takes the product whole; the two continuous destinations and
+    /// the LFO rates take it halved; the six LFO depths take it quartered *and* are unipolar — they
+    /// are amounts rather than offsets, so they are not measured from 0x40. The halving is written
+    /// as a magnitude shift with the sign reapplied, because an arithmetic shift of a negative
+    /// rounds toward minus infinity and the engine's does not.
+    [[nodiscard]] Modulation applied_linear(Source source, int amount) const noexcept
+    {
+        const auto& row = depth[static_cast<std::size_t>(source)];
+
+        // A bipolar destination, halved. `(|d| * amount) >> 1` with the sign put back.
+        const auto halved = [amount](int value) {
+            const int offset = value - neutral;
+            const int magnitude = (std::abs(offset) * amount) >> 1;
+            return offset < 0 ? -magnitude : magnitude;
+        };
+
+        // A unipolar depth, quartered. No 0x40 offset: zero means none.
+        const auto quartered = [amount](int value) { return (value * amount) >> 2; };
+
+        return Modulation{
+            .pitch = (row[0] - neutral) * amount,
+            .tvf_cutoff = halved(row[1]),
+            .amplitude = halved(row[2]),
+            .lfo1_rate = halved(row[3]),
+            .lfo1_pitch = quartered(row[4]),
+            .lfo1_tvf = quartered(row[5]),
+            .lfo1_tva = quartered(row[6]),
+            .lfo2_rate = halved(row[7]),
+            .lfo2_pitch = quartered(row[8]),
+            .lfo2_tvf = quartered(row[9]),
+            .lfo2_tva = quartered(row[10]),
+        };
     }
 
     /// Bend's pitch depth is **not** stored here, and this says so out loud.
