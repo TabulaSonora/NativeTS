@@ -39,16 +39,46 @@ import sys
 # The sweep. Programs across the GM map so every family is represented, each on a few keys and
 # velocities, and every tone map -- the map is what selects the tone table, so a case that is right
 # on one can be wrong on another.
+#
+# `32` sits at the end rather than in its place. It was added after the rest, to answer a specific
+# question -- `roland_sc88_y03` plays `Acoustic Bs.` 324 times inside the 63 Hz band, and it was the
+# one thing carrying that file's bass which no case here covered -- and the velocity and map a case
+# gets is a rotation over this list's *index*. Inserting it in order would have re-rolled the
+# velocity and tone map of every program after it, changing 100 cases to add 5.
 PROGRAMS = [0, 1, 4, 6, 11, 16, 19, 24, 26, 30, 33, 35, 38, 40, 42, 46, 48, 52,
-            56, 57, 61, 64, 66, 71, 73, 75, 78, 80, 87, 91, 95, 99, 104, 114, 118, 122]
+            56, 57, 61, 64, 66, 71, 73, 75, 78, 80, 87, 91, 95, 99, 104, 114, 118, 122,
+            32]
 KEYS = [36, 48, 60, 72, 84]
 VELOCITIES = [40, 100, 127]
 MAPS = [1, 2, 3, 4]
 HOLD_SECONDS = 1.0
 
+# The drum half, on channel 10. A program change there selects a kit rather than a tone, through a
+# different pair of lookups, into a different table, with the key supplying a coarse pitch instead
+# of transposing the sample -- so none of it is exercised by any number of melodic cases. The nine
+# programs are the classic GS kits, and they are the nine that every one of the four maps defines;
+# each resolves to a *distinct* kit record on each map, so 36 different kits are covered.
+DRUM_CHANNEL = 9
+DRUM_PROGRAMS = [0, 8, 16, 24, 25, 32, 40, 48, 56]
+
+# Six keys that sound in all 36 kits, chosen for the mechanisms behind them rather than for the
+# names: the bass drum for the low band this sweep could not previously see, the snare and hats for
+# noise-dominated tones at opposite ends of the spectrum, the crash for the longest decay in the
+# kit, and the low tom because it is the one of the six whose kit coarse pitch is far from neutral.
+DRUM_KEYS = [36, 38, 42, 45, 46, 49]
+
+# Shorter than a melodic note because a drum hit is over long before a second is up, and 32 RMS
+# windows across 2.1 s resolve a transient about a third better than across 2.8 s. The note-off
+# still lands where a sequencer would put it; most kit keys ignore it.
+DRUM_HOLD_SECONDS = 0.3
+
 
 def build_cases():
-    """A deterministic spread; the same list every run so fixtures diff cleanly."""
+    """A deterministic spread; the same list every run so fixtures diff cleanly.
+
+    Drums come after the melodic half rather than interleaved with it, so that adding them left
+    every melodic case's index -- and so every `caseNNNN.f32` on disk -- where it already was.
+    """
     cases = []
     for i, program in enumerate(PROGRAMS):
         for j, key in enumerate(KEYS):
@@ -59,6 +89,17 @@ def build_cases():
                 "velocity": velocity,
                 "hold": HOLD_SECONDS,
                 "map": MAPS[(i + j) % len(MAPS)],
+                "channel": 0,
+            })
+    for i, program in enumerate(DRUM_PROGRAMS):
+        for j, key in enumerate(DRUM_KEYS):
+            cases.append({
+                "program": program,
+                "note": key,
+                "velocity": VELOCITIES[(i + j) % len(VELOCITIES)],
+                "hold": DRUM_HOLD_SECONDS,
+                "map": MAPS[(i + j) % len(MAPS)],
+                "channel": DRUM_CHANNEL,
             })
     return cases
 
@@ -104,9 +145,16 @@ def power_spectrum(mono):
 
 
 def octave_bands(power, size, rate):
-    """Per-octave level in dB, the measure a timbre difference actually shows up in."""
+    """Per-octave level in dB, the measure a timbre difference actually shows up in.
+
+    Eight bands, starting at 63 Hz -- which spans 44.5 to 89.1 Hz, and so is where the sweep's
+    lowest key at 65.4 Hz and the bass drum both put their fundamental. It was left out while this
+    began at 125 Hz, on the reasoning that most single notes have nothing down there. Most have
+    nothing down there; the two that do are the two that matter for the song gate's open low-end
+    lead, and a band nobody measures is a band anything can happen in.
+    """
     bands = []
-    for centre in (125, 250, 500, 1000, 2000, 4000, 8000):
+    for centre in (63, 125, 250, 500, 1000, 2000, 4000, 8000):
         low = centre / math.sqrt(2)
         high = centre * math.sqrt(2)
         total = sum(power[k] for k in range(len(power))
@@ -164,7 +212,10 @@ def rms_envelope(mono, windows=32):
     return out
 
 
-def measure(path, rate, note):
+def measure(path, rate, target):
+    """Every metric for one case. `target` is where the fundamental should be, or None for a case
+    that has no pitch to find -- a drum key selects a kit entry, not a transposition, so asking
+    where its fundamental landed would only measure which noise peak won."""
     raw = path.read_bytes()
     frames = len(raw) // 8
     samples = struct.unpack(f"<{frames * 2}f", raw[:frames * 8])
@@ -178,7 +229,7 @@ def measure(path, rate, note):
 
     power, size = power_spectrum(mono)
 
-    return {
+    measured = {
         "frames": frames,
         "peak": peak,
         "rms": rms,
@@ -186,8 +237,10 @@ def measure(path, rate, note):
         "first8": [round(v, 9) for v in samples[:8]],
         "bands": octave_bands(power, size, rate),
         "envelope": rms_envelope(mono),
-        "pitchHz": fundamental(power, size, rate, 440.0 * 2 ** ((note - 69) / 12)),
     }
+    if target is not None:
+        measured["pitchHz"] = fundamental(power, size, rate, target)
+    return measured
 
 
 def main():
@@ -214,7 +267,8 @@ def main():
     case_file = arguments.audio_dir.parent / "notes_cases.txt"
     arguments.audio_dir.mkdir(parents=True, exist_ok=True)
     case_file.write_text("".join(
-        f"{c['program']} {c['note']} {c['velocity']} {c['hold']} {c['map']}\n" for c in cases))
+        f"{c['program']} {c['note']} {c['velocity']} {c['hold']} {c['map']} {c['channel']}\n"
+        for c in cases))
 
     # One process for the whole sweep: wine start-up dominates otherwise.
     runner = [] if sys.platform == "win32" else ["wine"]
@@ -230,7 +284,9 @@ def main():
         audio = arguments.audio_dir / f"case{index:04d}.f32"
         if not audio.exists():
             sys.exit(f"harness did not produce {audio}")
-        case.update(measure(audio, arguments.rate, case["note"]))
+        target = None if case["channel"] == DRUM_CHANNEL \
+            else 440.0 * 2 ** ((case["note"] - 69) / 12)
+        case.update(measure(audio, arguments.rate, target))
         case["audio"] = str(audio.relative_to(arguments.output.parent)) \
             if arguments.output.parent in audio.parents else str(audio)
 
@@ -240,7 +296,8 @@ def main():
                   "gates -- this port is not bit-exact with the DLL and does not aim to be, so the "
                   "sha256 identifies the oracle audio rather than anything the port must match. "
                   "Compare frames exactly, and peak, rms, the octave bands, the envelope and "
-                  "pitchHz within tolerance."),
+                  "pitchHz within tolerance. Cases on channel 9 are drum kits, and carry no "
+                  "pitchHz: a drum key selects a kit entry rather than a transposition."),
         "generator": "tools/dump_note_renders_oracle.py",
         "dllSha256": hashlib.sha256(arguments.dll.read_bytes()).hexdigest(),
         "sampleRate": arguments.rate,
@@ -251,7 +308,9 @@ def main():
     arguments.output.write_text(json.dumps(document, indent=1))
 
     sounding = sum(1 for c in cases if c["peak"] > 0.0)
-    print(f"wrote {len(cases)} cases ({sounding} sounding) to {arguments.output}")
+    drums = sum(1 for c in cases if c["channel"] == DRUM_CHANNEL)
+    print(f"wrote {len(cases)} cases ({len(cases) - drums} melodic, {drums} drum, "
+          f"{sounding} sounding) to {arguments.output}")
     print(f"oracle audio in {arguments.audio_dir} "
           f"({sum(c['frames'] for c in cases):,} frames total)")
 

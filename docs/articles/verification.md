@@ -28,7 +28,7 @@ a fixture generated from the C# CLI:
 | single note | `[render][sccore][gate]` | SHA-256 of the whole render plus eight literal samples |
 | block loop, real time | `[stream][sccore][gate]` | a whole WAV, sample by sample: worst error ≤ 1 LSB, under 0.02% differing |
 | predictor stream | `[sampler][sccore][gate]` | against an independent decoder |
-| **single note, against the DLL** | `[note][oracle][sccore][gate]` | 180 notes: length, level, octave bands, a coarse envelope and the fundamental's tuning, within stated tolerances |
+| **single note, against the DLL** | `[note][oracle][sccore][gate]` | 239 notes and drum hits: length, level, octave bands, a coarse envelope and the fundamental's tuning, within stated tolerances |
 | **whole song, against the DLL** | `[song][oracle][sccore][gate]` | length, level, octave bands and a coarse envelope, within stated tolerances |
 
 Only the real-time gate has any tolerance against the C# engine, and it is one LSB. A fifth,
@@ -42,7 +42,7 @@ stream gate has no unaffected case at all, so its references are this engine's o
 a regression baseline. The archived C# checkout cannot be re-run to refresh either, which is the
 whole reason the oracle gates matter.
 
-The note gate has since been *superseded rather than retired*: the same 180-case sweep now runs
+The note gate has since been *superseded rather than retired*: the sweep it introduced now runs
 against the DLL as `[note][oracle][sccore][gate]`, and where the two disagree the DLL decides. The
 C# digest is kept beside it because it compares samples, and a one-LSB drift is worth catching even
 against a reference that has been overtaken.
@@ -274,13 +274,14 @@ remaining gaps — insertion EFX above all — are bright. That is the number to
 \note The comparison is run at 64 voices deliberately. The DLL has that many and steals; a render
 with more of them is measuring a different instrument, however much better it may sound.
 
-### What 180 single notes say
+### What 239 single notes say
 
 A song averages every patch it touches into eight numbers, so a tone that resolves wrong can hide
 behind sixteen that resolve right. `[note][oracle][sccore][gate]` asks the question one level down:
-36 programs across the GM map, five keys each, three velocities and all four tone maps, every one
-driven exactly as `scdec notebatch` drove the DLL — same warm-up, same six controllers, same
-320-sample chunks with the note-off landing on a control tick.
+37 programs across the GM map, five keys each, plus nine drum kits on six keys each, at three
+velocities and all four tone maps, every one driven exactly as `scdec notebatch` drove the DLL —
+same warm-up, same six controllers, same 320-sample chunks with the note-off landing on a control
+tick.
 
 | | |
 |---|---|
@@ -288,6 +289,7 @@ driven exactly as `scdec notebatch` drove the DLL — same warm-up, same six con
 | octave bands the note reaches, median | **0.17 dB**, 95th percentile 1.8 dB |
 | envelope, median worst window | **0.72 dB** |
 | programs needing no allowance at all | **27 of 36** |
+| drum keys needing no allowance at all | **33 of 54** |
 
 The measurement turned on one distinction, which is worth stating because the obvious version of
 the gate gets it wrong. Sorting all 1254 comparable bands by how far each sits below its own note's
@@ -304,7 +306,8 @@ The nine programs that do need an allowance fall into two groups:
 - **Patches that deviate in *time* while their spectrum and level agree.** `Bass & Lead` was chased
   to the bottom, and what it found is in \ref the-engine-plays-sharp below: the two engines beat at
   different rates because their partials are tuned differently. `Nylon Gt.` is a separate defect —
-  it decays about 1.5× too fast, a clean monotonic drift of −0.96 dB per envelope window.
+  it decays about 1.5× too fast, a clean monotonic drift of −0.96 dB per envelope window. It is no
+  longer alone: six drum tones do the same thing, and \ref widening-the-note-sweep says so.
 - **Patches with a noise component** — `Whistle`, `Synth Drum`, `Seashore`, `Atmosphere`. The
   obvious explanation is that the shared pseudo-random source is at a different point when the note
   starts, and that was measured and **is not it**: returning the generator to its seed before every
@@ -313,6 +316,84 @@ The nine programs that do need an allowance fall into two groups:
 
 `Whistle` is the outlier of the four by a wide margin — 21 dB in a band the note genuinely reaches
 and 2 dB of overall level. It remains unexplained.
+
+### What the sweep could not see, and now can {#widening-the-note-sweep}
+
+This gate was introduced as the instrument for the song gate's low-end lead — whether
+`roland_sc88_y03`'s missing bass is a patch rendering wrong or a note never arriving. **It was not
+one yet, and the two reasons were both in exactly the place that lead lives.**
+
+The octave bands started at 125 Hz — the band spans 88 to 177 Hz — on the reasoning that most
+single notes have nothing below it. That is true and it was the wrong band to leave out: the sweep's
+lowest key sounds at 65.4 Hz, so its fundamental fell outside every band the gate measured. And
+every case was melodic, so the drum kits were unreached by any number of them — a program change on
+channel 10 resolves through its own pair of lookups into its own table, with the kit's coarse-pitch
+plane supplying the key instead of transposing the sample, and none of that is exercised by a
+melodic note. The bass drum is the one sound in a GS arrangement with real energy under 90 Hz.
+
+The sweep now carries a 63 Hz band and 54 drum cases: nine kit programs — every one of which all
+four tone maps define, and each of which resolves to a *different* kit record on each map, so 36
+kits are covered — across six keys chosen for their mechanisms rather than their names.
+
+**Eighty-one cases now have real content at 63 Hz, where none could be measured before.** The
+drum half is broadly right: forty of the fifty-four agree on level to under half a decibel, and 33
+of them need no allowance at all. The twenty-one that do say four things.
+
+- **Crash cymbals decay too fast, and then stop dead.** Six cases, six kits, three distinct tones.
+  `Crash Cym.1` tracks the module 2 to 4 dB low all the way down and then reaches *exactly* zero at
+  1.84 s while the module is still sounding 35 dB under its own attack — with octave bands agreeing
+  to 0.7 dB and the peak to 2%, so it is the amplitude envelope's decay rate and nothing else.
+  **This is the same defect `Nylon Gt.` has**, and finding it on six unrelated drum tones says it is
+  not one patch's segment rates. That is now the best-supported open defect in the engine.
+- **The Orchestra kit's timpani**, on all three keys the sweep plays it at: the attack arrives
+  4.7 dB low at half the module's peak, and the tail then runs 12 dB long. Every other kit key is
+  either right or slightly light; this one is quiet and then loud. It is also the sweep's clearest
+  test of the kit coarse-pitch plane — the Orchestra kit tunes the timpani per key, so its `pitch`
+  byte is 42, 45 and 46 against a neutral 60, while almost every other case sits at neutral.
+- **Two SFX kit entries** — `Pick Scrape` 4 dB loud, `Gt.CutNoise` 10 dB quiet.
+- **Hi-hats, where the module has a low-frequency floor this engine does not.** The module's
+  `TR-808 CHH` reads −46 dB at 63 Hz against a −34.8 dB loudest band; this engine reads −147, which
+  is silence. Neither carries a hi-hat down there. This is a real limit of the relative-band rule:
+  the hat's whole spectrum is only 26 dB wide, so nothing 40 dB below its loudest band exists for
+  the split to put on the floor side, and the comparison measures two noise floors against each
+  other. The bounds those cases carry are the ugliest in the file and the comment says why.
+
+One case is silent on both sides and is checked for it rather than skipped: key 36 of the SFX kit at
+the SC-55 map is an **undefined kit entry**, tone `0xFFFF`, and the module answers with a peak of
+0.00003 — its own noise floor. The rest of the sweep starts at 0.004, so the line between them is
+drawn across an empty gap. An undefined kit key that started sounding would be a real defect, and
+this is the only case that could catch it.
+
+#### What it says about `roland_sc88_y03`
+
+The file this was meant to answer for is about 6.5 dB light at 63 Hz. Reading the sweep against it:
+
+| | |
+|---|---|
+| melodic cases with real 63 Hz content (52) | median **−0.13 dB**, worst −11.8 (`Seashore`, unpitched) |
+| drum cases with real 63 Hz content (29) | median **−0.94 dB** |
+| bass drums specifically (8) | **−0.51 to −3.23 dB**, median −0.88 |
+
+**Nothing that carries bass is anywhere near 6.5 dB light.** The worst kick in the sweep is the
+TR-808's at −3.2 dB and the median is under one. The only deficits past 3 dB at 63 Hz belong to
+hi-hats and to two unpitched noise patches, none of which put a note there.
+
+Reading the file itself sharpens it further. `roland_sc88_y03` drives **drum program 48 — the
+Orchestra kit**, the one kit the sweep flags as badly wrong, and it plays the timpani range 36
+times. But its low end is not the timpani: 324 of its notes inside the 63 Hz band are
+**`Acoustic Bs.`, program 32, on channel 9**. That program was not in the sweep, so it was added —
+which is why it sits out of order at the end of the list, the velocity and tone map a case gets
+being a rotation over that list's index.
+
+**It renders within 0.2 dB of the module at every one of its five keys, and −0.67 dB at 63 Hz on the
+lowest.** So the file's dominant bass source is right, its bass drum is right to 0.7 dB, and the one
+kit key it plays that is badly wrong is a timpani it strikes 36 times out of 810.
+
+There is a mild systematic bias worth recording — drums run about a decibel light at 63 Hz where
+melodic notes run a tenth — but a decibel is not six and a half. Nothing this sweep covers renders
+quiet enough to explain that file, which leaves the other reading: **some of its bass is not
+arriving.** That is a question about note handling, not about patches, and it is the next place to
+look.
 
 ### The engine plays sharp {#the-engine-plays-sharp}
 
@@ -608,6 +689,8 @@ driving it is not driving it *audibly*, and a scan that records the first is evi
 
 The sharpest remaining lead is `roland_sc88_y03`, about 6.5 dB light at 63 Hz and 5 dB at 125 Hz
 *by the same amount at every tone map*, so it is not patch resolution: some bass is not arriving.
+The note gate has since been widened until it could speak to this, and it agrees — every sound the
+file leans on down there renders within about a decibel. See \ref widening-the-note-sweep.
 
 That is the argument for coverage over taste. One file said 1.94 dB in the top octave. Eighteen say
 where to look.

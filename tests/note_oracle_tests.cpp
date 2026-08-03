@@ -1,7 +1,7 @@
 // The single-note gate against `SCCore.dll` itself, driven through its own exported API.
 //
 // The song gate next door asks whether a whole file comes out right. This asks the question one
-// level down and answers it 180 times: does *this program*, on *this key*, at *this velocity*, on
+// level down and answers it 239 times: does *this program*, on *this key*, at *this velocity*, on
 // *this tone map* sound like the module? A song render averages every patch it touches into eight
 // numbers, so a tone that resolves to the wrong wave can hide behind sixteen that resolve to the
 // right one. Here nothing hides -- each case is one program on one key, and a failure names it.
@@ -10,6 +10,19 @@
 // opinion on them. `roland_sc88_y03` is 6.5 dB light at 63 Hz by the same amount at every tone map;
 // whether that is a patch rendering wrong or a note never arriving is a question about single
 // notes, and this is where it can be asked.
+//
+// **It could not be asked here until the sweep was widened, and saying it could was wrong.** Two
+// gaps, both in exactly the place that lead lives: the bands began at 125 Hz, so nothing below
+// 88 Hz was measured at all, and every case was melodic, so the drum kits -- which resolve through
+// their own tables and hold the only sound in a GS arrangement with real energy under 90 Hz -- were
+// not reached by any number of cases. The sweep now carries a 63 Hz band and 54 drum cases: nine
+// kit programs, each of which every tone map defines and each of which resolves to a *different*
+// kit on each map, across six keys.
+//
+// It can now be asked, and the answer is that no sound in the sweep is quiet enough to account for
+// it. `Acoustic Bs.` -- which the file plays 324 times inside that band, and which was added to the
+// sweep for this -- comes out within 0.2 dB at every key. The worst kick is 3.2 dB light and the
+// median bass-carrying case is under one. See \ref widening-the-note-sweep.
 //
 // What it said the first time it ran: level agrees to a median of 0.09 dB, the octave bands the
 // note actually reaches to a median of 0.17 dB, and **27 of the 36 programs need no allowance at
@@ -25,6 +38,7 @@
 #include "render_metrics.hpp"
 #include "test_data.hpp"
 
+#include "tabulasonora/drum_kit_table.hpp"
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/tone_generator.hpp"
@@ -52,9 +66,18 @@ namespace fs = std::filesystem;
 
 namespace {
 
-/// The bands the generator takes. Seven, starting at 125 Hz rather than the song gate's 63: a
-/// single note has one fundamental, and below 125 Hz there is nothing to compare for most of them.
-constexpr std::array<int, 7> band_centres{125, 250, 500, 1000, 2000, 4000, 8000};
+/// The bands the generator takes, and the song gate's own list -- the same eight, so a level read
+/// here and a level read there are the same measurement of the same thing.
+///
+/// This began at 125 Hz, on the reasoning that most single notes have nothing below it. That was
+/// true and it was the wrong band to leave out. 63 Hz spans 44.5 to 89.1 Hz, which is where this
+/// sweep's lowest key at 65.4 Hz puts its fundamental and where a bass drum puts most of its
+/// energy -- so the one band the song gate has an open lead in was the one band this gate could not
+/// see, and the claim that this was the instrument for that lead was not yet true.
+constexpr std::array<int, 8> band_centres{63, 125, 250, 500, 1000, 2000, 4000, 8000};
+
+/// Channel 10, where a program change selects a drum kit rather than a tone.
+constexpr int drum_channel = 9;
 
 struct Metrics {
     std::size_t frames = 0;
@@ -118,7 +141,32 @@ constexpr double signal_band_range = 40.0;
 /// the emptiest bands, which is the one broad finding this gate turned up.
 constexpr double noise_floor_headroom = 25.0;
 
-/// How far one program is currently allowed to sit from the module, and why.
+/// The same idea applied to the envelope: how far below a case's own loudest window a window has to
+/// be before its level stops describing the note.
+///
+/// The module does not decay to zero. Left alone it settles onto a floor -- `808 Snare 1` holds a
+/// flat -90.5 dB for the last twenty-seven of its thirty-two windows, 64 dB under its own attack --
+/// and this engine's voices do reach exactly zero. Comparing there measures the module's dither
+/// against this port's silence, and reads as 908 dB of disagreement about a snare drum that both
+/// engines finished playing a second and a half earlier.
+///
+/// Set deep enough to leave real tails alone: the crash cymbals stop 35 dB under their own attack,
+/// which is well inside this and still fails, correctly.
+constexpr double envelope_floor_range = 60.0;
+
+/// Below this peak the module is not making a sound, and there is nothing to compare it against.
+///
+/// Exactly one case is under it, and it is not a defect: key 36 of the SFX kit at the SC-55 map is
+/// an *undefined* kit entry -- tone 0xFFFF -- so this engine plays nothing, and the module answers
+/// with a peak of 0.00003, which is its own noise floor rather than a note. The rest of the sweep
+/// starts at 0.004, a factor of 136 away, so the line is drawn across an empty gap.
+///
+/// The case is kept rather than dropped from the sweep, and it is checked rather than skipped: what
+/// it asserts is that this engine is silent too. An undefined kit key that started sounding would
+/// be a real defect, and this is the only case in the sweep that could catch it.
+constexpr double inaudible_peak = 1e-4;
+
+/// How far one program or kit key is currently allowed to sit from the module, and why.
 ///
 /// A ratchet, not a target -- the same contract the song gate's table carries. Every bound is the
 /// measured deviation plus a little headroom, so any of them getting worse fails the gate, and
@@ -146,10 +194,27 @@ struct Case {
     int note;
     int velocity;
     int map;
+    int channel;
+
+    [[nodiscard]] bool drums() const noexcept { return channel == drum_channel; }
 };
 
 struct KnownDeviation {
     int program;
+    Deviation allowed;
+    const char* cause;
+};
+
+/// A drum row, keyed by the kit *and the key within it*.
+///
+/// The melodic table above argues against a row per case, and is right to: one tone covers all five
+/// of a program's keys, so five rows would restate one fact five times. Drums are the other way
+/// round. Key 36 of the TR-808 kit is a kick and key 42 of the same kit is a hi-hat -- different
+/// tones, different waves, different defects -- and a row keyed by the kit alone would lend one the
+/// other's bound. So the key is part of the key.
+struct KnownDrumDeviation {
+    int program;
+    int note;
     Deviation allowed;
     const char* cause;
 };
@@ -203,17 +268,101 @@ constexpr std::array<KnownDeviation, 11> known_deviations{{
     // Unpitched. The estimator finds the loudest peak near the note in each render and there is no
     // fundamental there to find, so what these two compare is one noise peak against another. The
     // bound says "not checked" out loud rather than skipping them where nobody would notice.
-    {118, {1.0, 0.045, 7.0, 6.0, 110.0}, "Synth Drum; unpitched -- the pitch bound is not a check"},
-    {122, {1.0, 0.01, 6.0, 6.0, 38.0}, "Seashore; unpitched -- the pitch bound is not a check"},
+    //
+    // Their band bounds widened when the 63 Hz band was added, and only there -- 10 dB on
+    // `Synth Drum`, 12 on `Seashore`, on the two cases where the module puts real energy under
+    // 90 Hz. Two unpitched noise patches disagreeing in the bottom octave is the same finding as
+    // the rest of their rows, one octave lower than it could previously be seen.
+    {118, {1.0, 0.045, 10.5, 6.0, 110.0}, "Synth Drum; unpitched -- the pitch bound is not a check"},
+    {122, {1.0, 0.01, 12.5, 6.0, 38.0}, "Seashore; unpitched -- the pitch bound is not a check"},
+}};
+
+/// The kit keys that do not yet match, kept apart from the melodic table rather than folded in.
+///
+/// A separate table because a drum program is a different thing that happens to be numbered the
+/// same way: program 0 on channel 10 is the Standard kit, and it has nothing whatever to do with
+/// the Piano row above it. One table keyed by program alone would silently lend one the other's
+/// bound, and the mistake would look exactly like a passing test.
+///
+/// **Thirty-three of the fifty-four drum cases need no row**, and forty of them agree on level to
+/// under half a decibel. What the twenty-one that remain say is four things, not twenty-one:
+///
+///  - **Crash cymbals decay too fast, and then stop dead.** Six cases across six kits, three
+///    distinct tones. `Crash Cym.1` tracks the module's envelope 2 to 4 dB low all the way down and
+///    then reaches *exactly* zero at 1.84 s, while the module is still sounding 35 dB under its own
+///    attack. Its octave bands agree to 0.7 dB throughout and its peak to 2%, so this is the
+///    amplitude envelope's decay rate and nothing else. **This is the same defect `Nylon Gt.` has**
+///    -- a clean monotonic drift, too fast, on a patch whose spectrum is right -- and having it
+///    turn up on six unrelated drum tones says it is not one patch's segment rates.
+///  - **Hi-hats, where the module has a low-frequency floor this engine does not.** The module's
+///    `TR-808 CHH` reads -46 dB at 63 Hz against a -34.8 dB loudest band; ours reads -147, which is
+///    silence. Below 4 kHz the hat carries nothing either way, but its whole spectrum is only 26 dB
+///    wide, so \ref signal_band_range cannot tell that floor apart from the note. That is a real
+///    limit of the relative-band rule for a broadband source, and the reason these bounds are the
+///    ugliest in the file. `Close HiHat2` separately runs 2.3 dB light in every band at a peak that
+///    matches to 0.3%, which is the decay-rate defect above.
+///  - **The Orchestra kit's timpani, which is wrong in a way none of the others are.** Three keys,
+///    all of them: the attack arrives 4.7 dB low and half the module's peak, and the tail then runs
+///    *12 dB long*. Every other kit key in the sweep is either right or slightly light; this one is
+///    quiet and then loud. It is also the sweep's clearest test of the kit coarse-pitch plane --
+///    the Orchestra kit tunes the timpani per key, so `pitch` is 42, 45 and 46 against a neutral 60,
+///    while every other case here is at or near neutral.
+///  - **Two SFX kit entries.** `Pick Scrape` is 4 dB loud and 38 dB out in a band; `Gt.CutNoise` is
+///    10 dB quiet with the spectrum tilted the wrong way. Both are single tones in one kit.
+///
+/// The remaining four rows are small and unattributed: a snare's peak, a kick's level, two snares
+/// a hair over the band default.
+constexpr std::array<KnownDrumDeviation, 20> known_drum_deviations{{
+    // Crash cymbals. The two rows carrying an envelope bound of 945 are the two whose tail reaches
+    // exact zero while the module is still sounding: **that number is a marker, not a ratchet**.
+    // It cannot get worse, because -999 is the sentinel for silence and nothing is quieter. What
+    // holds those two cases honest is the level and band bounds beside it.
+    {0, 49, {2.7, 0.01, 3.0, 945.0}, "Crash Cym.1; decays ~4 dB too fast, then stops at 1.84 s"},
+    {8, 49, {2.6}, "Crash Cym.1, Room kit"},
+    {16, 49, {2.6}, "Crash Cym.1, Power kit"},
+    {24, 49, {1.5, 0.045, 3.0, 945.0}, "GS Crash; same, and stops at 1.84 s"},
+    {32, 49, {2.7}, "Crash Cym.1, Jazz kit"},
+    {40, 49, {2.7, 0.02}, "Brush Crash"},
+
+    // Closed hi-hats.
+    {0, 42, {1.0, 0.01, 9.0}, "Close HiHat2; 2.3 dB light in every band at a matching peak"},
+    {8, 42, {2.7, 0.01, 26.5}, "Room Chh; 5 dB light above 500 Hz, and no floor below it"},
+    {16, 42, {1.0, 0.01, 12.0}, "Close HiHat, Power kit"},
+    {25, 42, {1.0, 0.01, 101.5}, "TR-808 CHH; the module's floor against this engine's silence"},
+    {40, 42, {1.0, 0.01, 4.0}, "Close HiHat, Brush kit"},
+
+    // The Orchestra kit's timpani, on the three keys it is tuned across.
+    {48, 42, {1.7, 0.06, 7.5, 9.0}, "Timpani at key 42; quiet attack, long tail"},
+    {48, 45, {1.5, 0.16, 8.0, 11.5}, "Timpani at key 45"},
+    {48, 46, {1.5, 0.23, 9.0, 13.0}, "Timpani at key 46"},
+
+    // The SFX kit.
+    {56, 38, {4.5, 0.01, 38.5}, "Pick Scrape; 4 dB loud, and 38 dB out at 250 Hz"},
+    {56, 49, {10.5, 0.08, 17.5, 11.0}, "Gt.CutNoise; 10 dB quiet, spectrum tilted the wrong way"},
+
+    // Small, and so far unattributed.
+    {24, 38, {1.0, 0.015}, "Elec. Snare; peak alone"},
+    {25, 36, {1.2, 0.01, 3.5}, "808 Kick"},
+    {25, 38, {1.0, 0.01, 3.5, 11.5}, "808 Snare 1"},
+    {32, 38, {1.0, 0.01, 3.5}, "Jazz Snare 1"},
 }};
 
 [[nodiscard]] Deviation deviation_for(const Case& which)
 {
-    if (std::getenv("TS_STRICT_NOTES") == nullptr) {
-        for (const KnownDeviation& entry : known_deviations) {
-            if (entry.program == which.program) {
+    if (std::getenv("TS_STRICT_NOTES") != nullptr) {
+        return Deviation{};
+    }
+    if (which.drums()) {
+        for (const KnownDrumDeviation& entry : known_drum_deviations) {
+            if (entry.program == which.program && entry.note == which.note) {
                 return entry.allowed;
             }
+        }
+        return Deviation{};
+    }
+    for (const KnownDeviation& entry : known_deviations) {
+        if (entry.program == which.program) {
+            return entry.allowed;
         }
     }
     return Deviation{};
@@ -258,13 +407,17 @@ constexpr std::array<KnownDeviation, 11> known_deviations{{
         generator.render(discard_left, discard_right);
     }
 
-    generator.send_channel(0xB0, 0, 0);    // bank select MSB
-    generator.send_channel(0xB0, 32, 0);   // bank select LSB
-    generator.send_channel(0xB0, 7, 127);  // part volume
-    generator.send_channel(0xB0, 10, 64);  // pan centre
-    generator.send_channel(0xB0, 91, 0);   // reverb send off
-    generator.send_channel(0xB0, 93, 0);   // chorus send off
-    generator.send_channel(0xC0, which.program, 0);
+    // Channel 10 for a drum case, where the same program change means a kit. Nothing else about the
+    // case changes: the part is already a rhythm part after a GS reset, so the only thing the
+    // channel does here is route.
+    const int channel = which.channel;
+    generator.send_channel(0xB0 | channel, 0, 0);    // bank select MSB
+    generator.send_channel(0xB0 | channel, 32, 0);   // bank select LSB
+    generator.send_channel(0xB0 | channel, 7, 127);  // part volume
+    generator.send_channel(0xB0 | channel, 10, 64);  // pan centre
+    generator.send_channel(0xB0 | channel, 91, 0);   // reverb send off
+    generator.send_channel(0xB0 | channel, 93, 0);   // chorus send off
+    generator.send_channel(0xC0 | channel, which.program, 0);
 
     const auto total = static_cast<std::size_t>((hold + tail) * rate);
     const auto off_at = static_cast<std::size_t>(hold * rate);
@@ -272,12 +425,12 @@ constexpr std::array<KnownDeviation, 11> known_deviations{{
     std::vector<float> left(total);
     std::vector<float> right(total);
 
-    generator.send_channel(0x90, which.note, which.velocity);
+    generator.send_channel(0x90 | channel, which.note, which.velocity);
     std::size_t position = 0;
     bool released = false;
     while (position < total) {
         if (!released && position >= off_at) {
-            generator.send_channel(0x80, which.note, 0);
+            generator.send_channel(0x80 | channel, which.note, 0);
             released = true;
         }
         const std::size_t count =
@@ -297,7 +450,12 @@ constexpr std::array<KnownDeviation, 11> known_deviations{{
         }
     }
 
-    return measure(left, right, rate, 440.0 * std::pow(2.0, (which.note - 69) / 12.0));
+    // A drum key names a kit entry, not a transposition, so there is no frequency to look for and
+    // `fundamental` is asked for none. The fixture omits `pitchHz` on those cases for the same
+    // reason, and the two absences have to agree or the comparison below would be against nothing.
+    const double target_hz =
+        which.drums() ? 0.0 : 440.0 * std::pow(2.0, (which.note - 69) / 12.0);
+    return measure(left, right, rate, target_hz);
 }
 
 } // namespace
@@ -328,27 +486,44 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
     REQUIRE(cases.size() >= 100);
 
     // A row for a program the sweep no longer contains is a bound nothing is held to, and it would
-    // sit there looking like a known defect forever.
+    // sit there looking like a known defect forever. Checked per table, because a melodic row is
+    // not answered by a drum case that shares its number.
+    const auto covers = [&cases](int program, int note, bool drums) {
+        return std::any_of(cases.begin(), cases.end(), [&](const nlohmann::json& entry) {
+            return entry.at("program").get<int>() == program
+                   && (note < 0 || entry.at("note").get<int>() == note)
+                   && (entry.value("channel", 0) == drum_channel) == drums;
+        });
+    };
     for (const KnownDeviation& known : known_deviations) {
         INFO("deviation row for program " << known.program << " (" << known.cause << ")");
-        CHECK(std::any_of(cases.begin(), cases.end(), [&](const nlohmann::json& entry) {
-            return entry.at("program").get<int>() == known.program;
-        }));
+        CHECK(covers(known.program, /*note=*/-1, /*drums=*/false));
+    }
+    for (const KnownDrumDeviation& known : known_drum_deviations) {
+        INFO("deviation row for drum kit " << known.program << " key " << known.note << " ("
+                                           << known.cause << ")");
+        CHECK(covers(known.program, known.note, /*drums=*/true));
     }
 
     std::size_t compared = 0;
     std::size_t sounding = 0;
     std::size_t pitched = 0;
+    std::size_t drums = 0;
     std::size_t signal_bands = 0;
     std::size_t floor_bands = 0;
 
     for (const auto& entry : cases) {
-        const Case which{entry.at("program").get<int>(), entry.at("note").get<int>(),
-                         entry.at("velocity").get<int>(), entry.at("map").get<int>()};
+        const Case which{entry.at("program").get<int>(),  entry.at("note").get<int>(),
+                         entry.at("velocity").get<int>(), entry.at("map").get<int>(),
+                         entry.value("channel", 0)};
         const double hold = entry.at("hold").get<double>();
+        if (which.drums()) {
+            ++drums;
+        }
 
-        INFO("program " << which.program << " note " << which.note << " velocity "
-                        << which.velocity << " map " << which.map);
+        INFO((which.drums() ? "drum kit " : "program ")
+             << which.program << " note " << which.note << " velocity " << which.velocity << " map "
+             << which.map);
 
         // `TS_NOTE_AUDIO=<dir>` writes this engine's render of every case beside the oracle's, under
         // the same `caseNNNN.f32` name. What a failure means is rarely legible from four numbers,
@@ -375,14 +550,22 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
         const Deviation allowed = deviation_for(which);
 
         const double expected_peak = entry.at("peak").get<double>();
-        INFO("peak " << ours.peak << " vs " << expected_peak << " (" << (ours.peak - expected_peak)
-                     << ")");
-        CHECK_THAT(ours.peak, WithinAbs(expected_peak, allowed.peak));
 
-        // A reference that is silent has no level to agree with, and the ratio would divide by
-        // zero. Every case in the current sweep sounds, so this is a guard rather than a filter.
-        const double expected_rms = entry.at("rms").get<double>();
-        if (expected_rms > 1e-6) {
+        // A case the module does not sound is a different question, and asking the loud one of it
+        // gives nonsense: dividing by a silent reference's level is an infinity, and comparing its
+        // octave bands compares two noise floors. See \ref inaudible_peak -- the one case in the
+        // sweep this covers is an undefined kit key, and what it should assert is silence.
+        const bool audible = expected_peak >= inaudible_peak;
+        if (!audible) {
+            INFO("the module does not sound here: peak " << expected_peak << " vs ours "
+                                                         << ours.peak);
+            CHECK(ours.peak < inaudible_peak);
+        } else {
+            INFO("peak " << ours.peak << " vs " << expected_peak << " ("
+                         << (ours.peak - expected_peak) << ")");
+            CHECK_THAT(ours.peak, WithinAbs(expected_peak, allowed.peak));
+
+            const double expected_rms = entry.at("rms").get<double>();
             const double rms_db = 20.0 * std::log10(ours.rms / expected_rms);
             INFO("rms " << rms_db << " dB");
             CHECK(std::abs(rms_db) < allowed.rms_db);
@@ -396,7 +579,7 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
         const double loudest = *std::max_element(expected_bands.begin(), expected_bands.end());
         const double our_loudest = *std::max_element(ours.bands.begin(), ours.bands.end());
 
-        for (std::size_t band = 0; band < ours.bands.size(); ++band) {
+        for (std::size_t band = 0; band < ours.bands.size() && audible; ++band) {
             if (expected_bands[band] < -60.0) {
                 continue;
             }
@@ -420,6 +603,10 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
         // means the estimator did not lock onto a fundamental rather than that the module is out of
         // tune: `Synth Drum` and `Seashore` have no pitch to find, and one `Choir Aahs` case reads
         // 73 cents flat. Three cases of 180.
+        //
+        // Drum cases are skipped by the fixture rather than here -- it records no `pitchHz` for
+        // them at all, because a drum key selects a kit entry rather than a transposition and there
+        // is no frequency the note is supposed to come out at.
         const double expected_pitch = entry.value("pitchHz", 0.0);
         const double nominal = 440.0 * std::pow(2.0, (which.note - 69) / 12.0);
         if (expected_pitch > 0.0 && ours.pitch_hz > 0.0
@@ -437,10 +624,14 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
         // this.
         const auto expected_envelope = entry.at("envelope").get<std::vector<double>>();
         REQUIRE(ours.envelope.size() == expected_envelope.size());
+        const double loudest_window =
+            *std::max_element(expected_envelope.begin(), expected_envelope.end());
         double worst = 0.0;
         std::size_t worst_window = 0;
-        for (std::size_t window = 0; window < ours.envelope.size(); ++window) {
-            if (expected_envelope[window] < -60.0) {
+        for (std::size_t window = 0; window < ours.envelope.size() && audible; ++window) {
+            // Absolute silence, and the module's own resting floor -- see \ref envelope_floor_range.
+            if (expected_envelope[window] < -60.0
+                || loudest_window - expected_envelope[window] > envelope_floor_range) {
                 continue;
             }
             const double difference = std::abs(ours.envelope[window] - expected_envelope[window]);
@@ -452,13 +643,37 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
         INFO("worst envelope window " << worst_window << ": " << worst << " dB");
         CHECK(worst < allowed.envelope_db);
 
-        // The ruler. 180 cases is too many to read through failures alone -- what a bound should be
+        // The ruler. The sweep is too long to read through failures alone -- what a bound should be
         // is a question about the whole distribution, not about the cases that happen to miss.
         //
         // What it prints is this engine's own measurements, undifferenced. The fixture beside it
         // holds the module's, so anything worth asking -- a delta, a distribution, the shape of one
         // note's envelope against the module's -- can be asked afterwards without running again.
-        if (std::getenv("TS_NOTE_REPORT") != nullptr) {
+        if (std::getenv("TS_NOTE_REPORT") != nullptr && which.drums()) {
+            // A drum case resolves through none of the machinery below it -- a different pair of
+            // lookups, into the kit records, with the key's own coarse pitch standing in for the
+            // transposition -- so what is worth printing is different too. Running the melodic
+            // resolution on a kit program would print a tone that never sounds.
+            const auto row = DrumKitTable::row_for_map(static_cast<ToneMap>(which.map));
+            const auto kit = row ? notes.drums().kit_for_program(which.program, *row) : std::nullopt;
+            const DrumKey key = notes.drums().key(which.note, kit.value_or(0));
+            const auto tone = notes.directory().tone(key.tone);
+
+            // kit / tone# / kit level / coarse pitch / mute group / pan.
+            std::cout << "drum " << which.program << ' ' << which.note << ' ' << which.velocity
+                      << ' ' << which.map << " kit " << kit.value_or(-1) << '/' << key.tone << '/'
+                      << key.level << '/' << key.pitch << '/' << key.group << '/' << key.pan
+                      << " partials " << (tone ? tone->partials().size() : 0) << " rms " << ours.rms
+                      << " peak " << ours.peak << " bands";
+            for (const double band : ours.bands) {
+                std::cout << ' ' << band;
+            }
+            std::cout << " env";
+            for (const double window : ours.envelope) {
+                std::cout << ' ' << window;
+            }
+            std::cout << " name " << (tone ? tone->name() : std::string{"?"}) << '\n';
+        } else if (std::getenv("TS_NOTE_REPORT") != nullptr) {
             const ResolvedTone resolved = notes.directory().resolve_midi(
                 which.program, which.note, which.velocity, static_cast<ToneMap>(which.map), 0);
 
@@ -537,18 +752,25 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
     }
 
     CHECK(compared == cases.size());
-    // Guard against passing vacuously: a sweep of silent notes would agree perfectly.
-    CHECK(sounding == compared);
+    // Guard against passing vacuously: a sweep of silent notes would agree perfectly. One case is
+    // legitimately silent on both sides -- see \ref inaudible_peak -- and is held to that instead.
+    CHECK(sounding == compared - 1);
 
     // And guard `signal_band_range` against quietly swallowing the comparison. If a change ever
     // pushes most bands below the line, this gate would go on passing while checking almost
-    // nothing. Measured at 837 against the module and 417 held to the floor.
+    // nothing. Measured at 1229 against the module and 660 held to the floor.
     INFO(signal_bands << " bands compared against the module, " << floor_bands
                       << " held to the noise floor");
     CHECK(signal_bands > floor_bands);
-    CHECK(signal_bands > 700);
+    CHECK(signal_bands > 1100);
 
-    // And that the pitch check is not quietly skipping the sweep. Measured at 177 of 180.
-    INFO(pitched << " cases had a fundamental to compare");
-    CHECK(pitched > cases.size() - 10);
+    // And that the pitch check is not quietly skipping the melodic half. Measured at 182 of the
+    // 185 melodic cases; the 54 drum cases have no pitch to compare and are not counted against it.
+    INFO(pitched << " melodic cases had a fundamental to compare");
+    CHECK(pitched > compared - drums - 10);
+
+    // And that the drum half is actually there. It is the reason the sweep was widened, and a
+    // fixture regenerated by an older copy of the generator would silently drop it.
+    INFO(drums << " drum cases");
+    CHECK(drums >= 50);
 }

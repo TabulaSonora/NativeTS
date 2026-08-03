@@ -234,7 +234,8 @@ The authoritative note gate does *not* use it, and the reason is worth stating: 
 compares against came out of the DLL's whole pipeline, so it drives one note through the block loop
 instead. A standalone note renderer is a different signal path — no part processing, no output
 stage — and comparing against it would measure the gap between two architectures and call it a
-defect.
+defect. That choice paid a second time when the sweep grew drum cases: a kit is reached by sending a
+program change to channel 10, and a renderer with no parts has no channel 10 to send it to.
 
 Rendering is comfortably faster than realtime on one core. `tabula-sonora bench` reports the margin
 on your machine, stage by stage, and `render` reports afterwards whether the polyphony setting
