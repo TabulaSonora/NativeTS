@@ -81,6 +81,56 @@ TEST_CASE("port B drives the second sixteen parts", "[port][sccore]")
     CHECK(generator.part(0).volume() != 40);
 }
 
+TEST_CASE("mute and solo address a part, not a channel on every port", "[port][sccore]")
+{
+    // The mask is sixty-four wide and one entry means one part. It was sixteen wide once, and the
+    // fold that made a part index fit it meant muting channel 1 silenced channel 1 on *both* ports
+    // -- two parts with different programs, different volumes and, on a multi-port file, different
+    // music, standing behind one switch.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    ChannelMask mask;
+    ToneGeneratorOptions options;
+    options.channels = &mask;
+
+    // Only port B sounds. Port A's channel 0 is silent throughout and is only here to be muted.
+    const auto render_port_b = [&](auto&& before) {
+        ToneGenerator generator{notes, options};
+        before();
+        generator.send_channel(1, 0xC0, 48, 0);
+        generator.send_channel(1, 0x90, 60, 100);
+
+        std::vector<float> left(4096);
+        std::vector<float> right(4096);
+        generator.render(left, right);
+        return std::ranges::max(left | std::views::transform([](float v) { return std::abs(v); }));
+    };
+
+    const float unmuted = render_port_b([] {});
+    REQUIRE(unmuted > 0.0F);
+
+    // Muting port A's channel 0 must not touch port B's, which is the regression.
+    mask.reset();
+    const float other_port_muted = render_port_b([&] { mask.set_muted(0, true); });
+    CHECK(other_port_muted == unmuted);
+
+    // And the part that is actually sounding must still be mutable.
+    mask.reset();
+    const float this_part_muted = render_port_b([&] { mask.set_muted(channels, true); });
+    CHECK(this_part_muted == 0.0F);
+
+    // Solo is the same question from the other side: soloing a part on port A leaves port B out.
+    mask.reset();
+    const float other_port_soloed = render_port_b([&] { mask.set_soloed(0, true); });
+    CHECK(other_port_soloed == 0.0F);
+
+    mask.reset();
+    const float this_part_soloed = render_port_b([&] { mask.set_soloed(channels, true); });
+    CHECK(this_part_soloed == unmuted);
+}
+
 TEST_CASE("a portless caller gets port A", "[port][sccore]")
 {
     const RomImage rom =

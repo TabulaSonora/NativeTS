@@ -1160,12 +1160,14 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     voice.set_cutoff_offset(part.modifiers().cutoff_offset());
     voice.render(block, pitch_offset, part.mod_wheel_depth());
 
-    // A silenced channel contributes nothing at all -- not to the dry mix and not to the sends
+    // A silenced part contributes nothing at all -- not to the dry mix and not to the sends
     // either, so muting a part also removes its tail. It keeps running, so unmuting is instant.
-    // The mask is sixteen wide and indexed by channel, so muting a channel silences it on both
-    // ports -- one mixer strip per channel rather than per part.
-    if (options.channels != nullptr
-        && !options.channels->is_audible(voice.channel() % Sequence::channel_count)) {
+    //
+    // Indexed by **part**, not by channel. The mask was sixteen wide once and the fold that made it
+    // fit meant muting channel 3 silenced it on every port, which is one strip standing for two
+    // parts that have nothing to do with each other -- different programs, different volumes, and
+    // on a multi-port file different music.
+    if (options.channels != nullptr && !options.channels->is_audible(voice.channel())) {
         return;
     }
 
