@@ -408,19 +408,47 @@ the **median spread within a wave is 3.4 milli-semitones** — a third of a cent
 own constant offset, and it is a function of neither `root_key` nor `fine_tune`: waves sharing a
 `fine_tune` disagree, and root 60 alone spans −9 to +47.
 
-That points somewhere specific. A descriptor record is `0x16` bytes and this port reads eleven of
-them — three 20-bit positions, the root, the fine tune, the flags. **Bytes 0x0E to 0x15 are never
-read at all.** Two of them look exactly like what is missing: `0x0E`/`0x0F` form a second 16-bit
-field whose distribution mirrors `fine_tune`'s and whose most common value is `0x0400` — **1024,
-the same neutral**, on 3,814 of 4,259 records.
+That pointed at the eight descriptor bytes this port never reads — `0x0E` to `0x15` — two of which
+form a second 16-bit field whose most common value is `0x0400`, the same neutral 1024 as
+`fine_tune`, on 3,814 of 4,259 records.
 
-\warning **It is not simply a second addend.** Subtracting `1024 − fine2` from the residual leaves
-the median unchanged, so whatever role that field plays is not `native −= (1024 − fine2)`. Its sign
-does track the extremes — every large negative residual has `fine2` above 1024 and most large
-positives below it — so it is implicated rather than exonerated. Settling it means reading the
-DLL's own pitch path, not fitting from the outside. The spec's note says why nobody had: it records
-this formula as *"verified to ~0.5%"*, and half a percent is 8.6 cents, the exact range of what is
-left.
+**That lead is dead, and the DLL's own code says so.** `partial_compute_pitch @ 18005fc20` computes
+*two* native pitches:
+
+```c
+voice+0x1fc = root*1000 - fine + 0x400                       // what this port implements
+voice+0x200 = (voice+0x1fc) - *(ushort *)(desc + 0x0e) + 0x400
+```
+
+So the second field is real and is exactly a second fine tune — but `voice+0x200` is **written and
+never read anywhere in the binary**, while `voice+0x1fc` is what `voice_pitch_keyfollow` subtracts
+to form the exponent. This port's `native` is character-for-character the module's, and the missing
+term is not in the descriptor.
+
+\warning **The cause is still unknown.** Reading the real pitch routine has ruled out the formula
+itself, the second fine tune, and the jitter (below), and the base chain was already measured to
+agree within 5 milli-semitones. The spec's note says why nobody had pinned it down: it records this
+formula as *"verified to ~0.5%"*, and half a percent is 8.6 cents, the exact range of what is left.
+
+Two things worth following from that routine, neither of them the sharpness.
+
+It selects the key-follow row as *row 2 when the partial node's `+0x169` is zero, otherwise
+`+0x168`, skipping the curve entirely when that is zero* — which is not this port's
+`clamp((block[0x13] − 0x40) >> 2, 0, 7)` applied unconditionally.
+
+And it reads the pitch-jitter depth from **block +0x12**, immediately after the coarse tune at
++0x11. This port reads +0x1a, on no authority anyone recorded, and the ROM agrees with the
+decompilation: +0x12 is non-zero on 223 of the 4,726 partial blocks with nineteen distinct depths,
++0x1a on nineteen blocks with two.
+
+\warning **That correction is not applied, because it makes the song gate worse.** With +0x12,
+`robyn_show_me_love` goes from inside the default 0.01 peak bound to 0.036 outside it and `rainy`
+breaches its row, while the level, spectrum and envelope of both stay passing. One fragile
+sample-level metric moving on two songs and nothing else points at the *draw order* rather than the
+byte: jitter on 223 partials instead of 19 puts many more voices on the one shared generator, so
+any disagreement about which voice draws when becomes audible. The byte is a one-character change
+waiting on that question; making it now would trade a known-wrong constant for wrong-sounding
+songs.
 
 ### Now it is measured
 

@@ -325,6 +325,21 @@ std::optional<PitchEnvelopeRunner>
 PitchChain::create_envelope_runner(const PartialParameters& partial, int key, int velocity) const
 {
     const auto raw = partial.raw();
+
+    // **This byte is almost certainly wrong, and correcting it is blocked on a second bug.**
+    //
+    // `partial_compute_pitch @ 18005fc20` takes the coarse tune from block +0x11 -- which this port
+    // agrees with -- and then tests **+0x12** for the jitter draw, not +0x1a. The ROM says the same
+    // thing where no render can: +0x12 is non-zero on 223 of the 4,726 partial blocks with nineteen
+    // distinct depths, +0x1a on nineteen blocks with two. Nothing recorded why +0x1a was chosen.
+    //
+    // Switching it makes the authoritative song gate *worse*, which is why it still says +0x1a.
+    // `robyn_show_me_love` goes from inside the default 0.01 peak bound to 0.036 out and `rainy`
+    // breaches its row, while their level, spectrum and envelope all stay passing. That pattern --
+    // one fragile sample-level metric moving on two songs, nothing else -- points at the *draw
+    // order*: jitter on 223 partials instead of 19 means many more voices pulling from the one
+    // shared generator, so any disagreement about which voice draws when now shows. Fixing the byte
+    // needs that settled first, or it trades a known-wrong constant for wrong-sounding songs.
     const int jitter_depth = raw[0x1A];
 
     // One draw per partial voice, and only when the byte is non-zero -- the engine skips the draw
