@@ -33,6 +33,16 @@ enum class FilterTap {
 /// The order of those three lines is load-bearing and so is the grouping in the middle one.
 /// Reassociating `input - (q*band + low)` into `input - q*band - low` is a different sequence of
 /// IEEE operations, and the build disables FMA contraction so the compiler cannot fuse them either.
+///
+/// **Known divergence in the overdamped regime.** When `f*q` grows past the point where
+/// `(2 - f*q - f*f)^2 >= 4*(1 - f*q)`, the state matrix's poles go real and one of them lands on the
+/// negative axis — at Nyquist, where it lifts the top octave. The reference engine does not do that.
+/// Measured on drum tone 1946 (`f = 0.654, q = 1.891`, poles `+0.682` and `-0.348`): we run about
+/// 5 dB hot at Nyquist and +1.1 dB broadband, and the correlation against the DLL falls to 0.859
+/// where its underdamped neighbours hold 0.999. Only 19 of the 3352 filtered partials in the library
+/// reach the regime at all, so most of the corpus never sees it. What the reference does instead is
+/// not yet known — refitting `q` alone recovers most but not all of the gap, so do not "fix" this by
+/// clamping until stage D's overdamped branch has actually been read. See specv2 `docs/FINDINGS.md`.
 class StateVariableFilter {
 public:
     /// The lowpass integrator's current value.
