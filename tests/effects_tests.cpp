@@ -1,5 +1,9 @@
 #include "tabulasonora/send_effects.hpp"
 
+#include "tabulasonora/effect_programmer.hpp"
+#include "tabulasonora/equalizer.hpp"
+#include "tabulasonora/rom_image.hpp"
+
 #include "rom/sha256.hpp"
 #include "test_data.hpp"
 
@@ -13,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <numbers>
 #include <vector>
 
 using namespace ts;
@@ -254,4 +259,91 @@ TEST_CASE("resetting a network returns it to silence", "[effects]")
 
     CHECK(std::all_of(left.begin(), left.end(), [](float v) { return v == 0.0F; }));
     CHECK(std::all_of(right.begin(), right.end(), [](float v) { return v == 0.0F; }));
+}
+
+TEST_CASE("the equalizer is exactly transparent when flat", "[effects][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    const EffectPresets presets = EffectProgrammer::compute(rom);
+    REQUIRE(presets.has_eq());
+
+    // A signal with content at both ends, so a shelf at either end has something to act on.
+    const auto make_signal = [](std::size_t count) {
+        std::vector<float> signal(count);
+        for (std::size_t n = 0; n < count; ++n) {
+            const double t = static_cast<double>(n) / 32000.0;
+            signal[n] = static_cast<float>((0.4 * std::sin(2.0 * std::numbers::pi * 100.0 * t))
+                                           + (0.4 * std::sin(2.0 * std::numbers::pi * 8000.0 * t)));
+        }
+        return signal;
+    };
+
+    const std::vector<float> reference = make_signal(4096);
+
+    SECTION("flat passes the signal through bit for bit")
+    {
+        Equalizer eq{presets};
+        CHECK(eq.available());
+        CHECK(eq.is_flat());
+
+        std::vector<float> left = reference;
+        std::vector<float> right = reference;
+        eq.process(left, right);
+
+        // Not "close to" -- identical. At 0 dB the shelf's numerator and denominator are the same
+        // polynomial, so a flat EQ is the identity and must not perturb a single sample.
+        CHECK(left == reference);
+        CHECK(right == reference);
+    }
+
+    SECTION("a boost and a cut move the band they name")
+    {
+        const auto energy = [&](int address, int value, double frequency) {
+            Equalizer eq{presets};
+            if (address == 1) {
+                eq.set_low_gain(value);
+            } else {
+                eq.set_high_gain(value);
+            }
+            // The same helper measures the flat reference, so this only holds off centre.
+            CHECK(eq.is_flat() == (value == Equalizer::flat_gain));
+
+            std::vector<float> left(4096);
+            std::vector<float> right(4096);
+            for (std::size_t n = 0; n < left.size(); ++n) {
+                const double t = static_cast<double>(n) / 32000.0;
+                left[n] = static_cast<float>(std::sin(2.0 * std::numbers::pi * frequency * t));
+                right[n] = left[n];
+            }
+            eq.process(left, right);
+
+            // Skip the settling transient and measure the steady state.
+            double sum = 0.0;
+            for (std::size_t n = 1024; n < left.size(); ++n) {
+                sum += static_cast<double>(left[n]) * left[n];
+            }
+            return sum;
+        };
+
+        // The low shelf at 100 Hz, well inside its 200 Hz corner.
+        const double low_flat = energy(1, 0x40, 100.0);
+        CHECK(energy(1, 0x4C, 100.0) > low_flat * 1.5);
+        CHECK(energy(1, 0x34, 100.0) < low_flat * 0.7);
+
+        // The high shelf at 8 kHz, well above its 3 kHz corner.
+        const double high_flat = energy(3, 0x40, 8000.0);
+        CHECK(energy(3, 0x4C, 8000.0) > high_flat * 1.5);
+        CHECK(energy(3, 0x34, 8000.0) < high_flat * 0.7);
+    }
+
+    SECTION("out-of-range values are ignored rather than clamped")
+    {
+        Equalizer eq{presets};
+        eq.set_low_gain(0x33);
+        eq.set_high_gain(0x4D);
+        eq.set_low_frequency(2);
+        // Every one was rejected, so the block is still exactly as it started.
+        CHECK(eq.is_flat());
+    }
 }

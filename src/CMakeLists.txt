@@ -16,6 +16,7 @@ add_library(tabulasonora
     dsp/tvf_chain.cpp
     effects/effect_presets.cpp
     effects/effect_programmer.cpp
+    effects/equalizer.cpp
     effects/send_effects.cpp
     midi/sequence.cpp
     midi/smf_reader.cpp
