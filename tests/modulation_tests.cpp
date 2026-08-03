@@ -3,6 +3,7 @@
 #include "tabulasonora/part.hpp"
 #include "tabulasonora/patch_directory.hpp"
 #include "tabulasonora/pitch_chain.hpp"
+#include "tabulasonora/pitch_ramp.hpp"
 #include "tabulasonora/tva_chain.hpp"
 #include "tabulasonora/tvf_chain.hpp"
 
@@ -842,4 +843,45 @@ TEST_CASE("the matrix's two apply laws agree on which destination is which", "[d
         matrix.applied_bipolar(Source::bend, 8000, ControlMatrix::neutral + 0x20);
     CHECK(m.pitch > std::abs(m.tvf_cutoff));
     CHECK(matrix.applied_bipolar(Source::bend, 8000).pitch == 0);
+}
+
+TEST_CASE("the pitch ramp reproduces the engine's measured glide", "[pitch][ramp][sccore]")
+{
+    // Ground truth, read live out of the DLL for drum tone 1946 (TR-808 open hat, kit 11 key 46,
+    // velocity 100): its pitch ramp is armed from 238484 to 229376 with a step of -4553, and across
+    // the first 32-sample chunk the sampler's read position advances 33.693481 samples, leaving a
+    // phase of 45448/65536. That phase is what selects interpolator row 88 instead of row 0 for the
+    // rest of the note, and it is worth about 1.1 dB.
+    const fs::path path = testdata::require_sccore();
+    const RomImage rom = RomImage::open(path.string(), RomVerification::quick);
+    const TableSet tables = TableSet::from_rom(rom);
+    const PitchRamp reference{tables.ramp_exp()};
+
+    // The endpoints decode to the increments the DLL reports at each end of the glide.
+    CHECK(reference.increment_of(238484) == 96199);
+    CHECK(reference.increment_of(229376) == 65536);
+
+    // 0x38000 is unity and an octave is 16384 units, so a ratio round-trips through the domain.
+    CHECK(PitchRamp::domain_of(1.0) == PitchRamp::unity);
+    CHECK(PitchRamp::domain_of(2.0) == PitchRamp::unity + PitchRamp::units_per_octave);
+
+    // Walk the ramp the way the engine does -- one step per 8-sample slot, four slots to a chunk --
+    // and the accumulated phase has to land on the measured 45448 exactly.
+    PitchRamp ramp{tables.ramp_exp()};
+    const double from = std::exp2((238484.0 - PitchRamp::unity) / PitchRamp::units_per_octave);
+    const double to = 1.0;
+    ramp.arm(from, to);
+    REQUIRE(ramp.is_active());
+
+    std::int64_t advance = 0;
+    for (int slot = 0; slot < 4; ++slot) {
+        advance += static_cast<std::int64_t>(ramp.next_slot()) * PitchRamp::samples_per_slot;
+    }
+
+    CHECK(advance / 65536 == 33);
+    CHECK(advance % 65536 == 45448);
+
+    // And it settles: once the target is reached the ramp stops moving and reports unity.
+    CHECK_FALSE(ramp.is_active());
+    CHECK(ramp.next_slot() == 65536);
 }

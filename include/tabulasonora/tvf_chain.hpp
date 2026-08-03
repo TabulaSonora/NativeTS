@@ -102,6 +102,10 @@ public:
     [[nodiscard]] Coefficients
     coefficients(int units, int resonance_byte, int filter_type) const noexcept;
 
+    /// The shared `g_ramp_exp_tbl`. The pitch ramp decodes its sampler increment from the same
+    /// table and the same octave size, so it is exposed here rather than loaded twice.
+    [[nodiscard]] std::span<const std::int32_t> ramp_exp() const noexcept { return ramp_exp_; }
+
     /// The cutoff in Hz. Diagnostic only — the filter never needs it.
     [[nodiscard]] double
     cutoff_hz(double cutoff15, int resonance_byte, int sample_rate = 32000) const noexcept;
