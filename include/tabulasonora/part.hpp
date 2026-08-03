@@ -312,6 +312,10 @@ public:
         const int sum =
             control.applied_linear(ControlMatrix::Source::modulation, modulation).pitch
             + control.applied_linear(ControlMatrix::Source::channel_pressure, channel_pressure)
+                  .pitch
+            + control
+                  .applied_bipolar(
+                      ControlMatrix::Source::bend, bend - 8192, bend_range + ControlMatrix::neutral)
                   .pitch;
         if (sum == 0) {
             return 0.0;
@@ -323,6 +327,10 @@ public:
     }
 
     /// The bend offset in milli-semitones.
+    ///
+    /// Retained for callers that want bend alone — the offline timelines still build a curve from
+    /// it. The voice no longer uses it: bend reaches pitch through the control matrix, which is
+    /// where the engine puts it and which differs from this by up to 0.8 cents at full deflection.
     [[nodiscard]] double bend_milli_semitones() const noexcept
     {
         return PitchChain::bend_offset_milli_semitones(bend, bend_range);

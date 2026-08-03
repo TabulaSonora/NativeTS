@@ -161,7 +161,10 @@ struct ControlMatrix {
     ///
     /// The sign is the product of two: the depth's side of centre and the amount's. A downward bend
     /// through a negative depth pushes pitch *up*, which is the point of an inverted assignment.
-    [[nodiscard]] Modulation applied_bipolar(Source source, int amount) const noexcept
+    /// `pitch_depth` supplies the cell this matrix does not store — bend's, which lives in
+    /// `Part::bend_range`. Passing it in keeps that one store rather than mirroring it here.
+    [[nodiscard]] Modulation
+    applied_bipolar(Source source, int amount, int pitch_depth = neutral) const noexcept
     {
         const auto& row = depth[static_cast<std::size_t>(source)];
         const int magnitude = (amount < 0 ? -amount : amount) << 2;
@@ -196,7 +199,7 @@ struct ControlMatrix {
         constexpr int quarter = 0x3F81;
 
         return Modulation{
-            .pitch = centred(row[0], whole),
+            .pitch = centred(pitch_depth, whole),
             .tvf_cutoff = centred(row[1], half),
             .amplitude = centred(row[2], half),
             .lfo1_rate = centred(row[3], half),

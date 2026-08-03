@@ -784,8 +784,10 @@ TEST_CASE("the matrix's two apply laws agree on which destination is which", "[d
     CHECK(falling == -rising);
 
     // Pitch is the destination that takes the product whole, so it must exceed a halved one at the
-    // same depth -- the same ordering the linear law has.
-    matrix.at(Source::bend, Destination::pitch) = ControlMatrix::neutral + 0x20;
-    const ControlMatrix::Modulation m = matrix.applied_bipolar(Source::bend, 8000);
+    // same depth -- the same ordering the linear law has. Its depth is passed in rather than read
+    // from the matrix, because bend's pitch cell lives in `Part::bend_range`.
+    const ControlMatrix::Modulation m =
+        matrix.applied_bipolar(Source::bend, 8000, ControlMatrix::neutral + 0x20);
     CHECK(m.pitch > std::abs(m.tvf_cutoff));
+    CHECK(matrix.applied_bipolar(Source::bend, 8000).pitch == 0);
 }

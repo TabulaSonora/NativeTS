@@ -1066,8 +1066,9 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // The static tune rides in with the bend: the engine folds RPN and key-shift tuning into one
     // per-part milli-semitone offset added to every voice's pitch, and the master tune and key
     // shift sit on top of that globally.
-    const double pitch_offset = part.bend_milli_semitones() + part.tune_milli_semitones()
-                                + part.matrix_pitch_milli_semitones()
+    // Bend is inside `matrix_pitch_milli_semitones` now, not beside it: the engine sums the five
+    // matrix sources and clamps the total, so applying bend separately would escape that clamp.
+    const double pitch_offset = part.tune_milli_semitones() + part.matrix_pitch_milli_semitones()
                                 + master_tune_milli_semitones();
     voice.render(block, pitch_offset, part.mod_wheel_depth());
 
