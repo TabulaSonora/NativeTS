@@ -19,7 +19,8 @@ namespace ts {
 /// here it is the member order.
 struct NoteRenderer::Impl {
     explicit Impl(const RomImage& rom)
-        : tables(TableSet::from_rom(rom)),
+        : rom(&rom),
+          tables(TableSet::from_rom(rom)),
           envelopes(tables),
           directory(tables),
           drums(rom),
@@ -42,6 +43,7 @@ struct NoteRenderer::Impl {
     EngineNoise noise;
     PatchDirectory directory;
     DrumKitTable drums;
+    const RomImage* rom;
     WaveRom wave_rom;
     Interpolator interpolator;
     Sampler sampler;
@@ -111,6 +113,11 @@ NoteRenderer::NoteRenderer(const RomImage& rom) : impl_(std::make_unique<Impl>(r
 NoteRenderer::NoteRenderer(NoteRenderer&&) noexcept = default;
 NoteRenderer& NoteRenderer::operator=(NoteRenderer&&) noexcept = default;
 NoteRenderer::~NoteRenderer() = default;
+
+const RomImage& NoteRenderer::rom() const noexcept
+{
+    return *impl_->rom;
+}
 
 const TableSet& NoteRenderer::tables() const noexcept
 {

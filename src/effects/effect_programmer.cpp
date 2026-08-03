@@ -386,6 +386,38 @@ EffectProgrammer::read_delay_presets(const RomImage& rom)
     return presets;
 }
 
+std::array<std::uint8_t, EffectProgrammer::reverb_row_bytes>
+EffectProgrammer::reverb_macro_row(const RomImage& rom, int type)
+{
+    const std::vector<std::uint8_t> rows = rom.read(reverb_macro_rows, 8 * reverb_row_bytes);
+    std::array<std::uint8_t, reverb_row_bytes> row{};
+    const std::size_t at = static_cast<std::size_t>(std::clamp(type, 0, 7)) * reverb_row_bytes;
+    std::copy_n(rows.begin() + static_cast<std::ptrdiff_t>(at), reverb_row_bytes, row.begin());
+    return row;
+}
+
+std::array<std::uint8_t, EffectProgrammer::chorus_row_bytes>
+EffectProgrammer::chorus_macro_row(const RomImage& rom, int type)
+{
+    const std::vector<std::uint8_t> rows = rom.read(chorus_macro_rows, 8 * chorus_row_bytes);
+    std::array<std::uint8_t, chorus_row_bytes> row{};
+    const std::size_t at = static_cast<std::size_t>(std::clamp(type, 0, 7)) * chorus_row_bytes;
+    std::copy_n(rows.begin() + static_cast<std::ptrdiff_t>(at), chorus_row_bytes, row.begin());
+    return row;
+}
+
+ReverbPreset EffectProgrammer::reverb_from_row(const RomImage& rom,
+                                               std::span<const std::uint8_t> row)
+{
+    return compute_reverb(rom, row.data());
+}
+
+ChorusPreset EffectProgrammer::chorus_from_row(const RomImage& rom,
+                                               std::span<const std::uint8_t> row)
+{
+    return compute_chorus(rom, row.data());
+}
+
 EffectPresets EffectProgrammer::compute(const RomImage& rom)
 {
     const std::vector<std::uint8_t> reverb_rows = rom.read(reverb_macro_rows, 8 * 7);

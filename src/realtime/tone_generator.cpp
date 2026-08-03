@@ -3,6 +3,7 @@
 #include "dsp/simd.hpp"
 #include "realtime/partial_voice.hpp"
 #include "tabulasonora/control_decode.hpp"
+#include "tabulasonora/effect_programmer.hpp"
 #include "tabulasonora/equalizer.hpp"
 #include "tabulasonora/send_effects.hpp"
 
@@ -80,6 +81,39 @@ struct ToneGenerator::Impl {
     std::optional<int> reverb_type;
     std::optional<int> chorus_type;
     std::optional<int> delay_type;
+
+    /// The live reverb and chorus parameter rows.
+    ///
+    /// A macro loads a row; `40 01 31`-`37` and `40 01 39`-`40` overwrite bytes in it. Keeping the
+    /// row rather than only the macro number is what lets a single-parameter edit mean anything --
+    /// there is no preset underneath for it to sit on top of, the row *is* the parameters.
+    std::array<std::uint8_t, EffectProgrammer::reverb_row_bytes> reverb_row{};
+    std::array<std::uint8_t, EffectProgrammer::chorus_row_bytes> chorus_row{};
+    bool reverb_row_edited = false;
+    bool chorus_row_edited = false;
+
+    /// Wet levels, `40 01 33` and `40 01 3A`, which are not coefficients.
+    ///
+    /// They scale what leaves each network rather than shaping it, so they are applied at the mix
+    /// and not folded into a preset. 0x40 is the power-on value and means unity.
+    int reverb_level = 0x40;
+    int chorus_level = 0x40;
+
+    [[nodiscard]] static double level_scale(int level) noexcept
+    {
+        return static_cast<double>(level) / 64.0;
+    }
+
+    /// Loads a macro's row, which is what selecting a type does before any edit.
+    void load_macro_rows()
+    {
+        reverb_row = EffectProgrammer::reverb_macro_row(notes->rom(), reverb_type.value_or(4));
+        chorus_row = EffectProgrammer::chorus_macro_row(notes->rom(), chorus_type.value_or(2));
+        reverb_level = reverb_row[2];
+        chorus_level = chorus_row[1];
+        reverb_row_edited = false;
+        chorus_row_edited = false;
+    }
 
     // What each effect was last built for. Distinct from the selection above so that reselecting
     // the type a network already has does not throw its tail away.
@@ -570,12 +604,32 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
             if ((a3 == 0x30 || a3 == 0x31) && value <= 7) {
                 impl_->reverb_type =
                     impl_->options.reverb_type ? impl_->options.reverb_type : std::optional{value};
+                impl_->load_macro_rows();
             } else if (a3 == 0x38 && value <= 7) {
                 impl_->chorus_type =
                     impl_->options.chorus_type ? impl_->options.chorus_type : std::optional{value};
+                impl_->load_macro_rows();
             } else if (a3 == 0x50 && value <= 9) {
                 impl_->delay_type =
                     impl_->options.delay_type ? impl_->options.delay_type : std::optional{value};
+            } else if (a3 >= 0x31 && a3 <= 0x37) {
+                // Reverb parameters, straight into the row the macro filled in. Level is byte [2]
+                // and is kept out of the network -- see `reverb_level`.
+                impl_->reverb_row[static_cast<std::size_t>(a3 - 0x31)] =
+                    static_cast<std::uint8_t>(value);
+                if (a3 == 0x33) {
+                    impl_->reverb_level = value;
+                } else {
+                    impl_->reverb_row_edited = true;
+                }
+            } else if (a3 >= 0x39 && a3 <= 0x40) {
+                impl_->chorus_row[static_cast<std::size_t>(a3 - 0x39)] =
+                    static_cast<std::uint8_t>(value);
+                if (a3 == 0x3A) {
+                    impl_->chorus_level = value;
+                } else {
+                    impl_->chorus_row_edited = true;
+                }
             }
             // Recognised and left alone: the patch name (00-0F) and voice reserve (10-1F) have no
             // audible counterpart here, and the individual reverb (32-37), chorus (39-40) and
@@ -1123,23 +1177,35 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
 {
     ensure_effects();
 
-    const auto add = [&] {
-        simd::add(wet_left, left);
-        simd::add(wet_right, right);
+    // `scale` is the network's wet level, which is not part of its coefficients: it scales what
+    // leaves the network rather than shaping it. Unity is skipped rather than multiplied out, so a
+    // stream that never edits a level renders exactly as it did before levels existed.
+    const auto add = [&](double scale) {
+        if (scale == 1.0) {
+            simd::add(wet_left, left);
+            simd::add(wet_right, right);
+            return;
+        }
+        for (int n = 0; n < block_size; ++n) {
+            left[static_cast<std::size_t>(n)] +=
+                static_cast<float>(wet_left[static_cast<std::size_t>(n)] * scale);
+            right[static_cast<std::size_t>(n)] +=
+                static_cast<float>(wet_right[static_cast<std::size_t>(n)] * scale);
+        }
     };
 
-    // The same order the offline renderer mixes in: chorus, delay, then reverb.
+    // The same order the module mixes in: chorus, delay, then reverb.
     if (chorus) {
         chorus->process(chorus_bus, wet_left, wet_right);
-        add();
+        add(level_scale(chorus_level));
     }
     if (delay) {
         delay->process(delay_bus, wet_left, wet_right);
-        add();
+        add(1.0);
     }
     if (reverb) {
         reverb->process(reverb_bus, wet_left, wet_right);
-        add();
+        add(level_scale(reverb_level));
     }
 }
 
@@ -1149,13 +1215,21 @@ void ToneGenerator::Impl::ensure_effects()
     // cannot do this at all -- it picks the last type the file selects and runs the whole song
     // through it -- so a file that switches types part way sounds different here, and closer to the
     // module.
-    if (options.reverb && (!reverb || reverb_built_for != reverb_type)) {
-        reverb.emplace(Reverb::for_type(reverb_type));
+    // An edited row is rebuilt from the row itself rather than from the macro, which is the whole
+    // point of keeping it: `Reverb::for_type` can only produce what the macro produced.
+    if (options.reverb && (!reverb || reverb_built_for != reverb_type || reverb_row_edited)) {
+        reverb.emplace(reverb_row_edited
+                           ? Reverb{EffectProgrammer::reverb_from_row(notes->rom(), reverb_row)}
+                           : Reverb::for_type(reverb_type));
         reverb_built_for = reverb_type;
+        reverb_row_edited = false;
     }
-    if (options.chorus && (!chorus || chorus_built_for != chorus_type)) {
-        chorus.emplace(Chorus::for_type(chorus_type));
+    if (options.chorus && (!chorus || chorus_built_for != chorus_type || chorus_row_edited)) {
+        chorus.emplace(chorus_row_edited
+                           ? Chorus{EffectProgrammer::chorus_from_row(notes->rom(), chorus_row)}
+                           : Chorus::for_type(chorus_type));
         chorus_built_for = chorus_type;
+        chorus_row_edited = false;
     }
     if (options.delay && (!delay || delay_built_for != delay_type)) {
         delay.emplace(SystemDelay::for_type(delay_type.value_or(0)));
