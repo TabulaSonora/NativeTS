@@ -138,11 +138,30 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
 
             int message = data[position];
             if ((message & 0x80) != 0) {
-                status = message;
                 ++position;
+                // Only a channel message becomes the running status. Storing a meta or SysEx
+                // status here is a desync waiting to happen: the next event that omits its status
+                // byte would be read as another meta, its length byte swallowed as data, and the
+                // rest of the track parsed at the wrong offsets. Africa.mid is what found it --
+                // every track interleaves meta events with running-status notes, so each ran
+                // correctly until its first meta and then lost about a third of itself, ending the
+                // song at 90 s instead of 281.
+                //
+                // A system message does not *clear* the running status either. The spec says it
+                // should, but sequencers write files that resume running status across a meta
+                // event and players accept them; this file does exactly that, and clearing costs
+                // it half its notes.
+                if (message < 0xF0) {
+                    status = message;
+                }
             } else {
                 // Running status: reuse the previous status byte.
                 message = status;
+                if (message == 0) {
+                    // Running status with none set. The track is malformed from here, and guessing
+                    // would produce plausible-sounding nonsense; stop reading it instead.
+                    break;
+                }
             }
 
             if (message == 0xFF) {

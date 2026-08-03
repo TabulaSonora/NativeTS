@@ -420,3 +420,63 @@ TEST_CASE("two tracks sharing a port and channel still address one part", "[port
     CHECK(events[1].port == 1);
     CHECK(events[0].channel() == events[1].channel());
 }
+
+TEST_CASE("running status survives a meta event", "[smf]")
+{
+    // Storing a meta or SysEx status as the running status desyncs a track: the next event that
+    // omits its status byte is read as another meta, its length swallowed as data, and everything
+    // after it parsed at the wrong offsets. Clearing the running status instead is what the spec
+    // says, and it is just as wrong in practice -- sequencers write files that resume running
+    // status across a meta event, and dropping those notes is not an option either.
+    //
+    // The track below is exactly that shape: a note with an explicit status, a meta event, then
+    // two notes relying on running status.
+    std::vector<std::uint8_t> data{
+        0x00, 0x90, 0x3C, 0x40,             // note on, explicit status
+        0x00, 0xFF, 0x03, 0x02, 'h', 'i',   // a track-name meta in the middle
+        0x10, 0x3E, 0x41,                   // running status: another note on
+        0x10, 0x40, 0x42,                   // and another
+        0x00, 0xFF, 0x2F, 0x00,
+    };
+    const auto length = static_cast<std::uint32_t>(data.size());
+    std::vector<std::uint8_t> file{'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 0x01, 0xE0,
+                                   'M', 'T', 'r', 'k',
+                                   static_cast<std::uint8_t>(length >> 24),
+                                   static_cast<std::uint8_t>(length >> 16),
+                                   static_cast<std::uint8_t>(length >> 8),
+                                   static_cast<std::uint8_t>(length)};
+    file.insert(file.end(), data.begin(), data.end());
+
+    const std::vector<MidiEvent> events = smf::parse(file, 32000);
+    REQUIRE(events.size() == 3);
+    for (std::size_t i = 0; i < events.size(); ++i) {
+        INFO("event " << i);
+        CHECK(events[i].status == 0x90);
+        CHECK(events[i].data1 == 0x3C + static_cast<int>(i) * 2);
+        CHECK(events[i].data2 == 0x40 + static_cast<int>(i));
+    }
+}
+
+TEST_CASE("Africa.mid runs its full length", "[smf][sccore]")
+{
+    // 31 tracks, every one interleaving meta events with running-status notes. Mishandling that
+    // cost about a third of every track and ended the song at 90 s instead of 281 -- which sounds
+    // like the tempo running away rather than like missing notes, since what is left closes up.
+    const std::filesystem::path path = testdata::repository_root() / "testdata" / "Africa.mid";
+    if (!std::filesystem::exists(path)) {
+        SKIP("Africa.mid is not in testdata");
+    }
+
+    const std::vector<MidiEvent> events = smf::read(path, 32000);
+
+    // 211,200 ticks at 480 per quarter and 638,297 us per quarter is 280.85 s.
+    const double seconds = static_cast<double>(events.back().position) / 32000.0;
+    CHECK(seconds > 280.8);
+    CHECK(seconds < 280.9);
+
+    const auto note_ons = std::count_if(events.begin(), events.end(), [](const MidiEvent& event) {
+        return event.kind == MidiEventKind::channel && event.message_type() == 0x90
+               && event.data2 > 0;
+    });
+    CHECK(note_ons == 20234);
+}
