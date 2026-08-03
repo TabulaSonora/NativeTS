@@ -209,7 +209,7 @@ int render_command(const std::string& dll,
                    const fs::path& output,
                    int map,
                    const ts::RenderOptions& base,
-                   bool stream,
+                   bool hardware_polyphony,
                    int polyphony)
 {
     const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
@@ -218,8 +218,17 @@ int render_command(const std::string& dll,
     ts::RenderOptions options = base;
     options.map = static_cast<ts::ToneMap>(map);
 
+    // The block loop is the renderer. `--stream` now means "with the hardware's voice limit", and
+    // an explicit --polyphony beats both.
+    if (hardware_polyphony && polyphony == ts::ToneGeneratorOptions::unlimited_polyphony) {
+        polyphony = ts::VoicePool::default_polyphony;
+    }
+
     ts::RenderResult result;
-    if (stream) {
+    int stole = 0;
+    int peak_voices = 0;
+    bool limited = false;
+    {
         ts::ToneGeneratorOptions engine_options;
         engine_options.map = options.map;
         engine_options.drum_channel = options.drum_channel;
@@ -236,23 +245,35 @@ int render_command(const std::string& dll,
 
         ts::ToneGenerator generator{notes, engine_options};
         // Not an engine option: the row is settable while the engine runs, because it is what the
-        // module would have taken from a bank select. Carried over so --stream and the offline path
-        // resolve the same kits from the same file.
+        // module would have taken from a bank select.
         generator.set_drum_map_row(options.drum_map_row);
 
         ts::SequencePlayer player = ts::SequencePlayer::from_file(generator, midi);
         result = player.render_to_end(options.tail_seconds, options.end_seconds);
-    } else {
-        ts::SequenceRenderer renderer{notes};
-        result = renderer.render_file(midi, options);
+        stole = generator.stolen_voices();
+        peak_voices = generator.voice_slots();
+        limited = generator.polyphony_limit_reached();
     }
     ts::wav::write(output, result.left, result.right, result.sample_rate);
 
     const double seconds = static_cast<double>(result.left.size()) / result.sample_rate;
     std::cout << midi.filename().string() << ": " << result.note_count << " notes, " << std::fixed
               << std::setprecision(2) << seconds << " s, peak " << std::setprecision(6)
-              << result.peak << "\n"
-              << "wrote " << output.string() << "\n";
+              << result.peak << "\n";
+
+    // Whether the polyphony setting mattered. A render that never ran out sounds the same at every
+    // limit, so a digest taken from it says nothing about the others -- and one that did steal is a
+    // digest that is only about the limit it was taken at.
+    std::cout << "  polyphony: " << peak_voices << " slots";
+    if (stole > 0) {
+        std::cout << ", " << stole << " voices stolen -- a higher limit renders this differently\n";
+    } else if (limited) {
+        std::cout << ", grown on demand -- a fixed limit below this would steal\n";
+    } else {
+        std::cout << ", never exhausted -- identical at any higher limit\n";
+    }
+
+    std::cout << "wrote " << output.string() << "\n";
     return 0;
 }
 
@@ -462,7 +483,7 @@ int main(int argc, char** argv)
     bool no_chorus = false;
     bool no_delay = false;
     bool stream = false;
-    int polyphony = ts::ToneGeneratorOptions{}.polyphony;
+    int polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
     CLI::App* render = app.add_subcommand("render", "Render a Standard MIDI File to a WAV.");
     add_dll(render);
     render->add_option("midi", midi_path, "Input .mid path")->required();
@@ -476,10 +497,12 @@ int main(int argc, char** argv)
     render->add_flag("--no-reverb", no_reverb, "Disable the reverb send");
     render->add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     render->add_flag("--no-delay", no_delay, "Disable the delay send");
-    render->add_flag("--stream", stream, "Render through the real-time block loop");
-    render->add_option("--polyphony",
-                       polyphony,
-                       "Voice limit for --stream; 0 grows on demand instead of stealing");
+    // Every render goes through the block loop now; what `--stream` selects is the hardware's
+    // voice limit, so the stealing can be heard as the module would do it. The default is
+    // unlimited, where every note in the file sounds.
+    render->add_flag("--stream", stream, "Limit polyphony to the hardware's 64 voices");
+    render->add_option(
+        "--polyphony", polyphony, "Voice limit; 0 grows on demand instead of stealing (default)");
 
     std::vector<std::string> muted;
     std::vector<std::string> soloed;

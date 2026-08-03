@@ -96,6 +96,26 @@ public:
     /// The largest capacity reached, which is what a growing render actually needed.
     [[nodiscard]] int high_water() const noexcept { return high_water_; }
 
+    /// How many times a sounding voice was taken to make room.
+    ///
+    /// The reason a caller wants this: a render that never stole is one a larger pool would not
+    /// have changed, so a test can say whether its result depends on the limit at all. A render
+    /// that *did* steal is one where 64 and 256 genuinely differ, and a digest taken at one of them
+    /// says nothing about the other.
+    [[nodiscard]] int steal_count() const noexcept { return steal_count_; }
+
+    /// How many times a growing pool allocated another chunk.
+    [[nodiscard]] int growth_count() const noexcept { return growth_count_; }
+
+    /// Whether this render's output depends on the polyphony setting.
+    ///
+    /// False means the pool never ran out, so every larger limit -- and the growing mode -- would
+    /// have produced the same audio.
+    [[nodiscard]] bool limit_was_reached() const noexcept
+    {
+        return steal_count_ > 0 || growth_count_ > 0;
+    }
+
     /// Number of slots currently sounding.
     [[nodiscard]] int active_count() const noexcept;
 
@@ -162,6 +182,8 @@ private:
     std::vector<int> note_group_;
     std::vector<std::int64_t> sequence_;
 
+    int steal_count_ = 0;
+    int growth_count_ = 0;
     int capacity_ = default_polyphony;
     int high_water_ = default_polyphony;
     bool growing_ = false;

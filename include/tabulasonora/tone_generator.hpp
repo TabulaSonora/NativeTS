@@ -128,6 +128,24 @@ public:
     /// How many voices are currently sounding, including those fading after being stolen.
     [[nodiscard]] int active_voices() const noexcept;
 
+    /// Whether this render ever ran out of voices.
+    ///
+    /// False means the polyphony setting made no difference to the output: nothing was stolen and
+    /// nothing had to grow, so every larger limit would have produced the same audio. A caller
+    /// comparing digests across polyphony settings can use this to say whether a match is
+    /// meaningful or merely a file that never got busy.
+    [[nodiscard]] bool polyphony_limit_reached() const noexcept;
+
+    /// How many sounding voices were taken to make room.
+    [[nodiscard]] int stolen_voices() const noexcept;
+
+    /// The number of voice slots that exist, after any growth.
+    ///
+    /// Not the peak *usage*: nothing counts how many voices sounded at once, only how many slots
+    /// were allocated. For a growing pool the two converge, because it only grows when it runs out;
+    /// for a fixed one this is just the limit.
+    [[nodiscard]] int voice_slots() const noexcept;
+
     /// The thirty-two parts, indexed by `port * 16 + channel`.
     ///
     /// The first sixteen are port A and are what a host that never names a port drives, so an

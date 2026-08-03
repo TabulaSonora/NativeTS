@@ -19,6 +19,7 @@ VoicePool::VoicePool(int polyphony, bool growing)
 int VoicePool::grow()
 {
     const int first = capacity_;
+    ++growth_count_;
     capacity_ += growth_chunk;
     high_water_ = std::max(high_water_, capacity_);
 
@@ -60,6 +61,7 @@ Voice VoicePool::allocate(int channel, int note, int velocity, int note_group)
 
     const auto slot = static_cast<std::size_t>(index);
     if (state_[slot] != VoiceState::free) {
+        ++steal_count_;
         // Take the whole note, not half of it: a surviving partial of a stolen note would keep
         // sounding on its own.
         steal_group(note_group_[slot], index);
@@ -93,6 +95,9 @@ int VoicePool::release(int channel, int note) noexcept
 void VoicePool::reset() noexcept
 {
     std::fill(state_.begin(), state_.end(), VoiceState::free);
+    // The counts are not cleared: a reset is a message in the stream, and whether the render as a
+    // whole ever ran out of voices is a property of the render, not of the stretch since the last
+    // reset.
     counter_ = 0;
     next_note_group_ = 0;
 }

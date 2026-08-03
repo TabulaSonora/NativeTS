@@ -256,6 +256,21 @@ const VoicePool& ToneGenerator::voices() const noexcept
     return impl_->pool;
 }
 
+bool ToneGenerator::polyphony_limit_reached() const noexcept
+{
+    return impl_->pool.limit_was_reached();
+}
+
+int ToneGenerator::stolen_voices() const noexcept
+{
+    return impl_->pool.steal_count();
+}
+
+int ToneGenerator::voice_slots() const noexcept
+{
+    return impl_->pool.high_water();
+}
+
 int ToneGenerator::drum_kit() const noexcept
 {
     return impl_->drum_kit[0];
