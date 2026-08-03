@@ -57,13 +57,19 @@ inline constexpr int shift_bias = 10;
 /// The predictor is a 32-bit accumulator, matching the engine's own field, and wraps rather than
 /// saturating. Traces compare these values directly against the DLL's predictor, so the width
 /// matters as much as the arithmetic.
+/// `scale_phase` is where the wave's first sample sits inside its exponent block — `loop & 0x1F`.
+/// It is not a correction for a malformed descriptor: two in five waves begin partway into a block,
+/// which the codec permits because it stores differences and no absolute value per block. The
+/// exponents therefore have to be indexed by absolute position, which is what the phase supplies.
 constexpr void decode_predictors(std::span<const std::uint8_t> delta,
                                  std::span<const std::uint8_t> scale,
-                                 std::span<std::int32_t> destination) noexcept
+                                 std::span<std::int32_t> destination,
+                                 int scale_phase = 0) noexcept
 {
     std::int32_t predictor = 0;
     for (std::size_t i = 0; i < destination.size(); ++i) {
-        predictor = fx::wadd(predictor, step(delta[i], scale_at(scale, static_cast<int>(i))));
+        predictor =
+            fx::wadd(predictor, step(delta[i], scale_at(scale, scale_phase + static_cast<int>(i))));
         destination[i] = predictor;
     }
 }
@@ -76,11 +82,13 @@ constexpr void decode_predictors(std::span<const std::uint8_t> delta,
 /// the same as multiplying in `float`.
 constexpr void decode(std::span<const std::uint8_t> delta,
                       std::span<const std::uint8_t> scale,
-                      std::span<float> destination) noexcept
+                      std::span<float> destination,
+                      int scale_phase = 0) noexcept
 {
     std::int32_t predictor = 0;
     for (std::size_t i = 0; i < destination.size(); ++i) {
-        predictor = fx::wadd(predictor, step(delta[i], scale_at(scale, static_cast<int>(i))));
+        predictor =
+            fx::wadd(predictor, step(delta[i], scale_at(scale, scale_phase + static_cast<int>(i))));
         destination[i] = static_cast<float>(static_cast<double>(predictor) * output_scale);
     }
 }

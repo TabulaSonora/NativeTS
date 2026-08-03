@@ -56,15 +56,21 @@ def wrap32(value):
 
 
 def decode_predictors(image, region_offset, loop, start, manifest):
-    aligned = loop & ~0x1F
-    count = start - aligned
+    # The data begins at `loop` exactly. Two in five descriptors put it partway into a 32-sample
+    # exponent block, which is legal: the codec stores no absolute value per block, only
+    # differences, so a wave may start and end mid-block. What that costs is that the exponents
+    # must be indexed by the ABSOLUTE sample position, hence the phase carried below. Rounding the
+    # start down instead would begin integrating early, and with no leak in the predictor and no DC
+    # blocker downstream, those extra deltas displace the wave for its whole length.
+    count = start - loop
     if count <= 0 or count > 2_000_000:
         return None
 
     base = region_offset
-    delta = image[base + aligned : base + aligned + count + 1]
-    scale_length = ((count + 1) >> 5) + 4
-    scale = image[base + (aligned >> 5) : base + (aligned >> 5) + scale_length]
+    phase = loop & 0x1F
+    delta = image[base + loop : base + loop + count + 1]
+    scale_length = ((phase + count + 1) >> 5) + 4
+    scale = image[base + (loop >> 5) : base + (loop >> 5) + scale_length]
 
     if len(delta) < count + 1 or len(scale) < scale_length:
         return None
@@ -73,7 +79,7 @@ def decode_predictors(image, region_offset, loop, start, manifest):
     predictor = 0
     for i in range(count + 1):
         signed = delta[i] - 256 if delta[i] >= 128 else delta[i]
-        predictor = wrap32(predictor + wrap32(signed << (scale_at(scale, i) + 10)))
+        predictor = wrap32(predictor + wrap32(signed << (scale_at(scale, phase + i) + 10)))
         predictors.append(predictor)
     return predictors
 
@@ -133,7 +139,7 @@ def main():
                 "loop": loop,
                 "start": start,
                 "flags": flags,
-                "sampleCount": start - (loop & ~0x1F),
+                "sampleCount": start - loop,
                 "predictorSha256": hashlib.sha256(stream).hexdigest(),
                 "first16": predictors[:16],
                 "last16": predictors[-16:],

@@ -19,8 +19,15 @@ struct WaveStreams {
     std::vector<std::uint8_t> scale;
     /// Number of decodable samples.
     std::int32_t sample_count = 0;
-    /// The descriptor's loop start rounded down to a 32-sample boundary.
-    std::int32_t aligned_loop = 0;
+    /// The descriptor's data start, exactly as given — not rounded to a block.
+    std::int32_t data_start = 0;
+    /// Where `data_start` falls inside its 32-sample exponent block, i.e. `loop & 0x1F`.
+    ///
+    /// The codec carries no absolute value per block, only differences, so a wave may legitimately
+    /// begin partway into an exponent block and end partway through another. Decoding just has to
+    /// index the exponents by the *absolute* sample position rather than by the offset into what was
+    /// read, which is what this carries.
+    std::int32_t scale_phase = 0;
 };
 
 /// The 24 MB wave ROM embedded in `SCCore.dll` — the literal Sound Canvas hardware mask ROM, two
@@ -37,17 +44,17 @@ public:
     /// Largest wave this class will attempt to read, as a sanity bound.
     static constexpr std::int32_t max_sample_count = 2'000'000;
 
-    /// Regions of real ROM data in bank A.
+    /// Regions bank A spans: **sixteen**, the full width of the region nibble.
     ///
-    /// **`region_base` does not enforce this, and descriptors exist that exceed it.** Wave 4010
-    /// (TR-808 open hat) declares bank 0 region 12 and wave 2092 (Bim Hit) region 14, both past the
-    /// twelve regions this bound describes, so their reads run off the end of the declared bank.
-    /// Both decode measurably wrong; every wave measured inside the bound decodes exactly. Compared
-    /// against the reference's own filter-input buffer, per 32-sample window: waves 2818 (region 5)
-    /// and 4008 (bank 1) match at r = 1.00000, wave 4010 at 0.88, wave 2092 at 0.81 and falling.
-    /// Wave 4010's error is a constant +0.28-sample offset, which is what makes the open hat render
-    /// about 1.1 dB loud and bright. Unreversed: what the engine's own region map does past 11.
-    static constexpr int bank_a_region_count = 12;
+    /// This read twelve for a long time, and descriptors reach past that — wave 4010 (TR-808 open
+    /// hat) is region 12, wave 2092 (Bim Hit) region 14. That looked like a bug and is not: the two
+    /// bank bases sit `0x1000030` apart, exactly 16 MB plus bank B's own 0x30 header, so regions
+    /// 12–15 land at `0xc92700`–`0xf92700`, well inside bank A and nowhere near bank B. The mapping
+    /// `bank_a_base + region * 1 MB` is right for every region a descriptor can name, and nothing
+    /// here bounds or clamps it.
+    ///
+    /// Bank B is the one that genuinely stops early, at eight — see below.
+    static constexpr int bank_a_region_count = 16;
 
     /// Regions of real ROM data in bank B — eight, not twelve.
     ///
@@ -95,13 +102,13 @@ public:
     /// The descriptor's field names are as recovered, and they are confusing: `loop` is the data
     /// start, `end` is the loop point, and `start` is the physical end.
     ///
-    /// **`aligned_loop = loop & ~0x1F` is suspect for the waves it actually truncates.** Nearly
-    /// every `loop` is already a multiple of 32, but wave 2092's is 896066, and rounding it down by
-    /// two shifts every shift-exponent block against the deltas it scales. Since the decoder is a
-    /// pure delta accumulator with no DC blocker anywhere downstream, one wrongly-scaled block
-    /// displaces the running predictor for the rest of the wave rather than colouring 32 samples —
-    /// which matches the progressive divergence measured on that wave, as distinct from the constant
-    /// offset seen on wave 4010. Not yet confirmed against the reference's own decode.
+    /// Decoding starts at `loop` exactly. An unaligned `loop` is not a malformed descriptor: the
+    /// codec stores no absolute value per block, only differences, so a wave can begin partway into
+    /// an exponent block and end partway through another, and the decoder simply has to index the
+    /// exponents absolutely. This used to round the start down with `loop & ~0x1F`, which began the
+    /// integration up to 31 samples early — and because the predictor has no leak and nothing
+    /// downstream blocks DC, those extra deltas displaced the whole wave for its entire length
+    /// rather than adding a moment of lead-in.
     [[nodiscard]] std::optional<WaveStreams> read_streams(int region, int loop, int start) const;
 
 private:

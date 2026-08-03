@@ -59,8 +59,9 @@ std::unique_ptr<DecodedWave> Sampler::decode_core(const WaveDescriptor& descript
     // One extra step: the ping-pong sampler applies the delta at the turnaround index.
     wave->steps.resize(sample_count + 1);
     for (std::size_t i = 0; i < wave->steps.size(); ++i) {
-        wave->steps[i] =
-            codec::step(streams->delta[i], codec::scale_at(streams->scale, static_cast<int>(i)));
+        wave->steps[i] = codec::step(
+            streams->delta[i],
+            codec::scale_at(streams->scale, streams->scale_phase + static_cast<int>(i)));
     }
 
     // Decode one sample past the data end. The forward loop is inclusive of that index -- its
@@ -76,7 +77,7 @@ std::unique_ptr<DecodedWave> Sampler::decode_core(const WaveDescriptor& descript
         wave->samples[i] = static_cast<float>(static_cast<double>(predictor) * codec::output_scale);
     }
 
-    wave->loop_start = std::max(0, descriptor.end - streams->aligned_loop);
+    wave->loop_start = std::max(0, descriptor.end - streams->data_start);
     wave->data_end = streams->sample_count;
 
     // A reverse wave is the same data read the other way, so it is turned round here rather than

@@ -18,25 +18,26 @@ std::int64_t WaveRom::region_base(int region) const noexcept
 
 std::optional<WaveStreams> WaveRom::read_streams(int region, int loop, int start) const
 {
-    const std::int32_t aligned_loop = loop & ~0x1F;
-    const std::int32_t sample_count = start - aligned_loop;
+    const std::int32_t sample_count = start - loop;
     if (sample_count <= 0 || sample_count > max_sample_count) {
         return std::nullopt;
     }
 
     const std::int64_t base = region_base(region);
-    const std::int64_t delta_offset = base + aligned_loop;
-    const std::int64_t scale_offset = base + (aligned_loop >> 5);
+    const std::int32_t scale_phase = loop & 0x1F;
+    const std::int64_t delta_offset = base + loop;
+    const std::int64_t scale_offset = base + (loop >> 5);
 
     // One extra delta: the ping-pong sampler applies the step at the turnaround index.
     const std::int32_t delta_length = sample_count + 1;
-    const std::int32_t scale_length = (delta_length >> 5) + 4;
+    const std::int32_t scale_length = ((scale_phase + delta_length) >> 5) + 4;
 
     WaveStreams streams;
     streams.delta = rom_->read(delta_offset, static_cast<std::size_t>(delta_length));
     streams.scale = rom_->read(scale_offset, static_cast<std::size_t>(scale_length));
     streams.sample_count = sample_count;
-    streams.aligned_loop = aligned_loop;
+    streams.data_start = loop;
+    streams.scale_phase = scale_phase;
     return streams;
 }
 

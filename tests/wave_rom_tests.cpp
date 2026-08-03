@@ -24,12 +24,29 @@ TEST_CASE("region bytes split into a bank and an index", "[waverom]")
     CHECK(WaveRom::split_region(23).effective_region == 7);
 }
 
-TEST_CASE("bank B has eight regions, not twelve", "[waverom]")
+TEST_CASE("bank A spans sixteen regions and bank B only eight", "[waverom]")
 {
-    // The manifest declares both banks as 12 MB, but bank B's data ends early and the declared
-    // span runs past the end of the file. Trusting the nominal size reads garbage, or nothing.
-    CHECK(WaveRom::region_count(0) == 12);
+    // The manifest declares both banks as 12 MB. Bank A is wider than that -- the two bank bases
+    // are 16 MB apart, so every region a descriptor's four-bit field can name is real, and
+    // descriptors do reach region 14. Bank B is the one that stops early: its data ends before the
+    // declared span, so trusting the nominal size there reads garbage, or nothing.
+    CHECK(WaveRom::region_count(0) == 16);
     CHECK(WaveRom::region_count(1) == 8);
+}
+
+TEST_CASE("bank A is wide enough for every region a descriptor can name", "[waverom][sccore]")
+{
+    const fs::path path = testdata::require_sccore();
+    const RomImage rom = RomImage::open(path.string(), RomVerification::quick);
+    const WaveRom waves{rom};
+
+    // Regions 12 and 14 are used (waves 4010 and 2092). They must land inside bank A, not spill
+    // into bank B -- which is what makes `bank_a_base + region * 1 MB` correct for all sixteen.
+    for (int region = 0; region < WaveRom::region_count(0); ++region) {
+        const std::int64_t base = waves.region_base(region);
+        CHECK(base >= waves.bank_base(0));
+        CHECK(base + WaveRom::region_size <= waves.bank_base(1));
+    }
 }
 
 TEST_CASE("every real region lies inside the file", "[waverom][sccore]")
@@ -73,7 +90,8 @@ TEST_CASE("a wave reads its delta and scale streams", "[waverom][sccore]")
     const auto streams = waves.read_streams(0, 0x1000, 0x2000);
     REQUIRE(streams.has_value());
 
-    CHECK(streams->aligned_loop == 0x1000);
+    CHECK(streams->data_start == 0x1000);
+    CHECK(streams->scale_phase == 0);
     CHECK(streams->sample_count == 0x1000);
 
     // One extra delta: the ping-pong sampler applies the step at the turnaround index.
@@ -83,18 +101,29 @@ TEST_CASE("a wave reads its delta and scale streams", "[waverom][sccore]")
     CHECK(streams->scale.size() == static_cast<std::size_t>((0x1001 >> 5) + 4));
 }
 
-TEST_CASE("the loop start is aligned down to a 32-sample boundary", "[waverom][sccore]")
+TEST_CASE("an unaligned data start is kept, not rounded to a block", "[waverom][sccore]")
 {
     const fs::path path = testdata::require_sccore();
     const RomImage rom = RomImage::open(path.string(), RomVerification::quick);
     const WaveRom waves{rom};
 
-    // The scale stream is addressed in 32-sample units, so an unaligned data start has to round
-    // down or the exponents would be read against the wrong samples.
+    // The codec stores no absolute value per block, only differences, so a wave may begin partway
+    // into an exponent block. Decoding carries the phase and indexes the exponents absolutely
+    // rather than rounding the start down, which would begin integrating early and -- with no leak
+    // in the predictor and no DC blocker downstream -- displace the whole wave.
     const auto streams = waves.read_streams(0, 0x101F, 0x2000);
     REQUIRE(streams.has_value());
-    CHECK(streams->aligned_loop == 0x1000);
-    CHECK(streams->sample_count == 0x1000);
+    CHECK(streams->data_start == 0x101F);
+    CHECK(streams->scale_phase == 0x1F);
+    CHECK(streams->sample_count == 0x2000 - 0x101F);
+
+    // The scale stream has to cover the phase as well as the samples.
+    CHECK(streams->scale.size()
+          == static_cast<std::size_t>(((0x1F + (0x2000 - 0x101F) + 1) >> 5) + 4));
+
+    // The last sample's exponent must be readable: absolute position phase + count - 1.
+    const int last = streams->scale_phase + streams->sample_count;
+    CHECK(static_cast<std::size_t>(last >> 5) < streams->scale.size());
 }
 
 TEST_CASE("a descriptor with no usable data yields nothing", "[waverom][sccore]")

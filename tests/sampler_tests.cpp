@@ -162,7 +162,8 @@ TEST_CASE("the predictor stream matches an independent decoder", "[sampler][scco
         REQUIRE(streams->sample_count == entry.at("sampleCount").get<int>());
 
         std::vector<std::int32_t> predictors(static_cast<std::size_t>(streams->sample_count) + 1);
-        codec::decode_predictors(streams->delta, streams->scale, predictors);
+        codec::decode_predictors(streams->delta, streams->scale, predictors,
+                                 streams->scale_phase);
 
         // A hash of the whole stream is the real assertion; the literal prefix and suffix are what
         // make a failure diagnosable rather than just red.
