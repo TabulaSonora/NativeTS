@@ -136,6 +136,50 @@ both readings sound identical. On a stream that sets an EQ curve without ever ad
 one claim on this page resting on absence of evidence rather than measurement, and a file that sets
 `40 02` and no part EQ would settle it in a single render.
 
+## The per-note renderer is being retired
+
+This project long treated the offline per-note renderer as the authoritative one, and the digests
+were taken from it. That reasoning does not survive contact with what you actually hear.
+
+A per-note renderer renders each note whole and independently, then sums. It therefore cannot place
+a mid-song change in its true position relative to the notes around it: an effect type that switches
+between two notes has to be resolved *per note*, not at the moment it arrives. The block loop has no
+such problem, because it is a block loop — the change lands where the stream put it. So on the one
+property that matters most for judging fidelity, the architecture that was treated as the reference
+is the one that cannot be right.
+
+The polyphony limit was the only remaining reason to prefer it, and that reason is gone:
+`ToneGeneratorOptions::unlimited_polyphony` grows the pool rather than stealing, so the block loop
+can render every note in a file. The per-note renderer no longer does anything the block loop cannot.
+
+\note The decision is to retire it. The retirement is not complete: `SequenceRenderer` still exists
+and `render` still reaches the block loop only through `--stream`. Flipping that default changes
+what every existing invocation produces, so it is a deliberate step rather than a cleanup.
+
+### What the digests should be
+
+Three per file, all from the block loop, because one number cannot say both things:
+
+| Polyphony | What it proves |
+| --- | --- |
+| **64** | the hardware's limit, so that voice stealing is *consistent* — the audible character, not a defect |
+| **256** | enough headroom that no ordinary file steals, catching anything that depends on the limit |
+| **unlimited** | uninterrupted rendering, where every note in the file sounds |
+
+The 64-voice digest is the one that should eventually be comparable against `SCCore.dll` driven
+through its own API, once the engine is feature complete. That is the real target: not agreement
+with another reimplementation, but agreement with the black box.
+
+The principle behind all three: **match the original library by default, and exceed it only on
+request.** A mode that sounds better than the module is a feature to opt into, never the baseline.
+
+Two observations from the current corpus. `canyon.mid` and `sc50nn.mid` produce the *same* digest at
+all three settings — neither ever exceeds 64 voices, so for them the three-way check is free but
+uninformative. `th07_19_user_gm.mid` (173,183 notes) gives `eda314cc…` at 64 and `8ddd6033…` at both
+256 and unlimited: it steals heavily at the hardware limit, and 256 is already enough for it. That
+256 and unlimited agree bit for bit is worth having — it says the growing pool converges on what a
+large enough fixed pool reaches rather than doing anything of its own.
+
 ## Known limits
 
 Stated plainly, because they are not covered by the numbers above:
