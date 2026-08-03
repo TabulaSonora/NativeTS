@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tabulasonora/part_modifiers.hpp"
 #include "tabulasonora/partial_parameters.hpp"
 #include "tabulasonora/table_set.hpp"
 
@@ -104,15 +105,22 @@ public:
 
     /// Reads both LFO configurations for one partial: the tone-common LFO1 and the per-partial
     /// LFO2.
-    [[nodiscard]] std::pair<LfoConfig, LfoConfig> configure(int tone_number,
-                                                            const PartialParameters& partial) const;
+    ///
+    /// `modifiers` applies the part's vibrato rate, depth and delay. They reach LFO1 alone — LFO2
+    /// has no table indices for them to bias.
+    [[nodiscard]] std::pair<LfoConfig, LfoConfig>
+    configure(int tone_number,
+              const PartialParameters& partial,
+              const PartModifiers& modifiers = {}) const;
 
     /// Creates a runner that steps one LFO a control tick at a time.
     [[nodiscard]] LfoRunner create_runner(const LfoConfig& config) const;
 
     /// Creates runners for both of a partial's LFOs.
     [[nodiscard]] std::pair<LfoRunner, LfoRunner>
-    create_runners(int tone_number, const PartialParameters& partial) const;
+    create_runners(int tone_number,
+                   const PartialParameters& partial,
+                   const PartModifiers& modifiers = {}) const;
 
     /// Runs one LFO for a number of control ticks.
     [[nodiscard]] std::vector<double>

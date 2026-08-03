@@ -86,8 +86,7 @@ struct ToneGenerator::Impl {
     /// The global pitch offset every voice shares, in milli-semitones.
     [[nodiscard]] double master_tune_milli_semitones() const noexcept
     {
-        return static_cast<double>(master_tune - 0x400)
-               + ((master_key_shift - 0x40) * 1000.0);
+        return static_cast<double>(master_tune - 0x400) + ((master_key_shift - 0x40) * 1000.0);
     }
 
     [[nodiscard]] int effective_drum_map_row() const noexcept
@@ -148,7 +147,8 @@ struct ToneGenerator::Impl {
     void control_change(int channel, Part& part, int controller, int value);
     void commit_data_entry_msb(int channel, Part& part, int value);
     void commit_data_entry_lsb(Part& part, int value);
-    void gs_part_parameter(int part_index, Part& part, int address, std::span<const std::uint8_t> data);
+    void
+    gs_part_parameter(int part_index, Part& part, int address, std::span<const std::uint8_t> data);
     void gs_drum_setup(int port, int parameter, int key, std::span<const std::uint8_t> data);
     void release_sustained(int channel, Part& part);
     void flush_part_voices(int channel);
@@ -172,6 +172,7 @@ struct ToneGenerator::Impl {
                                       const PartialParameters& partial,
                                       int key,
                                       int velocity,
+                                      const PartModifiers& modifiers,
                                       std::optional<int> rate_key = std::nullopt);
 
     void render_block();
@@ -338,8 +339,8 @@ void ToneGenerator::send_channel(int port, int status, int data1, int data2)
     }
 }
 
-void ToneGenerator::Impl::apply_channel(int part_index, Part& part, int status, int data1,
-                                        int data2)
+void ToneGenerator::Impl::apply_channel(
+    int part_index, Part& part, int status, int data1, int data2)
 {
     const int channel = part_index;
 
@@ -416,8 +417,7 @@ void ToneGenerator::Impl::program_change(int part_index, Part& part, int program
 {
     part.program = program;
     if (is_drum_part(part_index)) {
-        const std::optional<int> kit =
-            notes->drums().kit_for_program(program, drum_row_for(part));
+        const std::optional<int> kit = notes->drums().kit_for_program(program, drum_row_for(part));
         if (kit) {
             // An undefined program leaves the current kit in place rather than falling back to
             // Standard.
@@ -499,8 +499,8 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
             case 0x00:
                 // Master tune, four nibble bytes; clamped as `sysex_master_tune` clamps it.
                 if (data.size() >= 4) {
-                    const int raw = ((data[0] * 0x100 + data[2]) * 0x10) + (data[1] * 0x100)
-                                    + data[3];
+                    const int raw =
+                        ((data[0] * 0x100 + data[2]) * 0x10) + (data[1] * 0x100) + data[3];
                     impl_->master_tune = std::clamp(raw, 0x18, 0x7E8);
                 }
                 break;
@@ -567,8 +567,8 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
             // Part parameters, port-relative block addressing.
             const int index =
                 Impl::part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
-            impl_->gs_part_parameter(index, impl_->parts[static_cast<std::size_t>(index)], a3,
-                                     data);
+            impl_->gs_part_parameter(
+                index, impl_->parts[static_cast<std::size_t>(index)], a3, data);
             return;
         }
 
@@ -588,7 +588,9 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
     }
 }
 
-void ToneGenerator::Impl::gs_part_parameter(int part_index, Part& part, int address,
+void ToneGenerator::Impl::gs_part_parameter(int part_index,
+                                            Part& part,
+                                            int address,
                                             std::span<const std::uint8_t> data)
 {
     const int value = data[0];
@@ -763,8 +765,7 @@ void ToneGenerator::Impl::gs_part_parameter(int part_index, Part& part, int addr
         // Scale tuning is written as a run: a DT1 at 40 up to twelve bytes long is the common
         // form, and single-entry writes land here too.
         if (address >= 0x40 && address <= 0x4B) {
-            for (std::size_t i = 0; i < data.size() && address + static_cast<int>(i) <= 0x4B;
-                 ++i) {
+            for (std::size_t i = 0; i < data.size() && address + static_cast<int>(i) <= 0x4B; ++i) {
                 part.scale_tuning[static_cast<std::size_t>(address - 0x40) + i] = data[i];
             }
         }
@@ -772,7 +773,9 @@ void ToneGenerator::Impl::gs_part_parameter(int part_index, Part& part, int addr
     }
 }
 
-void ToneGenerator::Impl::gs_drum_setup(int port, int parameter, int key,
+void ToneGenerator::Impl::gs_drum_setup(int port,
+                                        int parameter,
+                                        int key,
                                         std::span<const std::uint8_t> data)
 {
     // The engine keeps one drum-setup buffer per map, shared by every part on that map; here the
@@ -959,8 +962,8 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // The static tune rides in with the bend: the engine folds RPN and key-shift tuning into one
     // per-part milli-semitone offset added to every voice's pitch, and the master tune and key
     // shift sit on top of that globally.
-    const double pitch_offset = part.bend_milli_semitones() + part.tune_milli_semitones()
-                                + master_tune_milli_semitones();
+    const double pitch_offset =
+        part.bend_milli_semitones() + part.tune_milli_semitones() + master_tune_milli_semitones();
     voice.render(block, pitch_offset, part.mod_wheel_depth());
 
     // A silenced channel contributes nothing at all -- not to the dry mix and not to the sends
@@ -1123,6 +1126,7 @@ ToneGenerator::Impl::Envelopes ToneGenerator::Impl::envelopes(int tone_number,
                                                               const PartialParameters& partial,
                                                               int key,
                                                               int velocity,
+                                                              const PartModifiers& modifiers,
                                                               std::optional<int> rate_key)
 {
     const int zone_level =
@@ -1136,9 +1140,11 @@ ToneGenerator::Impl::Envelopes ToneGenerator::Impl::envelopes(int tone_number,
                                      notes->directory().tone_level(tone_number),
                                      sample_rate,
                                      0.0,
-                                     rate_key);
+                                     rate_key,
+                                     modifiers);
 
-    TvfChain::Envelope cutoff = notes->tvf().create_envelope(partial, velocity, key, sample_rate);
+    TvfChain::Envelope cutoff =
+        notes->tvf().create_envelope(partial, velocity, key, sample_rate, modifiers);
 
     return Envelopes{std::move(amplitude), std::move(cutoff.offsets), cutoff.base_cutoff};
 }
@@ -1156,6 +1162,12 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     if (note < part.key_low || note > part.key_high) {
         return;
     }
+
+    // Velocity sense, applied here rather than deeper because the engine applies it once at
+    // note-on and everything downstream reads the result -- the level chain, both envelope
+    // velocity scales and the filter's own velocity term all take the sensed value, not the
+    // value that arrived on the wire.
+    velocity = part.effective_velocity(velocity);
 
     const std::vector<int> tones =
         notes->directory().program_tones(part.program, tone_map_for(part), part.bank);
@@ -1214,8 +1226,8 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             }
 
             const int key = std::clamp(note, 0, 0x7F);
-            Envelopes built = envelopes(tone_number, partial, key, velocity);
-            auto [lfo1, lfo2] = notes->lfo().create_runners(tone_number, partial);
+            Envelopes built = envelopes(tone_number, partial, key, velocity, part.modifiers());
+            auto [lfo1, lfo2] = notes->lfo().create_runners(tone_number, partial, part.modifiers());
 
             // Scale tuning folds in here rather than riding with the bend: it is per-key, so it
             // is latched at note-on like the rest of the note's pitch.
@@ -1262,6 +1274,10 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
 void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
 {
     Part& part = parts[static_cast<std::size_t>(channel)];
+
+    // Velocity sense applies to a drum part too: the engine computes it in the note-on handler both
+    // kinds of part share, before either branch runs.
+    velocity = part.effective_velocity(velocity);
 
     // The kit's own key is kept alongside the overridden one: `apply` also resolves the panpot,
     // and the envelope rate key-follow takes the plane through its own clamp.
@@ -1316,8 +1332,10 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
             continue;
         }
 
-        Envelopes built = envelopes(key.tone, partial, 60, velocity, rate_key);
-        auto [lfo1, lfo2] = notes->lfo().create_runners(key.tone, partial);
+        // A drum part carries the same modify offsets as a melodic one: the engine reads them off
+        // the part, and nothing in `tva_compute_env_rates` asks whether the voice is a drum.
+        Envelopes built = envelopes(key.tone, partial, 60, velocity, part.modifiers(), rate_key);
+        auto [lfo1, lfo2] = notes->lfo().create_runners(key.tone, partial, part.modifiers());
 
         // The note does not transpose the sample: the kit's coarse-pitch plane supplies the key,
         // and the tone's own key-follow decides what a step of it is worth.

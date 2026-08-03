@@ -91,7 +91,8 @@ int LfoEngine::waveform(int phase, int waveform_index) const noexcept
 }
 
 std::pair<LfoConfig, LfoConfig> LfoEngine::configure(int tone_number,
-                                                     const PartialParameters& partial) const
+                                                     const PartialParameters& partial,
+                                                     const PartModifiers& modifiers) const
 {
     const auto header =
         tone_.subspan(static_cast<std::size_t>(tone_number) * Tone::stride, Tone::header_size);
@@ -99,18 +100,29 @@ std::pair<LfoConfig, LfoConfig> LfoEngine::configure(int tone_number,
 
     const int delay_index = read_i16(header, 0x12);
 
-    // The pitch depth is a signed index into the cents table, negated for negative indices.
+    // The vibrato modifiers reach LFO1 and only LFO1, because they bias *table indices* and LFO2
+    // has none to bias -- its rate and delay are raw per-tick increments. The three of them are not
+    // scaled alike: rate moves the index one step per controller step, depth and delay move it two.
+    const int rate_bias = modifiers.vibrato_rate - PartModifiers::neutral;
+    const int depth_bias = (modifiers.vibrato_depth - PartModifiers::neutral) * 2;
+    const int delay_bias = (modifiers.vibrato_delay - PartModifiers::neutral) * 2;
+
+    // The pitch depth is a signed index into the cents table, negated for negative indices. The
+    // engine rails at +-6000 cents when the biased index runs past the end, which is the same
+    // number the table's last entry holds -- so clamping the index says it once.
     const int pitch_index = fx::i8(block[0x15]);
-    const int pitch_cents =
-        pitch_index < 0 ? -cents_table_[static_cast<std::size_t>(pitch_index & 0x7F)]
-                        : cents_table_[static_cast<std::size_t>(std::min(0x7F, pitch_index))];
+    const int biased_depth = depth_bias + (pitch_index < 0 ? pitch_index & 0x7F : pitch_index);
+    const int depth_entry =
+        cents_table_[static_cast<std::size_t>(std::clamp(biased_depth, 0, 0x7F))];
+    const int pitch_cents = pitch_index < 0 ? -depth_entry : depth_entry;
 
     LfoConfig lfo1;
     lfo1.waveform = wave_map_[static_cast<std::size_t>(header[0x0E] & 0x1F)];
     lfo1.initial_phase = (header[0x0E] & 0xC0) << 8;
-    lfo1.increment =
-        rate_table_[static_cast<std::size_t>(std::clamp(read_u16(header, 0x10), 0, 0x7F))];
-    lfo1.delay_rate = delay_table_[static_cast<std::size_t>(std::clamp(delay_index, 0, 0x7F))];
+    lfo1.increment = rate_table_[static_cast<std::size_t>(
+        std::clamp(read_u16(header, 0x10) + rate_bias, 0, 0x7F))];
+    lfo1.delay_rate =
+        delay_table_[static_cast<std::size_t>(std::clamp(delay_index + delay_bias, 0, 0x7F))];
     lfo1.fade_rate = read_u16(header, 0x14);
     lfo1.pitch_depth = pitch_cents;
     // Truncation toward zero, not flooring: flooring gives -90 where the engine gives -89.
@@ -140,9 +152,10 @@ LfoRunner LfoEngine::create_runner(const LfoConfig& config) const
 }
 
 std::pair<LfoRunner, LfoRunner> LfoEngine::create_runners(int tone_number,
-                                                          const PartialParameters& partial) const
+                                                          const PartialParameters& partial,
+                                                          const PartModifiers& modifiers) const
 {
-    const auto [lfo1, lfo2] = configure(tone_number, partial);
+    const auto [lfo1, lfo2] = configure(tone_number, partial, modifiers);
     return {create_runner(lfo1), create_runner(lfo2)};
 }
 

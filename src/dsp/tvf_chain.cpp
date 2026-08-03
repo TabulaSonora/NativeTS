@@ -186,10 +186,20 @@ TvfChain::envelope_offsets(const PartialParameters& partial, int key, int veloci
 TvfChain::Envelope TvfChain::create_envelope(const PartialParameters& partial,
                                              int velocity,
                                              int key,
-                                             int sample_rate) const
+                                             int sample_rate,
+                                             const PartModifiers& modifiers) const
 {
     const auto raw = partial.raw();
     const Offsets offsets = envelope_offsets(partial, key, velocity);
+
+    // The filter envelope opts in to the part's envelope offsets; the amplitude envelope does not
+    // get the choice. A partial with the bit clear takes a bias of zero, not a bias it ignores --
+    // which is the same thing here, and worth saying because the two are not the same in the
+    // engine: `tvf_compute_env_rates` computes the bias only inside the branch.
+    const bool follows = responds_to_env_modifiers(partial);
+    const int attack_bias = follows ? modifiers.attack_bias() : 0;
+    const int decay_bias = follows ? modifiers.decay_bias() : 0;
+    const int release_bias = follows ? modifiers.release_bias() : 0;
 
     const int main_rate = envelope_machine_->rate_scale(
         (rate_key_follow_[static_cast<std::size_t>((raw[0x46] * 0x80) + (key & 0x7F))] - 0x80)
@@ -207,8 +217,11 @@ TvfChain::Envelope TvfChain::create_envelope(const PartialParameters& partial,
     std::array<bool, SegmentEnvelope::segment_count> linear{};
 
     for (std::size_t i = 0; i < targets.size(); ++i) {
-        const double milliseconds = envelope_machine_->segment_milliseconds(
-            raw[0x3F + i], main_rate, i < 2 ? velocity_early : velocity_late);
+        const double milliseconds =
+            envelope_machine_->segment_milliseconds(raw[0x3F + i],
+                                                    main_rate,
+                                                    i < 2 ? velocity_early : velocity_late,
+                                                    i < 2 ? attack_bias : decay_bias);
 
         targets[i] = offsets.segments[i];
 
@@ -223,8 +236,8 @@ TvfChain::Envelope TvfChain::create_envelope(const PartialParameters& partial,
         (rate_key_follow_[static_cast<std::size_t>((raw[0x47] * 0x80) + (key & 0x7F))] - 0x80)
             & 0xFF,
         raw[0x49]);
-    const double release_ms =
-        envelope_machine_->segment_milliseconds(raw[0x43], release_rate, velocity_late);
+    const double release_ms = envelope_machine_->segment_milliseconds(
+        raw[0x43], release_rate, velocity_late, release_bias);
 
     SegmentEnvelope envelope{
         *envelope_machine_,
@@ -238,8 +251,15 @@ TvfChain::Envelope TvfChain::create_envelope(const PartialParameters& partial,
         /*control_tick_samples=*/sample_rate / TvaChain::control_tick_hz,
     };
 
-    // Stage B: the part-level cutoff terms cancel at neutral, so only the base and envelope remain.
-    return Envelope{std::move(envelope), std::min(0x7FFF, (raw[0x2F] * 0x100) + offsets.peak)};
+    // Stage B: the part's cutoff offset joins the base and the envelope peak. A controller step is
+    // a whole 0x100 of the 15-bit sum, so CC#74 walks the cutoff in coarse strides.
+    //
+    // The low clamp lives downstream, where the per-tick sum of base, envelope and LFO is clamped
+    // to [0, 0x7fff] exactly as the engine clamps it -- so a cutoff offset that drives this
+    // negative is right to stay negative here. The high clamp is kept where it was.
+    return Envelope{
+        std::move(envelope),
+        std::min(0x7FFF, (raw[0x2F] * 0x100) + offsets.peak + modifiers.cutoff_offset())};
 }
 
 std::vector<double> TvfChain::envelope(const PartialParameters& partial,

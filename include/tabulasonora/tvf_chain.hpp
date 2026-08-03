@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tabulasonora/envelope_machine.hpp"
+#include "tabulasonora/part_modifiers.hpp"
 #include "tabulasonora/partial_parameters.hpp"
 #include "tabulasonora/segment_envelope.hpp"
 #include "tabulasonora/state_variable_filter.hpp"
@@ -104,10 +105,24 @@ public:
     /// The running level starts at zero rather than at the release level: all five targets are made
     /// relative to the peak, and the peak itself is folded into the base cutoff instead. TVF
     /// segments are always linear — unlike the TVA, the shape is not data-driven here.
+    ///
+    /// `modifiers` supplies the part's cutoff offset, which always applies, and its envelope
+    /// offsets, which apply only when the partial opts in — see `responds_to_env_modifiers`.
     [[nodiscard]] Envelope create_envelope(const PartialParameters& partial,
                                            int velocity,
                                            int key,
-                                           int sample_rate = 32000) const;
+                                           int sample_rate = 32000,
+                                           const PartModifiers& modifiers = {}) const;
+
+    /// Whether this partial's filter envelope follows the part's envelope modify offsets.
+    ///
+    /// Bit 4 of block byte 0x0E. `tvf_compute_env_rates` zeroes its bias outright when the bit is
+    /// clear, so on those partials CC#73/75/72 move the amplitude envelope and leave the filter
+    /// envelope alone. The amplitude side has no such gate.
+    [[nodiscard]] static bool responds_to_env_modifiers(const PartialParameters& partial) noexcept
+    {
+        return (partial.raw()[0x0E] & 0x10) != 0;
+    }
 
     /// The 15-bit cutoff trajectory over a note, clamped to 15 bits.
     [[nodiscard]] std::vector<double> envelope(const PartialParameters& partial,

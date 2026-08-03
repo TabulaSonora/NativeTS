@@ -124,7 +124,8 @@ SegmentEnvelope TvaChain::create_envelope(const PartialParameters& partial,
                                           int tone_level,
                                           int sample_rate,
                                           double attack_milliseconds,
-                                          std::optional<int> rate_key) const
+                                          std::optional<int> rate_key,
+                                          const PartModifiers& modifiers) const
 {
     const auto raw = partial.raw();
     const int level_byte = partial_level(partial, velocity).value_or(velocity);
@@ -159,9 +160,16 @@ SegmentEnvelope TvaChain::create_envelope(const PartialParameters& partial,
     std::array<double, SegmentEnvelope::segment_count> segment_samples{};
     std::array<bool, SegmentEnvelope::segment_count> linear{};
 
+    // The part's envelope offsets bias the rate-curve index, and the three of them divide the
+    // envelope the same way the two velocity scales do: attack covers segments 0 and 1, decay
+    // covers 2 and 3, release covers the release. `tva_compute_env_rates` recomputes its bias
+    // between segments 1 and 2 and again before the release, which is where the split comes from.
     for (std::size_t i = 0; i < segment_samples.size(); ++i) {
-        double seconds = envelope_->segment_milliseconds(
-                             raw[0x5E + i], main_rate, i < 2 ? velocity_early : velocity_late)
+        double seconds = envelope_->segment_milliseconds(raw[0x5E + i],
+                                                         main_rate,
+                                                         i < 2 ? velocity_early : velocity_late,
+                                                         i < 2 ? modifiers.attack_bias()
+                                                               : modifiers.decay_bias())
                          / 1000.0;
 
         if (i == 0 && attack_milliseconds > 0) {
@@ -172,8 +180,8 @@ SegmentEnvelope TvaChain::create_envelope(const PartialParameters& partial,
         linear[i] = EnvelopeMachine::is_linear_segment(raw[0x5E + i]);
     }
 
-    const double release_ms =
-        envelope_->segment_milliseconds(raw[0x62], release_rate, velocity_late);
+    const double release_ms = envelope_->segment_milliseconds(
+        raw[0x62], release_rate, velocity_late, modifiers.release_bias());
 
     return SegmentEnvelope{
         *envelope_,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tabulasonora/lfo_engine.hpp"
+#include "tabulasonora/part_modifiers.hpp"
 #include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/sequence.hpp"
 #include "tabulasonora/tva_chain.hpp"
@@ -106,20 +107,60 @@ public:
     /// controllers (CC#71-78), the NRPNs (`01 08`-`01 66`), and the part SysEx (`40 1x 30`-`37`)
     /// all land on the same per-part byte in the engine (`part+0x3e4`-`0x3eb`).
     ///
-    /// Latched but not yet consumed: routing them into the LFO, TVF and envelope setup is the
-    /// remaining synthesis work, tracked alongside the insertion-EFX block.
+    /// Seven of the eight reach the synthesis chains through `modifiers()`.
     int vibrato_rate = 0x40;
     int vibrato_depth = 0x40;
     int vibrato_delay = 0x40;
     int tvf_cutoff = 0x40;
-    int tvf_resonance = 0x40;
     int env_attack = 0x40;
     int env_decay = 0x40;
     int env_release = 0x40;
 
+    /// The eighth: CC#71 / NRPN `01 21` / `40 1x 33`, and the one that goes nowhere.
+    ///
+    /// Write-only **to match the engine**, which stores it at `part+0x3e7` and never reads it.
+    /// See `PartModifiers` for why that is a finding rather than an omission. Tracked here anyway
+    /// so the value survives a round trip, as it does on the module.
+    int tvf_resonance = 0x40;
+
+    /// The seven live modify offsets, in the form the synthesis chains take.
+    [[nodiscard]] PartModifiers modifiers() const noexcept
+    {
+        return PartModifiers{vibrato_rate,
+                             vibrato_depth,
+                             vibrato_delay,
+                             tvf_cutoff,
+                             env_attack,
+                             env_decay,
+                             env_release};
+    }
+
+    /// The velocity a note-on actually sounds at, after this part's velocity sense (`40 1x 1A`
+    /// depth and `40 1x 1B` offset).
+    ///
+    /// Three details are load-bearing. A depth of zero collapses every velocity to **1**, not to
+    /// silence. A depth of exactly 0x40 skips the multiply rather than multiplying by one, so a
+    /// neutral part cannot lose a count to the shift's truncation. And the low clamp is to 1 as
+    /// well: an offset that drives the sum negative still sounds, at the floor.
+    [[nodiscard]] int effective_velocity(int velocity) const noexcept
+    {
+        int value = velocity;
+        if (velocity_depth == 0) {
+            value = 1;
+        } else if (velocity_depth != 0x40) {
+            value = (value * velocity_depth) >> 6;
+        }
+
+        value += (velocity_offset - 0x40) * 2;
+        if (value < 0) {
+            return 1;
+        }
+        return value > 0x7F ? 0x7F : value;
+    }
+
     /// GS scale tuning (`40 1x 40`-`4B`), one entry per pitch class, 0x40 centred, a cent a step.
-    std::array<int, 12> scale_tuning{0x40, 0x40, 0x40, 0x40, 0x40, 0x40,
-                                     0x40, 0x40, 0x40, 0x40, 0x40, 0x40};
+    std::array<int, 12> scale_tuning{
+        0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40, 0x40};
 
     /// GS use-for-rhythm (`40 1x 15`): -1 follows the channel default, 0 forces melodic, 1 or 2
     /// route the part to the drum path on that drum map.
@@ -129,8 +170,7 @@ public:
     int key_low = 0;
     int key_high = 0x7F;
 
-    /// GS velocity sense depth and offset (`40 1x 1A`/`1B`), stored but not yet applied to the
-    /// velocity curve.
+    /// GS velocity sense depth and offset (`40 1x 1A`/`1B`), applied by `effective_velocity`.
     int velocity_depth = 0x40;
     int velocity_offset = 0x40;
 

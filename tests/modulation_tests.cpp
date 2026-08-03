@@ -1,4 +1,5 @@
 #include "tabulasonora/lfo_engine.hpp"
+#include "tabulasonora/part.hpp"
 #include "tabulasonora/patch_directory.hpp"
 #include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/tva_chain.hpp"
@@ -443,4 +444,163 @@ TEST_CASE("the pitch accumulator clamps at 127 semitones", "[dsp]")
     CHECK(PitchChain::clamp(1e9) == PitchChain::max_pitch_milli_semitones);
     // 0x1f018 is exactly 127000; the hex spelling is what the engine uses.
     CHECK(PitchChain::max_pitch_milli_semitones == 127 * 1000);
+}
+
+TEST_CASE("the part modify offsets are neutral at 0x40", "[dsp]")
+{
+    // Every one of these is a controller centred on 0x40, and a default-constructed set has to be
+    // indistinguishable from having no part at all -- that property is what lets the chains take a
+    // modifier argument everywhere without the offline renderer having to supply one.
+    const PartModifiers neutral;
+    CHECK(neutral.is_neutral());
+    CHECK(neutral.attack_bias() == 0);
+    CHECK(neutral.decay_bias() == 0);
+    CHECK(neutral.release_bias() == 0);
+    CHECK(neutral.cutoff_offset() == 0);
+
+    // The envelope offsets move the rate-curve index two entries per controller step, and the
+    // cutoff offset moves the 15-bit cutoff sum a whole 0x100.
+    PartModifiers moved;
+    moved.env_attack = 0x50;
+    moved.env_decay = 0x30;
+    moved.env_release = 0x7F;
+    moved.tvf_cutoff = 0x30;
+    CHECK_FALSE(moved.is_neutral());
+    CHECK(moved.attack_bias() == 32);
+    CHECK(moved.decay_bias() == -32);
+    CHECK(moved.release_bias() == 126);
+    CHECK(moved.cutoff_offset() == -0x1000);
+}
+
+TEST_CASE("velocity sense has three edges that are easy to get wrong", "[dsp][sccore]")
+{
+    Part part;
+
+    // Neutral is the identity, and specifically not a multiply by 0x40 followed by a shift: that
+    // would be the identity too, right up until truncation ate a count.
+    for (int velocity : {1, 27, 64, 100, 127}) {
+        INFO("velocity " << velocity);
+        CHECK(part.effective_velocity(velocity) == velocity);
+    }
+
+    // A depth of zero collapses everything to 1, not to silence. A part set this way still sounds.
+    part.velocity_depth = 0;
+    CHECK(part.effective_velocity(127) == 1);
+    CHECK(part.effective_velocity(1) == 1);
+
+    // Depth scales by depth/0x40 with a shift, so half depth is half velocity.
+    part.velocity_depth = 0x20;
+    CHECK(part.effective_velocity(100) == 50);
+    CHECK(part.effective_velocity(127) == 63);
+
+    // Offset is two counts per step, and it is added after the depth scaling rather than before.
+    part.velocity_depth = 0x40;
+    part.velocity_offset = 0x50;
+    CHECK(part.effective_velocity(64) == 64 + 32);
+    part.velocity_offset = 0x30;
+    CHECK(part.effective_velocity(64) == 64 - 32);
+
+    // Both rails. The low one is 1 and not 0 -- an offset that undershoots still sounds, at the
+    // floor -- and the high one is 0x7f.
+    part.velocity_offset = 0x00;
+    CHECK(part.effective_velocity(1) == 1);
+    part.velocity_offset = 0x7F;
+    CHECK(part.effective_velocity(127) == 0x7F);
+}
+
+TEST_CASE("the part modify offsets reach the chains that consume them", "[dsp][sccore]")
+{
+    const Fixture fixture = Fixture::make();
+
+    // A real partial, copied so the opt-in bit can be flipped. Building one from zeroes does not
+    // work and should not: several of the block's bytes are table indices whose zero is out of
+    // range, because a stored zero never occurs there. Starting from data the engine ships keeps
+    // the laws under test honest.
+    const PartialParameters source = fixture.directory().partial_by_slot(0, 0);
+    REQUIRE(source.is_present());
+
+    std::array<std::uint8_t, PartialParameters::stride> block{};
+    std::copy(source.raw().begin(), source.raw().end(), block.begin());
+    const PartialParameters partial{block.data()};
+
+    SECTION("the cutoff offset shifts the base by 0x100 a step")
+    {
+        const int neutral = fixture.tvf().create_envelope(partial, 100, 60).base_cutoff;
+
+        PartModifiers up;
+        up.tvf_cutoff = 0x44;
+        CHECK(fixture.tvf().create_envelope(partial, 100, 60, 32000, up).base_cutoff
+              == neutral + (4 * 0x100));
+
+        PartModifiers down;
+        down.tvf_cutoff = 0x3C;
+        CHECK(fixture.tvf().create_envelope(partial, 100, 60, 32000, down).base_cutoff
+              == neutral - (4 * 0x100));
+    }
+
+    SECTION("the filter envelope opts in to the envelope offsets and the amplitude one does not")
+    {
+        PartModifiers slow;
+        slow.env_attack = 0x70;
+        slow.env_decay = 0x70;
+        slow.env_release = 0x70;
+
+        // Bit 4 of block byte 0x0e clear: the filter envelope ignores them outright. Only that
+        // bit is touched -- the rest of the byte is the partial's own and is not this test's to
+        // invent.
+        block[0x0E] = static_cast<std::uint8_t>(block[0x0E] & ~0x10);
+        CHECK_FALSE(TvfChain::responds_to_env_modifiers(partial));
+        const auto opted_out = fixture.tvf().create_envelope(partial, 100, 60, 32000, slow);
+        const auto none = fixture.tvf().create_envelope(partial, 100, 60);
+        CHECK(opted_out.offsets.release_samples() == none.offsets.release_samples());
+
+        // Bit 4 set: the same offsets now move it.
+        block[0x0E] = static_cast<std::uint8_t>(block[0x0E] | 0x10);
+        CHECK(TvfChain::responds_to_env_modifiers(partial));
+        const auto opted_in = fixture.tvf().create_envelope(partial, 100, 60, 32000, slow);
+        CHECK(opted_in.offsets.release_samples() != none.offsets.release_samples());
+    }
+
+    SECTION("the vibrato offsets reach LFO1 and leave LFO2 alone")
+    {
+        const auto [base1, base2] = fixture.lfo().configure(0, partial);
+
+        // Depth biases the cents-table index two entries a step, which is the same thing as a
+        // partial whose stored depth index is that much higher. Saying it that way tests the law
+        // without restating the table.
+        PartModifiers deeper;
+        deeper.vibrato_depth = 0x44;
+        const auto [wide, ignored_a] = fixture.lfo().configure(0, partial, deeper);
+
+        std::array<std::uint8_t, PartialParameters::stride> shifted = block;
+        shifted[0x15] = static_cast<std::uint8_t>(block[0x15] + (4 * 2));
+        REQUIRE(fx::i8(shifted[0x15]) > 0);
+        const auto [reference, ignored_b] =
+            fixture.lfo().configure(0, PartialParameters{shifted.data()});
+        CHECK(wide.pitch_depth == reference.pitch_depth);
+        CHECK(wide.pitch_depth != base1.pitch_depth);
+
+        // Rate and delay index their own tables. Driving each from one rail to the other has to
+        // move them whatever the tone's stored index is, because the two ends of those tables
+        // differ; that is enough to prove the wire is live without pinning a tone's contents.
+        PartModifiers slowest;
+        slowest.vibrato_rate = 0x00;
+        slowest.vibrato_delay = 0x00;
+        PartModifiers fastest;
+        fastest.vibrato_rate = 0x7F;
+        fastest.vibrato_delay = 0x7F;
+        const auto [low, ignored_c] = fixture.lfo().configure(0, partial, slowest);
+        const auto [high, ignored_d] = fixture.lfo().configure(0, partial, fastest);
+        CHECK(low.increment != high.increment);
+        CHECK(low.delay_rate != high.delay_rate);
+
+        // LFO2's rate and delay are raw increments with no index to bias, so none of this touches
+        // it.
+        for (const PartModifiers& modifiers : {deeper, slowest, fastest}) {
+            const auto [ignored_e, lfo2] = fixture.lfo().configure(0, partial, modifiers);
+            CHECK(lfo2.increment == base2.increment);
+            CHECK(lfo2.delay_rate == base2.delay_rate);
+            CHECK(lfo2.pitch_depth == base2.pitch_depth);
+        }
+    }
 }

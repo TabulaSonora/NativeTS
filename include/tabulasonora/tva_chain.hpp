@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tabulasonora/envelope_machine.hpp"
+#include "tabulasonora/part_modifiers.hpp"
 #include "tabulasonora/partial_parameters.hpp"
 #include "tabulasonora/segment_envelope.hpp"
 #include "tabulasonora/table_set.hpp"
@@ -72,6 +73,9 @@ public:
     /// keeps it at `voice+0x161`, which `voice_trigger_partials` fills from the note plus a
     /// transpose; on a drum part that works out to the kit's coarse-pitch plane, so it is not the
     /// MIDI key. Nothing uses `key`, which is what a melodic note wants.
+    ///
+    /// `modifiers` carries the part's envelope offsets. The amplitude envelope takes them
+    /// unconditionally — unlike the filter envelope, which the partial can opt out of.
     [[nodiscard]] SegmentEnvelope create_envelope(const PartialParameters& partial,
                                                   int velocity,
                                                   int key,
@@ -79,7 +83,8 @@ public:
                                                   int tone_level = 127,
                                                   int sample_rate = 32000,
                                                   double attack_milliseconds = 0.0,
-                                                  std::optional<int> rate_key = std::nullopt) const;
+                                                  std::optional<int> rate_key = std::nullopt,
+                                                  const PartModifiers& modifiers = {}) const;
 
     /// Renders the amplitude envelope for one note, or an empty vector when it cannot sound.
     ///
