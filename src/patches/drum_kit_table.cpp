@@ -83,6 +83,8 @@ DrumKey DrumKitTable::key(int note, int kit) const
         .pitch = kits_[offset + pitch_plane + static_cast<std::size_t>(note)],
         .group = kits_[offset + group_plane + static_cast<std::size_t>(note)],
         .pan = kits_[offset + pan_plane + static_cast<std::size_t>(note)],
+        .receives_note_off =
+            (kits_[offset + receive_plane + static_cast<std::size_t>(note)] & 1U) != 0,
     };
 }
 

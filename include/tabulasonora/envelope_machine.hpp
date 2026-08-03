@@ -86,7 +86,8 @@ private:
     std::span<const std::uint8_t> scale_curve_;
 
     /// Only the first 256 entries of `g_env_shape` are used; the cache over-reads.
-    std::array<double, 256> shape_{};
+    /// 257, not 256: `segment_curve` interpolates from entry `k` up to `k + 1`, and `k` reaches 255.
+    std::array<double, 257> shape_{};
 };
 
 } // namespace ts

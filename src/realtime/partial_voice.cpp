@@ -30,6 +30,7 @@ void PartialVoice::start(VoiceSetup&& setup)
     glide_ = setup.glide_milli_semitones;
     glide_step_ = setup.glide_step;
     is_drum_ = setup.is_drum;
+    drum_receives_note_off_ = setup.drum_receives_note_off;
     level_gain_ = setup.level_gain;
     pan_ = setup.pan;
     pan_follows_part_ = setup.pan_follows_part;
@@ -66,7 +67,11 @@ void PartialVoice::start(VoiceSetup&& setup)
 
 void PartialVoice::note_off(int damper)
 {
-    if (is_drum_) {
+    // The kit decides, per key. Ignoring note-off on every drum was close enough to right that it
+    // stood for a long time -- almost no key answers one -- but it is not the rule, and standing in
+    // for it with a fixed ring timer cut every long drum off at the same arbitrary moment. A crash
+    // cymbal whose decay the module runs for 4.7 seconds was being killed at 1.8.
+    if (is_drum_ && !drum_receives_note_off_) {
         return;
     }
 

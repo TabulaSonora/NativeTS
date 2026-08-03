@@ -42,6 +42,13 @@ struct VoiceSetup {
     /// Playback ratio a drum starts from; drums have no absolute-pitch accumulator.
     double drum_base_ratio = 1.0;
     bool is_drum = false;
+    /// Whether this drum key answers a note-off at all — the kit's `Rx.Note Off` bit.
+    ///
+    /// Almost no key does, and that is the point: a struck sound's envelope is its whole story, so
+    /// a drum normally ignores note-off and rings for as long as its own decay says. The exceptions
+    /// are the sounds you have to be able to stop — the snare roll, applause, most of the SFX kit —
+    /// and `DrumKitTable` reads which from the kit record rather than guessing.
+    bool drum_receives_note_off = false;
 
     int pan = PanLaw::centre;
     bool pan_follows_part = false;
@@ -52,7 +59,12 @@ struct VoiceSetup {
     /// The drum mute group, or zero.
     int mute_group = 0;
 
-    /// Sample at which a drum takes its release; -1 for a melodic voice.
+    /// Sample at which a voice is force-released, or -1 to let its envelope decide.
+    ///
+    /// A backstop, not a model. The module has no such timer: a drum voice runs its amplitude
+    /// envelope and is freed when that reaches silence. This exists only for the case the envelope
+    /// cannot end on its own — a last segment whose target is above zero holds forever — where
+    /// without it the voice would never be reclaimed.
     std::int64_t auto_release_samples = -1;
     /// Samples the envelope machine stays held at its note-on state.
     std::int64_t envelope_hold_samples = 0;
@@ -199,6 +211,7 @@ private:
     FilterTap tap_ = FilterTap::bypass;
 
     bool is_drum_ = false;
+    bool drum_receives_note_off_ = false;
     double drum_base_ratio_ = 1.0;
     double base_pitch_ = 0.0;
     double native_pitch_ = 0.0;

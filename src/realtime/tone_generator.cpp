@@ -1565,6 +1565,11 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     }
 
     const double level_gain = DrumKitTable::level_gain(key.level);
+
+    // The ring is a backstop now, not the model -- see `PartialVoice::Setup::auto_release_samples`.
+    // A drum voice ends when its own envelope reaches silence, which is what the module does; this
+    // only catches the envelope that never can, and is applied per voice below once the envelope
+    // built for it says which kind it is.
     const auto ring = static_cast<std::int64_t>(options.drum_ring_seconds
                                                 * NoteRenderer::drum_ring_scale(key) * sample_rate);
     const int group = pool.begin_note_group();
@@ -1608,7 +1613,9 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.pan_follows_part = false;
         setup.level_gain = level_gain;
         setup.mute_group = key.group;
-        setup.auto_release_samples = ring;
+        setup.drum_receives_note_off = key.receives_note_off;
+        setup.auto_release_samples =
+            setup.amplitude && setup.amplitude->targets().back() > 0.0 ? ring : -1;
 
         begin(channel, note, velocity, group, std::move(setup));
         sounded = true;

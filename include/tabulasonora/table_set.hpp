@@ -182,8 +182,9 @@ public:
     /// 0x80 + position]`.
     [[nodiscard]] std::span<const std::uint8_t> vel_xfade() const noexcept { return vel_xfade_; }
 
-    /// `g_env_shape` — the fast-approach segment shape. Only the first 256 entries (0x200 bytes)
-    /// are used; the cache over-reads slightly. Must be interpolated, not looked up bare.
+    /// `g_env_shape` — the fast-approach segment shape. 258 entries, and the 257th is not slack:
+    /// `env_ramp_segment` interpolates from the entry it lands on to the *next* one, so a phase of
+    /// zero reads entry 256. Must be interpolated, not looked up bare.
     [[nodiscard]] std::span<const std::uint16_t> env_shape() const noexcept { return env_shape_; }
 
     /// `g_env_startphase` — 128 entries; per-segment initial phase seed.

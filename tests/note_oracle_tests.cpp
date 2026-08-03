@@ -284,16 +284,15 @@ constexpr std::array<KnownDeviation, 11> known_deviations{{
 /// the Piano row above it. One table keyed by program alone would silently lend one the other's
 /// bound, and the mistake would look exactly like a passing test.
 ///
-/// **Thirty-three of the fifty-four drum cases need no row**, and forty of them agree on level to
-/// under half a decibel. What the twenty-one that remain say is four things, not twenty-one:
+/// **Thirty-six of the fifty-four drum cases need no row**, and forty of them agree on level to
+/// under half a decibel. What the eighteen that remain say is four things, not eighteen:
 ///
-///  - **Crash cymbals decay too fast, and then stop dead.** Six cases across six kits, three
-///    distinct tones. `Crash Cym.1` tracks the module's envelope 2 to 4 dB low all the way down and
-///    then reaches *exactly* zero at 1.84 s, while the module is still sounding 35 dB under its own
-///    attack. Its octave bands agree to 0.7 dB throughout and its peak to 2%, so this is the
-///    amplitude envelope's decay rate and nothing else. **This is the same defect `Nylon Gt.` has**
-///    -- a clean monotonic drift, too fast, on a patch whose spectrum is right -- and having it
-///    turn up on six unrelated drum tones says it is not one patch's segment rates.
+///  - **Crash cymbals are about 2.5 dB light**, six cases across six kits and three distinct tones.
+///    They used to stop dead at 1.84 s as well, and that part is fixed: it was a ring timer this
+///    port invented, not the decay -- `scdec tvatrace` reads the module's own segment targets and
+///    durations out of the voice, and this engine builds them exactly. See
+///    \ref the-drum-ring-was-invented. Roughly a third of the level that remains is a DC offset the
+///    module's render carries and this one does not; see \ref the-module-has-dc.
 ///  - **Hi-hats, where the module has a low-frequency floor this engine does not.** The module's
 ///    `TR-808 CHH` reads -46 dB at 63 Hz against a -34.8 dB loudest band; ours reads -147, which is
 ///    silence. Below 4 kHz the hat carries nothing either way, but its whole spectrum is only 26 dB
@@ -310,40 +309,40 @@ constexpr std::array<KnownDeviation, 11> known_deviations{{
 ///  - **Two SFX kit entries.** `Pick Scrape` is 4 dB loud and 38 dB out in a band; `Gt.CutNoise` is
 ///    10 dB quiet with the spectrum tilted the wrong way. Both are single tones in one kit.
 ///
-/// The remaining four rows are small and unattributed: a snare's peak, a kick's level, two snares
-/// a hair over the band default.
-constexpr std::array<KnownDrumDeviation, 20> known_drum_deviations{{
-    // Crash cymbals. The two rows carrying an envelope bound of 945 are the two whose tail reaches
-    // exact zero while the module is still sounding: **that number is a marker, not a ratchet**.
-    // It cannot get worse, because -999 is the sentinel for silence and nothing is quieter. What
-    // holds those two cases honest is the level and band bounds beside it.
-    {0, 49, {2.7, 0.01, 3.0, 945.0}, "Crash Cym.1; decays ~4 dB too fast, then stops at 1.84 s"},
-    {8, 49, {2.6}, "Crash Cym.1, Room kit"},
-    {16, 49, {2.6}, "Crash Cym.1, Power kit"},
-    {24, 49, {1.5, 0.045, 3.0, 945.0}, "GS Crash; same, and stops at 1.84 s"},
-    {32, 49, {2.7}, "Crash Cym.1, Jazz kit"},
-    {40, 49, {2.7, 0.02}, "Brush Crash"},
+/// The remaining three rows are small and unattributed: a snare's peak, and two snares a hair over
+/// the band default.
+constexpr std::array<KnownDrumDeviation, 18> known_drum_deviations{{
+    // Crash cymbals. What is left here is level, and only level: the envelope markers of 945 that
+    // two of these carried are gone, because the cause was not the decay. See
+    // \ref the-drum-ring-was-invented.
+    {0, 49, {2.6}, "Crash Cym.1; 2.5 dB light, and see \\ref the-module-has-dc"},
+    {8, 49, {2.5}, "Crash Cym.1, Room kit"},
+    {16, 49, {2.5}, "Crash Cym.1, Power kit"},
+    {24, 49, {1.35, 0.045, 3.0, 7.5}, "GS Crash"},
+    {32, 49, {2.6}, "Crash Cym.1, Jazz kit"},
+    {40, 49, {2.6, 0.02}, "Brush Crash"},
 
     // Closed hi-hats.
-    {0, 42, {1.0, 0.01, 9.0}, "Close HiHat2; 2.3 dB light in every band at a matching peak"},
-    {8, 42, {2.7, 0.01, 26.5}, "Room Chh; 5 dB light above 500 Hz, and no floor below it"},
-    {16, 42, {1.0, 0.01, 12.0}, "Close HiHat, Power kit"},
+    {0, 42, {1.0, 0.01, 8.5}, "Close HiHat2; 2.3 dB light in every band at a matching peak"},
+    {8, 42, {2.3, 0.01, 26.0}, "Room Chh; 5 dB light above 500 Hz, and no floor below it"},
+    {16, 42, {1.0, 0.01, 11.9}, "Close HiHat, Power kit"},
     {25, 42, {1.0, 0.01, 101.5}, "TR-808 CHH; the module's floor against this engine's silence"},
     {40, 42, {1.0, 0.01, 4.0}, "Close HiHat, Brush kit"},
 
-    // The Orchestra kit's timpani, on the three keys it is tuned across.
-    {48, 42, {1.7, 0.06, 7.5, 9.0}, "Timpani at key 42; quiet attack, long tail"},
-    {48, 45, {1.5, 0.16, 8.0, 11.5}, "Timpani at key 45"},
-    {48, 46, {1.5, 0.23, 9.0, 13.0}, "Timpani at key 46"},
+    // The Orchestra kit's timpani, on the three keys it is tuned across. The only three rows the
+    // note-off fix moved the wrong way, and only in the spectrum -- their level improved. It rings
+    // longer now, which is right, and what it rings is still wrong.
+    {48, 42, {1.6, 0.06, 7.7, 9.2}, "Timpani at key 42; quiet attack, long tail"},
+    {48, 45, {1.4, 0.16, 8.2, 11.6}, "Timpani at key 45"},
+    {48, 46, {1.35, 0.23, 9.0, 13.2}, "Timpani at key 46"},
 
-    // The SFX kit.
-    {56, 38, {4.5, 0.01, 38.5}, "Pick Scrape; 4 dB loud, and 38 dB out at 250 Hz"},
+    // The SFX kit. `Pick Scrape` used to be here at 38 dB and is not any more: it is one of the 52
+    // keys in that kit which *do* answer a note-off, and it was being held for the ring instead.
     {56, 49, {10.5, 0.08, 17.5, 11.0}, "Gt.CutNoise; 10 dB quiet, spectrum tilted the wrong way"},
 
     // Small, and so far unattributed.
     {24, 38, {1.0, 0.015}, "Elec. Snare; peak alone"},
-    {25, 36, {1.2, 0.01, 3.5}, "808 Kick"},
-    {25, 38, {1.0, 0.01, 3.5, 11.5}, "808 Snare 1"},
+    {25, 38, {1.0, 0.01, 3.5, 11.0}, "808 Snare 1"},
     {32, 38, {1.0, 0.01, 3.5}, "Jazz Snare 1"},
 }};
 
@@ -662,8 +661,48 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
             // kit / tone# / kit level / coarse pitch / mute group / pan.
             std::cout << "drum " << which.program << ' ' << which.note << ' ' << which.velocity
                       << ' ' << which.map << " kit " << kit.value_or(-1) << '/' << key.tone << '/'
-                      << key.level << '/' << key.pitch << '/' << key.group << '/' << key.pan
-                      << " partials " << (tone ? tone->partials().size() : 0) << " rms " << ours.rms
+                      << key.level << '/' << key.pitch << '/' << key.group << '/' << key.pan;
+
+            // The amplitude envelope this engine builds, in the module's own terms: four targets on
+            // a 0..0xffff scale and four segment durations in milliseconds. `scdec tvatrace` prints
+            // the same eight numbers read straight out of the module's voice, so the two are
+            // directly comparable -- which is the only way to tell a decay that is *rendered* wrong
+            // from one that was *computed* wrong.
+            if (tone) {
+                // A drum sounds its tone at key 60; the kit's plane, not the note, gives the pitch.
+                for (const ResolvedPartial& voice :
+                     notes.directory().resolve(key.tone, /*note=*/60, which.velocity).partials) {
+                    const PartialParameters& partial =
+                        tone->partials()[static_cast<std::size_t>(voice.partial_index)];
+                    const SegmentEnvelope built = notes.tva().create_envelope(
+                        partial,
+                        which.velocity,
+                        /*key=*/60,
+                        notes.directory().zone_level(partial.multisample(), 60,
+                                                     partial.key_center()),
+                        notes.directory().tone_level(key.tone),
+                        rate,
+                        0.0,
+                        NoteRenderer::envelope_rate_key(key, 0));
+
+                    // Divided back out by `TvaChain::amp_scale`, so these are the module's own
+                    // 0..0xffff gain words rather than this engine's doubled ones.
+                    std::cout << " env";
+                    for (const double target : built.targets()) {
+                        std::cout << ' '
+                                  << static_cast<int>(
+                                         std::lround(target / TvaChain::amp_scale * 65535.0));
+                    }
+                    std::int64_t previous = 0;
+                    for (const std::int64_t end : built.segment_ends()) {
+                        std::cout << '/' << ((end - previous) * 1000 / rate);
+                        previous = end;
+                    }
+                    std::cout << '/' << (built.release_samples() * 1000 / rate);
+                }
+            }
+
+            std::cout << " partials " << (tone ? tone->partials().size() : 0) << " rms " << ours.rms
                       << " peak " << ours.peak << " bands";
             for (const double band : ours.bands) {
                 std::cout << ' ' << band;

@@ -22,6 +22,14 @@ struct DrumKey {
     int group = 0;
     /// Pan position, per key.
     int pan = 0;
+    /// Whether this key responds to note-off at all — GS `Rx.Note Off`, per key.
+    ///
+    /// Almost none do. A drum is a struck sound whose envelope is its whole story, so releasing it
+    /// early is wrong; the exceptions are the sounds you have to be able to stop, and the kit
+    /// records say exactly which. In the SC-88 Standard kit **one** key sets it, key 25, the snare
+    /// roll. The Orchestra kit adds key 88, Applause. The SFX kit sets it on 52 of its 128 keys.
+    /// That is GS's documented behaviour read straight out of the ROM rather than assumed.
+    bool receives_note_off = false;
 };
 
 /// The drum kit records: for each of 128 keys, which tone sounds and how it is levelled, tuned,
@@ -117,6 +125,9 @@ private:
     static constexpr int pitch_plane = 0x180;
     static constexpr int group_plane = 0x200;
     static constexpr int pan_plane = 0x280;
+    // 0x300 reverb depth, 0x380 chorus depth, 0x400 delay depth — per key, and not yet wired.
+    /// Receive flags. Bit 0 is `Rx.Note Off`; the byte otherwise reads 0x10 across every kit.
+    static constexpr int receive_plane = 0x480;
 
     std::int64_t kit_base_ = 0;
     std::vector<std::uint8_t> bank_row_;

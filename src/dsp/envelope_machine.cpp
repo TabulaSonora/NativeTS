@@ -13,7 +13,7 @@ EnvelopeMachine::EnvelopeMachine(const TableSet& tables)
 {
     const auto env_shape = tables.env_shape();
     for (std::size_t i = 0; i < shape_.size(); ++i) {
-        shape_[i] = env_shape[i] / 65535.0;
+        shape_[i] = i < env_shape.size() ? env_shape[i] / 65535.0 : 1.0;
     }
 }
 
@@ -117,15 +117,19 @@ double EnvelopeMachine::segment_curve(double position,
 
     const auto phase = static_cast<int>(position * 0xFFFF);
     const int index = phase >> 8;
-    const double fraction = (phase & 0xFF) / 256.0;
 
-    // The curve is walked backwards: entry 255 at the start of the segment down to 0 at the end.
-    const int i0 = std::clamp(255 - index, 0, 255);
-    const int i1 = std::clamp(254 - index, 0, 255);
-    const double remaining =
-        shape_[static_cast<std::size_t>(i0)]
-        + ((shape_[static_cast<std::size_t>(i1)] - shape_[static_cast<std::size_t>(i0)])
-           * fraction);
+    // The curve is walked backwards: entry 256 at the start of the segment down to 0 at the end,
+    // and `env_ramp_segment` interpolates *upward* from the entry it lands on --
+    // `shape[k] + (shape[k+1] - shape[k]) * (255 - (phase & 0xff)) / 256`, with `k = 255 - index`.
+    //
+    // This read the pair the other way, from `shape[k]` down to `shape[k-1]` weighted by the
+    // fraction rather than its complement, which lands the whole curve one entry low: the same
+    // trajectory, running about 0.4% of a segment ahead of the module's, worth a flat 0.38 dB
+    // wherever the shape is steep. The table settles it -- `g_env_shape` is 258 entries, not 256,
+    // and the two past the end exist for exactly the `shape[k+1]` this needs at `k = 255`.
+    const auto k = static_cast<std::size_t>(std::clamp(255 - index, 0, 255));
+    const double weight = static_cast<double>(255 - (phase & 0xFF)) / 256.0;
+    const double remaining = shape_[k] + ((shape_[k + 1] - shape_[k]) * weight);
 
     return target + ((start - target) * remaining);
 }

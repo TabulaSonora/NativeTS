@@ -341,10 +341,11 @@ of them need no allowance at all. The twenty-one that do say four things.
 
 - **Crash cymbals decay too fast, and then stop dead.** Six cases, six kits, three distinct tones.
   `Crash Cym.1` tracks the module 2 to 4 dB low all the way down and then reaches *exactly* zero at
-  1.84 s while the module is still sounding 35 dB under its own attack — with octave bands agreeing
-  to 0.7 dB and the peak to 2%, so it is the amplitude envelope's decay rate and nothing else.
-  **This is the same defect `Nylon Gt.` has**, and finding it on six unrelated drum tones says it is
-  not one patch's segment rates. That is now the best-supported open defect in the engine.
+  1.84 s while the module is still sounding 35 dB under its own attack.
+
+  \warning **That diagnosis was wrong, and \ref the-drum-ring-was-invented says what it actually
+  was.** The envelope was never the problem: this engine builds exactly the module's, target for
+  target and millisecond for millisecond. It was a ring timer this port had invented.
 - **The Orchestra kit's timpani**, on all three keys the sweep plays it at: the attack arrives
   4.7 dB low at half the module's peak, and the tail then runs 12 dB long. Every other kit key is
   either right or slightly light; this one is quiet and then loud. It is also the sweep's clearest
@@ -394,6 +395,94 @@ melodic notes run a tenth — but a decibel is not six and a half. Nothing this 
 quiet enough to explain that file, which leaves the other reading: **some of its bass is not
 arriving.** That is a question about note handling, not about patches, and it is the next place to
 look.
+
+### The drum ring was invented {#the-drum-ring-was-invented}
+
+The sweep above reported that crash cymbals decay too fast, and pointed at the amplitude envelope's
+segment rates because six unrelated tones did the same thing. **The envelope was never wrong.** The
+way to find that out was to stop inferring it from audio and go and read it.
+
+`scdec tvatrace` plays one note and lifts the amplitude envelope straight out of the module's voice
+before any of it has run — the four segment targets `tva_compute_env_levels` writes to
+`voice+0x16/0x1d2/0x1d4/0x1d6`, and the four durations `tva_compute_env_rates` writes to
+`voice+0x12/0x1c6/0x1c8/0x1ca`. For `Crash Cym.1` on the SC-88 map at velocity 127 the module says
+targets `49163, 49163, 0, 0` and durations `0, 302, 4672, 0` ms.
+
+This engine builds `49163, 49163, 0, 0` and `0, 302, 4672, 0`. **Identical.** So is `GS Crash`, and
+so is every other case checked. The decay law — two key-follow tables, two velocity level-scales,
+the three part biases, the `< 9` skip, the `0xa0000/duration` step — is right.
+
+What was wrong is that the voice never got to run it. A drum here was force-released after a fixed
+**1.8 seconds**, a number this port made up, and the module has nothing of the kind. A crash whose
+envelope the module runs for 4.97 s was being cut off at 1.81 — which is exactly where the render
+goes to digital zero.
+
+The module's actual rule is per key, and it is in the kit record. `DrumKitTable` read five planes of
+a 0x50C-byte record; the sixth, at **0x480**, is GS's `Rx.Note Off`, and bit 0 says whether that key
+answers a note-off at all. Reading it back is the whole argument: in the SC-88 Standard kit exactly
+**one** key sets it — key 25, the snare roll. The Orchestra kit adds key 88, Applause. The SFX kit
+sets it on 52 of 128. That is the documented GS behaviour, found in the ROM rather than assumed, and
+a fixed timer was standing in for it.
+
+So a drum now ignores note-off unless its key says otherwise, and the voice ends when its own
+envelope reaches silence — which is what `SegmentEnvelope::is_finished` had no way to express, since
+it only knew about releases. The ring survives as a backstop for the one case the envelope cannot
+end on its own: a last segment whose target is above zero, which would otherwise hold a voice
+forever.
+
+| | before | after |
+|---|---|---|
+| drum rows needing an allowance | 21 | **18** |
+| drum rows improved / worsened | — | **14 / 3** |
+| `Pick Scrape` band error | 37.9 dB | **closed** |
+| `808 Kick` | a row | **closed** |
+| the two 940 dB envelope markers | 940.96, 939.41 | **gone** |
+
+`Pick Scrape` is the confirmation worth having: it is one of the 52 SFX keys that *does* answer a
+note-off, so the fix moved it the other way — it now stops when told to instead of ringing for the
+timer — and 38 dB of band error went with it.
+
+On whole songs it is a trade, and the rows record both halves. **RMS improved on eight of the nine
+songs it moved at all**, and `roland_allstars`'s band error closed; peaks rose a little on three,
+because more drum voices now overlap, and `onestop`, `macross2` and `bigben` each needed a widened
+row. Widening a ratchet is not free and those three say why they moved. Everything that improved was
+tightened in the same commit.
+
+### The module has a DC offset, and we do not {#the-module-has-dc}
+
+Chasing the crash turned up something else, which is not fixed and is worth stating precisely.
+
+The module's rendered output carries a **large negative DC offset that scales with the envelope** —
+so it is in the signal, not added downstream. On `Crash Cym.1` the mean is −0.68 of the RMS,
+present from the first sounding sample. This engine's is −0.008.
+
+It is not general: across 238 sounding cases the median is 0.4% of RMS for the module and 0.07% for
+this port. It is **eight cases**, and they are the six crash cymbals and — this is the useful part —
+**`Whistle`**, the melodic sweep's sharpest unexplained lead. Two of the gate's open leads are one
+lead.
+
+It also inflates what the level metrics say about those cases, because RMS and the RMS envelope both
+include DC. Measuring the AC content alone:
+
+| | with DC | AC only |
+|---|---|---|
+| `Crash Cym.1` | −2.55 dB | **−1.63 dB** |
+| `Whistle` | −2.23 dB | **−1.47 dB** |
+
+So roughly a third of what those rows call a level error is a DC term this engine does not
+reproduce. The bounds are left where the measurement puts them — the gate compares what the module
+actually outputs — but the cause is now named.
+
+Two more measured leads from the same pass, both unfixed:
+
+- **A one-entry offset in the envelope shape**, now corrected. `env_ramp_segment` interpolates from
+  the table entry it lands on *up* to the next one, weighted by the complement of the phase
+  fraction; this port read the pair downward, weighted by the fraction. That runs the whole curve
+  about 0.4% of a segment ahead — a flat **0.38 dB** wherever the shape is steep. `g_env_shape` is
+  258 entries rather than 256, and the extra two exist for precisely the `shape[k+1]` the module
+  needs at `k = 255`, which is what settles the reading.
+- **This engine starts every note about 128 samples early.** Median 128 across all 238 cases, 4 ms
+  at 32 kHz. Systematic, unexplained, and not yet chased.
 
 ### The engine plays sharp {#the-engine-plays-sharp}
 
