@@ -161,11 +161,8 @@ int render_note_command(const std::string& path,
 /// directly. Twelve of these comparisons were once green upstream while testing nothing at all --
 /// the fixture windows were shorter than the delays, so both sides were silent and agreed
 /// perfectly. Ask for enough samples to hear something.
-int dump_effect_command(const std::string& dll,
-                        const std::string& kind,
-                        int type,
-                        int samples,
-                        const fs::path& output)
+int dump_effect_command(
+    const std::string& dll, const std::string& kind, int type, int samples, const fs::path& output)
 {
     // The coefficients come out of the DLL, so this needs it open even though no note sounds.
     const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
@@ -212,7 +209,8 @@ int render_command(const std::string& dll,
                    const fs::path& output,
                    int map,
                    const ts::RenderOptions& base,
-                   bool stream)
+                   bool stream,
+                   int polyphony)
 {
     const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
     ts::NoteRenderer notes{rom};
@@ -233,6 +231,7 @@ int render_command(const std::string& dll,
         engine_options.delay_type = options.delay_type;
         engine_options.drum_ring_seconds = options.drum_ring_seconds;
         engine_options.output_gain = options.output_gain;
+        engine_options.polyphony = polyphony;
         engine_options.channels = options.channels;
 
         ts::ToneGenerator generator{notes, engine_options};
@@ -463,6 +462,7 @@ int main(int argc, char** argv)
     bool no_chorus = false;
     bool no_delay = false;
     bool stream = false;
+    int polyphony = ts::ToneGeneratorOptions{}.polyphony;
     CLI::App* render = app.add_subcommand("render", "Render a Standard MIDI File to a WAV.");
     add_dll(render);
     render->add_option("midi", midi_path, "Input .mid path")->required();
@@ -477,6 +477,9 @@ int main(int argc, char** argv)
     render->add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     render->add_flag("--no-delay", no_delay, "Disable the delay send");
     render->add_flag("--stream", stream, "Render through the real-time block loop");
+    render->add_option("--polyphony",
+                       polyphony,
+                       "Voice limit for --stream; 0 grows on demand instead of stealing");
 
     std::vector<std::string> muted;
     std::vector<std::string> soloed;
@@ -534,14 +537,14 @@ int main(int argc, char** argv)
                 render_options.channels = &mask;
             }
 
-            return render_command(dll, midi_path, output_file, map, render_options, stream);
+            return render_command(
+                dll, midi_path, output_file, map, render_options, stream, polyphony);
         }
         if (bench->parsed()) {
             return bench_command(dll, midi_path, iterations);
         }
         if (dump_effect->parsed()) {
-            return dump_effect_command(
-                dll, effect_kind, effect_type, effect_samples, output_file);
+            return dump_effect_command(dll, effect_kind, effect_type, effect_samples, output_file);
         }
         if (render_note->parsed()) {
             return render_note_command(

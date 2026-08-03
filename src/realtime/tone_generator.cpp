@@ -23,7 +23,12 @@ struct ToneGenerator::Impl {
         chorus_type = opts.chorus_type;
         delay_type = opts.delay_type;
 
+        pool = VoicePool{opts.polyphony == ToneGeneratorOptions::unlimited_polyphony
+                             ? VoicePool::default_polyphony
+                             : opts.polyphony,
+                         opts.polyphony == ToneGeneratorOptions::unlimited_polyphony};
         pool.stealing = [this](int index) { steal(index); };
+        slots.resize(static_cast<std::size_t>(pool.capacity()));
 
         for (int i = 0; i < ToneGenerator::part_count; ++i) {
             parts[static_cast<std::size_t>(i)].rx_channel = i % Sequence::channel_count;
@@ -37,7 +42,8 @@ struct ToneGenerator::Impl {
     std::array<Part, ToneGenerator::part_count> parts;
 
     /// One voice per slot, or empty. Recycled through `spare` rather than reallocated per note.
-    std::array<std::unique_ptr<PartialVoice>, VoicePool::max_voices> slots;
+    /// One voice per slot, sized to the pool. A growing pool resizes this alongside itself.
+    std::vector<std::unique_ptr<PartialVoice>> slots;
     std::vector<std::unique_ptr<PartialVoice>> spare;
     /// Voices taken from their slot by stealing, still fading out.
     std::vector<std::unique_ptr<PartialVoice>> dying;
@@ -277,7 +283,7 @@ int ToneGenerator::effective_drum_map_row() const noexcept
 
 void ToneGenerator::reset()
 {
-    for (int i = 0; i < VoicePool::max_voices; ++i) {
+    for (int i = 0; i < static_cast<int>(impl_->slots.size()); ++i) {
         impl_->recycle(i);
     }
 
@@ -901,7 +907,7 @@ void ToneGenerator::Impl::stream_reset()
     // What a reset message does mid-stream: every voice fades rather than being cut dead, every
     // part returns to power-on, and the effect selections fall back to the host's configuration.
     // The clocks and counters stay -- this is a message in the stream, not a host reset.
-    for (int i = 0; i < VoicePool::max_voices; ++i) {
+    for (int i = 0; i < static_cast<int>(slots.size()); ++i) {
         auto& slot = slots[static_cast<std::size_t>(i)];
         if (slot) {
             slot->choke();
@@ -1004,7 +1010,7 @@ void ToneGenerator::Impl::render_block()
     eq_left.fill(0.0F);
     eq_right.fill(0.0F);
 
-    for (int i = 0; i < VoicePool::max_voices; ++i) {
+    for (int i = 0; i < static_cast<int>(slots.size()); ++i) {
         auto& slot = slots[static_cast<std::size_t>(i)];
         if (slot) {
             mix_voice(*slot, left, right);
@@ -1177,6 +1183,14 @@ void ToneGenerator::Impl::begin(int channel, int note, int velocity, int group, 
     // Allocating may steal, which hands whatever was sounding to the dying list and empties the
     // slot; anything still there was already finished.
     const Voice slot = pool.allocate(channel, note, velocity, group);
+
+    // A growing pool may have just made room; the voice storage follows it. This is the allocation
+    // that makes the growing mode unsafe on an audio thread, and it happens here rather than
+    // hidden inside the pool so it is visible at the point it costs something.
+    if (static_cast<int>(slots.size()) < pool.capacity()) {
+        slots.resize(static_cast<std::size_t>(pool.capacity()));
+    }
+
     release_slot(slot.index);
 
     std::unique_ptr<PartialVoice> voice;

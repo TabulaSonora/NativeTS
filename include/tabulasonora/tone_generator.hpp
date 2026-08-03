@@ -15,6 +15,24 @@ namespace ts {
 
 /// How a running engine should behave.
 struct ToneGeneratorOptions {
+    /// Asks for polyphony that grows on demand instead of stealing.
+    static constexpr int unlimited_polyphony = 0;
+
+    /// Maximum simultaneous voices, or `unlimited_polyphony`.
+    ///
+    /// A note costs one voice per sounding partial, so a two-partial patch halves the note count.
+    /// The default is the hardware's 64, which is what makes a stream sound like the module —
+    /// including the stealing, which is audible and part of the character. Raising it is a
+    /// deliberate departure.
+    ///
+    /// `unlimited_polyphony` makes the pool **grow** rather than steal: when it runs out it
+    /// allocates another chunk of slots, so every note in the file sounds. That is what an offline
+    /// render wants and what an audio thread must not have — growing allocates, and allocating
+    /// inside the block loop is the thing a real-time thread cannot do. It also has no upper bound
+    /// on memory or CPU beyond what the file asks for, which is acceptable when the only
+    /// requirement is to be right.
+    int polyphony = 64;
+
     /// Which vintage's tone map program changes resolve against.
     ToneMap map = ToneMap::sc8820;
 
