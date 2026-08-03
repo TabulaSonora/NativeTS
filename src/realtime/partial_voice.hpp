@@ -5,6 +5,7 @@
 #include "tabulasonora/lfo_engine.hpp"
 #include "tabulasonora/partial_parameters.hpp"
 #include "tabulasonora/pitch_chain.hpp"
+#include "tabulasonora/pitch_ramp.hpp"
 #include "tabulasonora/segment_envelope.hpp"
 #include "tabulasonora/state_variable_filter.hpp"
 #include "tabulasonora/tvf_chain.hpp"
@@ -83,7 +84,7 @@ public:
     static constexpr int choke_fade = 192;
 
     PartialVoice(const Interpolator& interpolator, const TvfChain& tvf, const PanLaw& pan_law)
-        : reader_(interpolator), tvf_(&tvf), pan_law_(&pan_law)
+        : reader_(interpolator), tvf_(&tvf), pan_law_(&pan_law), pitch_ramp_(tvf.ramp_exp())
     {
     }
 
@@ -147,6 +148,9 @@ private:
     void control(double bend_milli_semitones, double mod_wheel_depth, bool first);
     [[nodiscard]] double ratio(double bend_milli_semitones) const;
 
+    /// The ratio a given pitch modulation implies, without disturbing the voice's own.
+    [[nodiscard]] double ratio_with(double modulation, double bend_milli_semitones) const;
+
     /// Maps an absolute sample index onto the envelopes' own time base.
     ///
     /// The hold is a whole number of control ticks, so the mapping keeps the envelope clock on the
@@ -208,6 +212,18 @@ private:
     int glide_step_ = 0;
 
     double ratio_ = 1.0;
+
+    /// The pitch ramp and the state that drives it.
+    ///
+    /// The engine glides the sampler's read rate from the pitch a control block is entered with to
+    /// the pitch it leaves with, writing a fresh increment every eight samples. The entry pitch is
+    /// the envelope's level *before* the block's step, which for the first block is the envelope's
+    /// start level -- a value that is otherwise never rendered, since applying only post-tick
+    /// values skips straight past it.
+    PitchRamp pitch_ramp_;
+    double entry_ratio_ = 1.0;
+    double slot_ratio_ = 1.0;
+    int slot_remaining_ = 0;
     double tremolo_ = 1.0;
     double frequency_ = 0.0;
     double damping_ = 0.0;

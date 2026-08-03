@@ -59,6 +59,9 @@ void PartialVoice::start(VoiceSetup&& setup)
     pitch_modulation_ = 0.0;
     tremolo_ = 1.0;
     ratio_ = 1.0;
+    entry_ratio_ = 1.0;
+    slot_ratio_ = 1.0;
+    slot_remaining_ = 0;
 }
 
 void PartialVoice::note_off(int damper)
@@ -154,13 +157,25 @@ void PartialVoice::render(std::span<float> destination,
     if (sample_ % control_block == 0) {
         control(bend_milli_semitones, mod_wheel_depth, control_tick_ == 0);
         ++control_tick_;
+        pitch_ramp_.arm(entry_ratio_, ratio_);
+        slot_remaining_ = 0;
     } else {
         // Bend moves on the block grid even between control ticks.
         ratio_ = ratio(bend_milli_semitones);
     }
 
     for (std::size_t i = 0; i < destination.size(); ++i) {
-        auto value = static_cast<double>(reader_.next(ratio_));
+        if (slot_remaining_ <= 0) {
+            // A settled ramp hands back the exact ratio rather than the table's decode of it, so a
+            // steady note renders as it did before this existed; only the glide is new.
+            slot_ratio_ = pitch_ramp_.is_active()
+                              ? static_cast<double>(pitch_ramp_.next_slot()) / 65536.0
+                              : ratio_;
+            slot_remaining_ = PitchRamp::samples_per_slot;
+        }
+        --slot_remaining_;
+
+        auto value = static_cast<double>(reader_.next(slot_ratio_));
 
         if (tap_ != FilterTap::bypass) {
             value = filter_.process(value, frequency_, damping_, tap_);
@@ -222,6 +237,14 @@ void PartialVoice::control(double bend_milli_semitones, double mod_wheel_depth, 
         }
     }
 
+    // voice_pitch_block_init records the pitch entering the block at voice+0xb8, before the
+    // envelope steps, and the pitch leaving it at +0xbc. The ramp glides between the two. Taking
+    // the entry value here is what makes the envelope's start level audible at all: it is consumed
+    // by the first tick, so a renderer that only ever applies post-tick values never sees it.
+    entry_ratio_ = ratio_with((pitch_envelope_ ? pitch_envelope_->level() : 0.0) + lfo_pitch
+                                  + glide_,
+                              bend_milli_semitones);
+
     const double envelope = pitch_envelope_ ? pitch_envelope_->tick(is_released) : 0.0;
 
     // Portamento: a fixed number of milli-semitones per control tick, straight toward zero, so the
@@ -262,13 +285,18 @@ void PartialVoice::control(double bend_milli_semitones, double mod_wheel_depth, 
 
 double PartialVoice::ratio(double bend_milli_semitones) const
 {
+    return ratio_with(pitch_modulation_, bend_milli_semitones);
+}
+
+double PartialVoice::ratio_with(double modulation, double bend_milli_semitones) const
+{
     if (is_drum_) {
         // Drums take a different pitch route: the note does not transpose the sample, so there is
         // no key-follow and no absolute-pitch accumulator to clamp.
-        return drum_base_ratio_ * std::pow(2.0, pitch_modulation_ / 12000.0);
+        return drum_base_ratio_ * std::pow(2.0, modulation / 12000.0);
     }
 
-    const double pitch = base_pitch_ + pitch_modulation_ + bend_milli_semitones;
+    const double pitch = base_pitch_ + modulation + bend_milli_semitones;
     return std::pow(2.0, (PitchChain::clamp(pitch) - native_pitch_) / 12000.0);
 }
 
