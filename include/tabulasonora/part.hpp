@@ -238,6 +238,14 @@ public:
     /// trusted.
     bool eq_enabled = false;
 
+    /// Whether this part feeds the insertion EFX block (`40 4x 22`), which is `part+0x452`.
+    ///
+    /// An EFX part's dry signal detours to the EFX input pair and **both of its sends are forced
+    /// to the null bus** — the block's own `40 03 17`–`19` send levels replace them, which is the
+    /// mechanism behind the manual's note that system-effect levels become common to all EFX
+    /// parts.
+    bool efx_enabled = false;
+
     /// GS velocity sense depth and offset (`40 1x 1A`/`1B`), applied by `effective_velocity`.
     int velocity_depth = 0x40;
     int velocity_offset = 0x40;

@@ -17,6 +17,7 @@ add_library(tabulasonora
     effects/effect_presets.cpp
     effects/effect_programmer.cpp
     effects/equalizer.cpp
+    effects/insertion_effect.cpp
     effects/send_effects.cpp
     midi/control_decode.cpp
     midi/midi_formats.cpp

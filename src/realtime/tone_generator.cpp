@@ -5,6 +5,7 @@
 #include "tabulasonora/control_decode.hpp"
 #include "tabulasonora/effect_programmer.hpp"
 #include "tabulasonora/equalizer.hpp"
+#include "tabulasonora/insertion_effect.hpp"
 #include "tabulasonora/send_effects.hpp"
 
 #include <algorithm>
@@ -139,6 +140,14 @@ struct ToneGenerator::Impl {
     std::array<float, block_size> eq_left{};
     std::array<float, block_size> eq_right{};
 
+    /// The dry path of the parts routed into the insertion EFX (`40 4x 22`), and the block's
+    /// output. The engine expresses the input as bus `0x3e` with both send buses forced to the
+    /// null bus; the block's own common send levels replace the per-part sends.
+    std::array<float, block_size> efx_in_left{};
+    std::array<float, block_size> efx_in_right{};
+    std::array<float, block_size> efx_out_left{};
+    std::array<float, block_size> efx_out_right{};
+
     // How much of the current block has been handed out. Blocks are always rendered whole, whatever
     // the caller asks for, because a voice's control tick is counted in them.
     int block_offset = block_size;
@@ -146,6 +155,20 @@ struct ToneGenerator::Impl {
     std::optional<Reverb> reverb;
     std::optional<Chorus> chorus;
     std::optional<SystemDelay> delay;
+
+    /// The insertion EFX block, built the first time a stream touches it — a file that never
+    /// sends `40 03` or `40 4x 22` pays nothing for its existence.
+    std::optional<InsertionEffect> efx;
+
+    /// The latched `40 03 00` type MSB; the LSB write commits the pair.
+    int efx_type_msb = 0;
+
+    void ensure_efx()
+    {
+        if (!efx && options.efx) {
+            efx.emplace(notes->rom());
+        }
+    }
 
     /// The four-band EQ, which is one block for the whole module rather than one per part -- parts
     /// opt into it, they do not each get their own.
@@ -1129,9 +1152,25 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
 
         if (a2 == 0x03) {
             // Insertion EFX (`sysex_insertion_fx_type` / `sysex_insertion_fx_params`): 00-01 pick
-            // one of the 67 algorithms, 03 onward are its parameters, and the tail of the block
-            // carries the EFX send and control assignments. Placeholder until the insertion chain
-            // exists; the spec's own scope note keeps EFX out of this codebase for now.
+            // the type — the MSB is latched and the LSB write commits the pair, which also loads
+            // the type's defaults — 03-16 are its twenty parameters, 17-19 the block's common
+            // send levels, and 1B-1E the control assignments. A DT1 spanning several addresses
+            // walks them a byte at a time, the way the engine's per-address state machine does.
+            if (!impl_->options.efx) {
+                return;
+            }
+            impl_->ensure_efx();
+            int address = a3;
+            for (const std::uint8_t byte : data) {
+                if (address == 0x00) {
+                    impl_->efx_type_msb = byte;
+                } else if (address == 0x01) {
+                    impl_->efx->select_type(impl_->efx_type_msb, byte);
+                } else if (address >= 0x03) {
+                    impl_->efx->set_parameter(address, byte);
+                }
+                ++address;
+            }
             return;
         }
 
@@ -1145,15 +1184,19 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
         }
 
         if ((a2 & 0xF0) == 0x40) {
-            // The extended part block. `20` switches this part through the EQ; `22` is the
-            // insertion-EFX assignment, which is recognised and stored against the chain that will
-            // read it. `00`/`01` are the SysEx form of the tone map number, which this engine takes
-            // from its options and CC#32 instead.
+            // The extended part block. `20` switches this part through the EQ; `22` routes it
+            // through the insertion EFX instead of the dry mix. `00`/`01` are the SysEx form of
+            // the tone map number, which this engine takes from its options and CC#32 instead.
             const int index =
                 impl_->part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
             Part& part = impl_->parts[static_cast<std::size_t>(index)];
             if (a3 == 0x20) {
                 part.eq_enabled = value != 0;
+            } else if (a3 == 0x22 && impl_->options.efx) {
+                part.efx_enabled = value != 0;
+                if (part.efx_enabled) {
+                    impl_->ensure_efx();
+                }
             }
             return;
         }
@@ -1493,6 +1536,11 @@ void ToneGenerator::Impl::stream_reset()
     // matter if a later message switched the EQ back on, and what it would then contribute is one
     // block of a signal from before the reset -- so dropping it is both simpler and righter.
     equalizer.reset();
+
+    // The insertion EFX returns to power-on: dropped rather than reset, and rebuilt at Thru with
+    // its defaults the next time a stream touches it.
+    efx.reset();
+    efx_type_msb = 0;
 }
 
 void ToneGenerator::send_packet(std::uint32_t packet)
@@ -1566,6 +1614,10 @@ void ToneGenerator::Impl::render_block()
     delay_bus.fill(0.0F);
     eq_left.fill(0.0F);
     eq_right.fill(0.0F);
+    if (efx) {
+        efx_in_left.fill(0.0F);
+        efx_in_right.fill(0.0F);
+    }
 
     for (int i = 0; i < static_cast<int>(slots.size()); ++i) {
         auto& slot = slots[static_cast<std::size_t>(i)];
@@ -1593,6 +1645,31 @@ void ToneGenerator::Impl::render_block()
     for (int n = 0; n < block_size; ++n) {
         left[static_cast<std::size_t>(n)] += eq_left[static_cast<std::size_t>(n)];
         right[static_cast<std::size_t>(n)] += eq_right[static_cast<std::size_t>(n)];
+    }
+
+    // The insertion EFX runs ahead of the send network: its stereo output joins the dry mix, and
+    // its mono sum feeds the reverb, chorus and delay buses at the block's own `40 03 17`-`19`
+    // levels — the sends the EFX parts themselves were denied.
+    if (efx) {
+        efx->process(efx_in_left, efx_in_right, efx_out_left, efx_out_right);
+        const auto to_reverb = static_cast<float>(reverb ? efx->reverb_send() : 0.0);
+        const auto to_chorus = static_cast<float>(chorus ? efx->chorus_send() : 0.0);
+        const auto to_delay = static_cast<float>(delay ? efx->delay_send() : 0.0);
+        for (int n = 0; n < block_size; ++n) {
+            const auto i = static_cast<std::size_t>(n);
+            left[i] += efx_out_left[i];
+            right[i] += efx_out_right[i];
+            const float mono = efx_out_left[i] + efx_out_right[i];
+            if (to_reverb != 0.0F) {
+                reverb_bus[i] += mono * to_reverb;
+            }
+            if (to_chorus != 0.0F) {
+                chorus_bus[i] += mono * to_chorus;
+            }
+            if (to_delay != 0.0F) {
+                delay_bus[i] += mono * to_delay;
+            }
+        }
     }
 
     mix_effects(left, right);
@@ -1636,14 +1713,19 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     const auto [pan_left, pan_right] = voice.pan_gains(part.pan);
     const double gain = part.volume_scale() * voice.level_gain();
 
+    // An EFX part detours to the block's input pair and has both sends forced to the null bus,
+    // exactly as the voice bus-assign does with `part+0x452` set — the block's own send levels
+    // are what reach the system effects. The EFX routing wins over the EQ detour.
+    const bool efx_part = efx && part.efx_enabled;
+
     // Sends are fed from the pre-pan mono and are post-fader, so the wet scales with volume and
     // expression but not with pan -- matching the engine's mono send bus.
     const double to_reverb =
-        reverb && part.reverb_send > 0 ? Reverb::send_gain(part.reverb_send) : 0.0;
+        !efx_part && reverb && part.reverb_send > 0 ? Reverb::send_gain(part.reverb_send) : 0.0;
     const double to_chorus =
-        chorus && part.chorus_send > 0 ? Chorus::send_gain(part.chorus_send) : 0.0;
+        !efx_part && chorus && part.chorus_send > 0 ? Chorus::send_gain(part.chorus_send) : 0.0;
     const double to_delay =
-        delay && part.delay_send > 0 ? SystemDelay::send_gain(part.delay_send) : 0.0;
+        !efx_part && delay && part.delay_send > 0 ? SystemDelay::send_gain(part.delay_send) : 0.0;
 
     // The voice gain stays a separate multiply from the pan and send levels: collapsing them would
     // be the cheaper kernel and a silently different render, since float multiplication is no more
@@ -1651,8 +1733,12 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     //
     // A part with the EQ on lands in the EQ buffers instead of the output, and is filtered and
     // summed in later. Only the dry path moves; the sends below are fed the same either way.
-    std::span<float> dry_left = part.eq_enabled ? std::span<float>{eq_left} : left;
-    std::span<float> dry_right = part.eq_enabled ? std::span<float>{eq_right} : right;
+    std::span<float> dry_left = efx_part          ? std::span<float>{efx_in_left}
+                                : part.eq_enabled ? std::span<float>{eq_left}
+                                                  : left;
+    std::span<float> dry_right = efx_part          ? std::span<float>{efx_in_right}
+                                 : part.eq_enabled ? std::span<float>{eq_right}
+                                                   : right;
     simd::mix_scaled(block, gain, pan_left, dry_left);
     simd::mix_scaled(block, gain, pan_right, dry_right);
 

@@ -41,6 +41,7 @@ void Part::reset()
     key_low = 0;
     key_high = 0x7F;
     eq_enabled = false;
+    efx_enabled = false;
     velocity_depth = 0x40;
     velocity_offset = 0x40;
     pitch_offset_fine = 0x08;

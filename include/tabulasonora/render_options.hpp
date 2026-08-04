@@ -88,6 +88,7 @@ struct RenderOptions {
     bool reverb = true;
     bool chorus = true;
     bool delay = true;
+    bool efx = true;
 
     /// Force an effect type instead of taking it from the stream.
     std::optional<int> reverb_type;

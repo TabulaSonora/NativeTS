@@ -64,6 +64,12 @@ struct ToneGeneratorOptions {
     bool chorus = true;
     bool delay = true;
 
+    /// The insertion EFX block, `40 03` and the per-part `40 4x 22` switch.
+    ///
+    /// Only a first tranche of the 65 algorithms is transcribed; a type outside it passes the
+    /// signal through unchanged, with routing and send levels still honoured.
+    bool efx = true;
+
     /// Force an effect type instead of taking it from the stream.
     std::optional<int> reverb_type;
     std::optional<int> chorus_type;

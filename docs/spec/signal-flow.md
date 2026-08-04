@@ -224,8 +224,14 @@ effect woven directly into the matrix, with 10 types and a fixed 60 ms input pre
 EFX is a function-pointer table of 67 distinct algorithm processors selected by a type-to-index
 map — including dispatch slot 66, a complete modulated multi-tap delay that nothing can select.
 
-Insertion EFX is out of scope for this engine, as it is upstream; the three send effects are
-implemented.
+The three send effects are implemented. The insertion EFX block — the spec's scope note leaves it
+to this engine — is implemented as ts::InsertionEffect: the block machinery (register file,
+per-type preset fill, the two decrementing delay lines, the `40 03` SysEx block and the `40 4x 22`
+part routing) is transcribed in full and its directory, presets and parameter curves are decoded
+from the user's DLL at runtime, but only a first tranche of algorithm processors exists — Thru,
+Overdrive and Distortion, verified against the live engine to within 1.5% RMS and the baseline's
+per-band spread. A type outside the tranche passes the signal through unchanged, with routing and
+send levels still honoured, and reports itself via `InsertionEffect::implemented`.
 
 ### 6 · Output
 
@@ -241,9 +247,11 @@ is the only place the host sample rate exists; everything upstream is the 32 kHz
 - The dry path shows measurably zero DC in real renders, but no DC blocker was found on it — the
   three blocker instances all sit on effect inputs. Placement of the dry-path DC removal is an open
   question: host wrapper, mis-decompiled region, or misread routing.
-- Insertion-EFX internal routing — which parts feed it, dry/wet within the block — is the
-  least-traced link in the chart. The algorithms themselves are identified and named but not
-  individually analysed.
+- Insertion-EFX internal routing is now pinned at the ends and calibrated in the middle: parts
+  with `part+0x452` set detour to bus 62 with their sends nulled, and the block's return gain was
+  calibrated against live renders (a Thru-routed part is level-transparent) rather than traced
+  through the send matrix — the ×4 between the algorithm's halved output and the dry mix is a
+  measured fact, decomposed only as far as the 2.0 ramp target the apply handlers write.
 - Bus numbering (58/59 dry, 60 reverb, 3 chorus, 2 delay/EFX) comes from the DC-blocker and
   accumulator analysis; treat individual bus indices as evidence-backed labels, not a verified full
   bus map.

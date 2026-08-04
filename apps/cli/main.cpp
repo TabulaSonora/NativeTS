@@ -239,6 +239,7 @@ int render_command(const std::string& dll,
         engine_options.reverb = options.reverb;
         engine_options.chorus = options.chorus;
         engine_options.delay = options.delay;
+        engine_options.efx = options.efx;
         engine_options.reverb_type = options.reverb_type;
         engine_options.chorus_type = options.chorus_type;
         engine_options.delay_type = options.delay_type;
@@ -492,6 +493,7 @@ int main(int argc, char** argv)
     bool no_reverb = false;
     bool no_chorus = false;
     bool no_delay = false;
+    bool no_efx = false;
     bool stream = false;
     int polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
     int ports = ts::ToneGeneratorOptions{}.ports;
@@ -511,6 +513,7 @@ int main(int argc, char** argv)
     render->add_flag("--no-reverb", no_reverb, "Disable the reverb send");
     render->add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     render->add_flag("--no-delay", no_delay, "Disable the delay send");
+    render->add_flag("--no-efx", no_efx, "Disable the insertion EFX block");
     // Every render goes through the block loop now; what `--stream` selects is the hardware's
     // voice limit, so the stealing can be heard as the module would do it. The default is
     // unlimited, where every note in the file sounds.
@@ -578,6 +581,7 @@ int main(int argc, char** argv)
             render_options.reverb = !no_reverb;
             render_options.chorus = !no_chorus;
             render_options.delay = !no_delay;
+            render_options.efx = !no_efx;
 
             ts::ChannelMask mask;
             apply_channels(mask, muted, /*mute=*/true);

@@ -127,6 +127,7 @@ int play(const std::string& dll,
         engine_options.reverb = options.reverb;
         engine_options.chorus = options.chorus;
         engine_options.delay = options.delay;
+        engine_options.efx = options.efx;
         engine_options.reverb_type = options.reverb_type;
         engine_options.chorus_type = options.chorus_type;
         engine_options.delay_type = options.delay_type;
@@ -162,6 +163,7 @@ int play(const std::string& dll,
         engine.reverb = options.reverb;
         engine.chorus = options.chorus;
         engine.delay = options.delay;
+        engine.efx = options.efx;
         engine.channels = options.channels;
 
         auto streaming = std::make_unique<ts::player::StreamingSource>(
@@ -272,6 +274,7 @@ int main(int argc, char** argv)
     bool no_reverb = false;
     bool no_chorus = false;
     bool no_delay = false;
+    bool no_efx = false;
     std::vector<std::string> muted;
     std::vector<std::string> soloed;
 
@@ -289,6 +292,7 @@ int main(int argc, char** argv)
     app.add_flag("--no-reverb", no_reverb, "Disable the reverb send");
     app.add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     app.add_flag("--no-delay", no_delay, "Disable the delay send");
+    app.add_flag("--no-efx", no_efx, "Disable the insertion EFX block");
     app.add_option("--mute", muted,
                    "Silence these channels, as a mixer labels them (1-32; 17+ are port B)");
     app.add_option("--solo", soloed, "Hear only these channels");
@@ -314,6 +318,7 @@ int main(int argc, char** argv)
         options.reverb = !no_reverb;
         options.chorus = !no_chorus;
         options.delay = !no_delay;
+        options.efx = !no_efx;
         device.period_frames = std::max(device.period_frames, 32);
 
         ts::ChannelMask mask;

@@ -384,6 +384,7 @@ int run(const std::string& dll,
     engine.reverb = options.reverb;
     engine.chorus = options.chorus;
     engine.delay = options.delay;
+    engine.efx = options.efx;
 
     // Always attached, unlike the offline path's optional mask: the mixer has to be able to mute a
     // channel that started out audible, and the engine reads this pointer live.
@@ -575,6 +576,7 @@ int main(int argc, char** argv)
     bool no_reverb = false;
     bool no_chorus = false;
     bool no_delay = false;
+    bool no_efx = false;
     std::vector<std::string> muted;
     std::vector<std::string> soloed;
 
@@ -591,6 +593,7 @@ int main(int argc, char** argv)
     app.add_flag("--no-reverb", no_reverb, "Disable the reverb send");
     app.add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     app.add_flag("--no-delay", no_delay, "Disable the delay send");
+    app.add_flag("--no-efx", no_efx, "Disable the insertion EFX block");
     app.add_option("--mute", muted,
                    "Start with these channels silenced (1-64; 17+ are ports B-D)");
     app.add_option("--solo", soloed, "Start with only these channels audible");
@@ -627,6 +630,7 @@ int main(int argc, char** argv)
         options.reverb = !no_reverb;
         options.chorus = !no_chorus;
         options.delay = !no_delay;
+        options.efx = !no_efx;
         device.period_frames = std::max(device.period_frames, 32);
 
         ts::ChannelMask channels;
