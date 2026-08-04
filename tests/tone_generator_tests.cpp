@@ -621,6 +621,30 @@ TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
     CHECK_FALSE(generator.part(9).drum_keys.level(51).has_value()); // and MAP1 writes no longer land
 }
 
+TEST_CASE("each drum map carries its own kit", "[stream][sccore]")
+{
+    // The module keeps a kit buffer per (port, map) -- part_assign_tone addresses
+    // `port * 2 + map` -- so a MAP2 rhythm part's program change must not clobber the MAP1 kit
+    // beside it. transcendental.mid is the real case: channel 10 is a MAP2 rhythm part cycling
+    // its own kits while channel 9 holds one on MAP1, and folding both into one slot per port
+    // had channel 9 playing channel 10's kit for most of the song.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    REQUIRE(generator.drum_kit_for(0) == 0);
+
+    // Channel 10 becomes a MAP2 rhythm part and selects the Room kit; MAP1 must not move.
+    generator.send_sysex(dt1({0x40, 0x1A, 0x15, 0x02}));
+    generator.send_channel(0xCA, 8, 0);
+    CHECK(generator.drum_kit_for(0) == 0);
+
+    // The default rhythm part still owns the MAP1 slot.
+    generator.send_channel(0xC9, 8, 0);
+    CHECK(generator.drum_kit_for(0) != 0);
+}
+
 TEST_CASE("a drum key's receive switches govern its whole life", "[stream][sccore]")
 {
     // No timer bounds a drum voice. The kit record says, per key, whether it answers note-off

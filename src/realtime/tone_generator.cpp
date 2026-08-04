@@ -43,7 +43,7 @@ struct ToneGenerator::Impl {
         slots.resize(static_cast<std::size_t>(pool.capacity()));
 
         parts.resize(static_cast<std::size_t>(port_count * Sequence::channel_count));
-        drum_kit.assign(static_cast<std::size_t>(port_count), 0);
+        drum_kit.assign(static_cast<std::size_t>(port_count) * 2, 0);
         for (std::size_t i = 0; i < parts.size(); ++i) {
             parts[i].rx_channel = static_cast<int>(i) % Sequence::channel_count;
         }
@@ -139,7 +139,12 @@ struct ToneGenerator::Impl {
 
     double output_gain = 1.0;
     std::optional<int> drum_map_row;
-    // One per port: each port's channel 10 is its own drum part, with its own kit.
+    // One per (port, map), indexed `port * 2 + map`. The module keeps eight drum buffers and a
+    // rhythm part addresses `port * 2 + map` of them (`part_assign_tone` computes exactly that
+    // index before the kit record is copied in), so two rhythm parts on one port hold different
+    // kits only when they sit on different maps -- transcendental.mid, whose channel 10 is a
+    // MAP2 rhythm part with its own kit beside channel 9's on MAP1. Parts sharing a map share
+    // the kit, last program change wins, which is equally the module's behaviour.
     std::vector<int> drum_kit;
     std::int64_t position = 0;
     int note_count = 0;
@@ -188,6 +193,20 @@ struct ToneGenerator::Impl {
             return state.rhythm > 0;
         }
         return part % Sequence::channel_count == options.drum_channel;
+    }
+
+    // Which drum map a rhythm part sits on: use-for-rhythm value 2 is MAP2, 1 or the channel
+    // default is MAP1.
+    [[nodiscard]] static int map_of(const Part& part) noexcept
+    {
+        return part.rhythm == 2 ? 1 : 0;
+    }
+
+    // The (port, map) kit slot a rhythm part reads and its program change writes.
+    [[nodiscard]] std::size_t kit_slot(int part) const noexcept
+    {
+        return static_cast<std::size_t>((part / Sequence::channel_count) * 2
+                                        + map_of(parts[static_cast<std::size_t>(part)]));
     }
 
     // Which vintage's tone map the part resolves against: bank select LSB 1-4 names one, anything
@@ -344,7 +363,9 @@ int ToneGenerator::drum_kit() const noexcept
 
 int ToneGenerator::drum_kit_for(int port) const noexcept
 {
-    return impl_->drum_kit[static_cast<std::size_t>(port & (impl_->port_count - 1))];
+    // The MAP1 slot: what the port's default rhythm part carries, which is what a kit display
+    // means by "the kit".
+    return impl_->drum_kit[static_cast<std::size_t>(port & (impl_->port_count - 1)) * 2];
 }
 
 std::optional<int> ToneGenerator::drum_map_row() const noexcept
@@ -530,7 +551,7 @@ void ToneGenerator::Impl::program_change(int part_index, Part& part, int program
         if (kit) {
             // An undefined program leaves the current kit in place rather than falling back to
             // Standard.
-            drum_kit[static_cast<std::size_t>(part_index / Sequence::channel_count)] = *kit;
+            drum_kit[kit_slot(part_index)] = *kit;
         }
     }
 }
@@ -979,8 +1000,7 @@ void ToneGenerator::Impl::gs_drum_setup(int port,
             continue;
         }
         Part& part = parts[static_cast<std::size_t>(index)];
-        // Use-for-rhythm value 2 is MAP2; 1, or the channel-default -1, is MAP1.
-        if ((part.rhythm == 2 ? 1 : 0) != map) {
+        if (map_of(part) != map) {
             continue;
         }
 
@@ -1545,8 +1565,7 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
 
     // The kit's own key is kept alongside the overridden one: `apply` also resolves the panpot,
     // and the envelope rate key-follow takes the plane through its own clamp.
-    DrumKey kit_key = notes->drums().key(
-        note, drum_kit[static_cast<std::size_t>(channel / Sequence::channel_count)]);
+    DrumKey kit_key = notes->drums().key(note, drum_kit[kit_slot(channel)]);
 
     // The drum-setup SysEx planes replace their kit entries outright, before the relative NRPN
     // overrides go on top.

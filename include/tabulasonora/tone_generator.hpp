@@ -194,7 +194,9 @@ public:
 
     /// The drum kit in force on one port.
     ///
-    /// Each port has its own drum part, so each carries its own kit. `drum_kit()` is port A's.
+    /// Each port has its own drum part, so each carries its own kit — per (port, map), the
+    /// module's eight kit buffers; this reports the port's MAP1 kit, the default rhythm part's.
+    /// `drum_kit()` is port A's.
     [[nodiscard]] int drum_kit_for(int port) const noexcept;
 
     /// Which drum map row a program change on the drum part resolves against.
