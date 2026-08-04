@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -358,4 +359,55 @@ TEST_CASE("XG routing follows the default until a bank select says otherwise", "
     generator.send_channel(0xB3, 0, 0);
     generator.send_channel(0xC3, 25, 0);
     CHECK_FALSE(generator.part_is_drum(3));
+}
+
+// A kit per part under XG, and the module's shared arrangement under GS.
+//
+// The module gives a port's drum channel one kit slot and shares a second between every other drum
+// part on that port. Under GS almost nothing reaches the second, so the limit is invisible and GS
+// files are rendered against it -- it stays. XG makes it reachable: bank MSB 127 turns any channel
+// into a drum part, so a file can have several and under the module's arrangement all but one would
+// sound as whichever moved last. That divergence is deliberate and confined to XG.
+TEST_CASE("XG gives each drum part its own kit; GS keeps the module's", "[xg][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    SECTION("XG: two drum parts keep two kits")
+    {
+        ToneGeneratorOptions options;
+        options.ports = 1;
+        options.map = ToneMap::xg;
+        ToneGenerator generator{notes, options};
+
+        // Channel 10 on its default routing asks for Standard.
+        generator.send_channel(0xC9, 0, 0);
+        // Channel 11 takes the drum bank and asks for Analog.
+        generator.send_channel(0xBA, 0, 127);
+        generator.send_channel(0xCA, 25, 0);
+
+        CHECK(notes.drums().kit_name(generator.part_drum_kit(9)) == "standard kit");
+        CHECK(notes.drums().kit_name(generator.part_drum_kit(10)) == "analog kit");
+
+        // And the port's kit still means the drum channel's, not part 0's.
+        CHECK(generator.drum_kit() == generator.part_drum_kit(9));
+    }
+
+    SECTION("GS: the shared slot is preserved")
+    {
+        ToneGeneratorOptions options;
+        options.ports = 1;
+        ToneGenerator generator{notes, options};
+
+        // GS use-for-rhythm on channel 11, MAP1 -- the module shares one kit with channel 10.
+        const std::uint8_t rhythm[] = {0xF0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x1A,
+                                       0x15, 0x01, 0x10, 0xF7};
+        generator.send_sysex(std::span<const std::uint8_t>{rhythm, sizeof rhythm});
+        generator.send_channel(0xC9, 0, 0);
+        generator.send_channel(0xCA, 25, 0);
+
+        REQUIRE(generator.part_is_drum(10));
+        CHECK(generator.part_drum_kit(9) == generator.part_drum_kit(10));
+    }
 }

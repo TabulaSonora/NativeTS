@@ -98,7 +98,9 @@ struct ToneGenerator::Impl {
         slots.resize(static_cast<std::size_t>(pool.capacity()));
 
         parts.resize(static_cast<std::size_t>(port_count * Sequence::channel_count));
-        drum_kit.assign(static_cast<std::size_t>(port_count) * 2, 0);
+        // One per part, which is what XG needs; GS uses only the first `ports * 2` of them.
+        // The two indexings overlap, and may because every mode change resets the array.
+        drum_kit.assign(parts.size(), 0);
         for (std::size_t i = 0; i < parts.size(); ++i) {
             parts[i].rx_channel = static_cast<int>(i) % Sequence::channel_count;
         }
@@ -257,9 +259,22 @@ struct ToneGenerator::Impl {
         return part.rhythm == 2 ? 1 : 0;
     }
 
-    // The (port, map) kit slot a rhythm part reads and its program change writes.
+    // Which kit a rhythm part reads, and which its program change writes.
+    //
+    // GS keeps the module's arrangement: a kit per (port, map), so the port's rhythm part and its
+    // MAP2 counterpart have one each. That is a real limit of the module -- it gives the port's
+    // drum channel one slot and *shares a second between every other drum part on that port* -- and
+    // GS files are rendered against it, so it stays.
+    //
+    // XG gets a kit per part. It is the mode that makes the limit reachable: bank MSB 127 turns any
+    // channel into a drum part, so a file can have five of them, and under the module's arrangement
+    // four would fight over one slot and all sound as whichever moved last. Diverging here is
+    // deliberate and confined to the mode that needs it -- a GS render cannot reach this branch.
     [[nodiscard]] std::size_t kit_slot(int part) const noexcept
     {
+        if (xg_mode) {
+            return static_cast<std::size_t>(part);
+        }
         return static_cast<std::size_t>((part / Sequence::channel_count) * 2
                                         + map_of(parts[static_cast<std::size_t>(part)]));
     }
@@ -474,14 +489,17 @@ int ToneGenerator::voice_slots() const noexcept
 
 int ToneGenerator::drum_kit() const noexcept
 {
-    return impl_->drum_kit[0];
+    return drum_kit_for(0);
 }
 
 int ToneGenerator::drum_kit_for(int port) const noexcept
 {
-    // The MAP1 slot: what the port's default rhythm part carries, which is what a kit display
-    // means by "the kit".
-    return impl_->drum_kit[static_cast<std::size_t>(port & (impl_->port_count - 1)) * 2];
+    // What the port's default rhythm part carries, which is what a kit display means by "the kit".
+    // Asked for by part rather than by slot number, because the slot layout is not the same in both
+    // modes -- under XG a kit belongs to a part, and slot 0 is part 0's rather than the drum
+    // channel's.
+    const int base = (port & (impl_->port_count - 1)) * Sequence::channel_count;
+    return impl_->drum_kit[impl_->kit_slot(base + impl_->options.drum_channel)];
 }
 
 std::optional<int> ToneGenerator::drum_map_row() const noexcept
