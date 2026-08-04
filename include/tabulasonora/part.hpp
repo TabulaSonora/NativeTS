@@ -133,7 +133,13 @@ public:
     /// chooses between melodic (below 0x7E), the SFX voice bank (0x40), the SFX kits (0x7E) and the
     /// drum kits (0x7F). It needs its own field because it decides melodic-versus-drum for the part
     /// and so has to survive until the next program change, which is when that decision is taken.
-    int xg_bank_msb = 0;
+    ///
+    /// **-1 means no bank select has been sent**, which is not the same as zero. A program change
+    /// on a part whose bank was never written must not decide drum routing at all -- it leaves the
+    /// part on its default, so channel 10 stays drums the way XG starts it. Reading an unwritten
+    /// bank as 0 would silently make every default drum part melodic, which is exactly what a file
+    /// that sends nothing but program changes would suffer.
+    int xg_bank_msb = -1;
 
     /// Polyphonic aftertouch, per key.
     ///

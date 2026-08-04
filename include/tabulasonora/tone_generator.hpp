@@ -41,7 +41,20 @@ struct ToneGeneratorOptions {
     /// 1, 2 or 4 are rejected: the part index is formed by masking, which needs a power of two.
     int ports = 2;
 
-    /// Which vintage's tone map program changes resolve against.
+    /// Which tone map program changes resolve against.
+    ///
+    /// `ToneMap::xg` is the switch that starts the engine in XG mode, rather than a separate flag,
+    /// because on the module the two are one thing: XG System On is precisely what moves every part
+    /// onto the XG map. Setting it here is the same state a file would have reached by sending it.
+    ///
+    /// It is a *starting* state, not a lock. A file is still free to change mode -- any Roland
+    /// SysEx leaves XG parsing, exactly as it would have -- and this remains the default map that a
+    /// part with no map selected falls back to, the same way `sc8820` does. `ToneGenerator::reset`
+    /// returns to it.
+    ///
+    /// There is deliberately no detection: nothing here infers XG from the shape of a file's bank
+    /// selects. A bank LSB of 18 is a legitimate if unusual GS map selector, and guessing would
+    /// break the files that mean it. A file that wants XG says so, or the host does.
     ToneMap map = ToneMap::sc8820;
 
     /// MIDI channel routed to the drum path.

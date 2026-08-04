@@ -80,6 +80,11 @@ struct ToneGenerator::Impl {
         }
         port_count = opts.ports;
 
+        // Configuring the XG map *is* configuring XG mode: on the module one implies the other,
+        // and a host that asks for the XG map without the parser to match would get XG presets
+        // addressed by GS bank select, which is a state no module has.
+        xg_mode = opts.map == ToneMap::xg;
+
         output_gain = opts.output_gain;
         reverb_type = opts.reverb_type;
         chorus_type = opts.chorus_type;
@@ -347,6 +352,7 @@ struct ToneGenerator::Impl {
     void xg_sysex(std::span<const std::uint8_t> bytes);
     void xg_multi_part(int part_index, Part& part, int parameter, int value);
     void xg_program_change(int part_index, Part& part, int program);
+    void xg_resolve_program(int part_index, Part& part, int program);
     void xg_effect1(int parameter, std::span<const std::uint8_t> data);
     void leave_xg_mode();
     void gs_drum_setup(int port, int map, int parameter, int key,
@@ -544,6 +550,9 @@ void ToneGenerator::reset()
     impl_->master_tune = 0x400;
     impl_->master_key_shift = 0x40;
     impl_->master_pan = 0x40;
+    // Back to the configured starting mode, not to GS: `reset` undoes what the music did, and the
+    // host's choice of map is not something the music did.
+    impl_->xg_mode = impl_->options.map == ToneMap::xg;
 
     if (impl_->reverb) {
         impl_->reverb->reset();
@@ -718,21 +727,20 @@ void ToneGenerator::Impl::leave_xg_mode()
 // program and MSB 0x7E the SFX kits, whose two programs sit at 120 and 121 in the same row, which
 // is what the module's `+0x78` program offset is reaching. Under GS that is impossible without the
 // use-for-rhythm SysEx.
-void ToneGenerator::Impl::xg_program_change(int part_index, Part& part, int program)
+// Resolves a program on the routing the part already has, without revisiting that routing.
+//
+// Kept apart from the bank-select decision because XG Part Mode has to be able to set the routing
+// and then re-resolve: folding the two together let a program change taken on behalf of Part Mode
+// overwrite the very decision that asked for it.
+void ToneGenerator::Impl::xg_resolve_program(int part_index, Part& part, int program)
 {
-    const int msb = part.xg_bank_msb;
-    const bool drum = msb >= 0x7E;
-
-    // The routing decision is the part's, not the channel's, for as long as XG mode holds.
-    part.rhythm = drum ? 1 : 0;
-
-    if (!drum) {
+    if (!is_drum_part(part_index)) {
         program_change(part_index, part, program);
         return;
     }
 
     int kit_program = program;
-    if (msb == 0x7E) {
+    if (part.xg_bank_msb == 0x7E) {
         kit_program += 0x78;
     } else if (kit_program > 0x77) {
         kit_program = 0;
@@ -744,6 +752,26 @@ void ToneGenerator::Impl::xg_program_change(int part_index, Part& part, int prog
     if (kit) {
         drum_kit[kit_slot(part_index)] = *kit;
     }
+}
+
+void ToneGenerator::Impl::xg_program_change(int part_index, Part& part, int program)
+{
+    const int msb = part.xg_bank_msb;
+
+    // A drum bank makes a drum part of any channel. A melodic bank does *not* make a melodic part
+    // of one: it returns the part to its default, which for channel 10 is still drums. Bank select
+    // cannot take the default drum part away in XG -- only XG Part Mode, or the GS use-for-rhythm
+    // SysEx, does that, and both say so explicitly rather than as a side effect of choosing a
+    // sound. Reading a melodic bank as "not drums" silences the percussion of any file that sets a
+    // bank on channel 10, which is a great many of them.
+    //
+    // A part with no bank select at all keeps its default untouched, so a file carrying nothing but
+    // program changes still has its percussion on channel 10.
+    if (msb >= 0) {
+        part.rhythm = msb >= 0x7E ? 1 : -1;
+    }
+
+    xg_resolve_program(part_index, part, program);
 }
 
 // One XG Multi Part parameter that this path can hold and the shared decoder does not cover.
@@ -770,8 +798,10 @@ void ToneGenerator::Impl::xg_multi_part(int part_index, Part& part, int paramete
     // Part Mode: 0 normal, 1 drum, 3/4/5 the numbered drum setups. Anything drum-shaped routes the
     // part to the drum path and re-resolves its program there.
     case 0x07:
+        // Part Mode is the explicit routing message, so it sets the routing and re-resolves on it
+        // rather than going back through bank select, which would only undo what it just decided.
         part.rhythm = value == 0 ? 0 : 1;
-        xg_program_change(part_index, part, part.program);
+        xg_resolve_program(part_index, part, part.program);
         return;
 
     // Note Shift, same 0x28-0x58 clamp the GS part key shift uses.

@@ -214,6 +214,30 @@ std::optional<std::string> PatchDirectory::tone_zones(int tone_number,
     return record->name();
 }
 
+const std::vector<std::pair<std::string, int>>& tone_map_choices() noexcept
+{
+    // Ordered as a help string wants to read them, oldest module first, with XG last because it is
+    // not a vintage of the same instrument.
+    static const std::vector<std::pair<std::string, int>> choices{
+        {"sc55", static_cast<int>(ToneMap::sc55)},
+        {"sc88", static_cast<int>(ToneMap::sc88)},
+        {"sc88pro", static_cast<int>(ToneMap::sc88pro)},
+        {"sc8820", static_cast<int>(ToneMap::sc8820)},
+        {"xg", static_cast<int>(ToneMap::xg)},
+    };
+    return choices;
+}
+
+std::string_view tone_map_name(ToneMap map) noexcept
+{
+    for (const auto& [name, value] : tone_map_choices()) {
+        if (value == static_cast<int>(map)) {
+            return name;
+        }
+    }
+    return {};
+}
+
 std::optional<int> PatchDirectory::lut3_raw(int program, ToneMap map, int bank) const
 {
     const auto map_index = static_cast<std::size_t>(map);

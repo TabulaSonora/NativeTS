@@ -556,7 +556,10 @@ int main(int argc, char** argv)
     std::vector<std::string> muted;
     std::vector<std::string> soloed;
 
-    app.add_option("--map", map, "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820");
+    app.add_option("--map", map,
+                   "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820, or xg to start in XG mode "
+                   "(names accepted: sc55, sc88, sc88pro, sc8820, xg)")
+        ->transform(CLI::CheckedTransformer(ts::tone_map_choices(), CLI::ignore_case));
     app.add_option("--device", device.name, "Output device; an index or a substring of its name");
     app.add_option("--buffer", device.period_frames, "Device period, in frames");
     app.add_option("--latency", device.latency_ms, "How far ahead to keep the device fed, in ms");

@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace ts {
@@ -24,6 +26,16 @@ enum class ToneMap {
     sc8820 = 4,
     xg = 0x77,
 };
+
+/// The tone maps a command line accepts, by name and by the module's own selector value.
+///
+/// Shared so the four front ends spell the same thing the same way, and so a bad value is refused
+/// rather than cast to a selector that resolves to nothing. `xg` is 0x77 because that is the number
+/// the module uses, not a label invented here.
+[[nodiscard]] const std::vector<std::pair<std::string, int>>& tone_map_choices() noexcept;
+
+/// The name of a tone map, for a UI to display. Empty for a value that names none.
+[[nodiscard]] std::string_view tone_map_name(ToneMap map) noexcept;
 
 /// One key zone of a tone, expressed in MIDI note numbers.
 struct ToneZone {

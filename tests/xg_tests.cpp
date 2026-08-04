@@ -278,3 +278,84 @@ TEST_CASE("XG drum kits are named from their records", "[xg][sccore]")
     CHECK(drums.kit_name(-1).empty());
     CHECK(drums.kit_name(100000).empty());
 }
+
+// Starting in XG mode, as a map setting rather than a separate flag.
+//
+// A file that was authored for an XG module often never sends System On, because the module is
+// already in XG at power-on. `CaveStory-MoonSong_XG.mid` is one: no `F0 43` anywhere, but bank LSB
+// 18 and 19 on four channels, which under GS is a tone-map selector and means nothing.
+TEST_CASE("ToneMap::xg starts the engine in XG mode", "[xg][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    ToneGeneratorOptions options;
+    options.ports = 1;
+    options.map = ToneMap::xg;
+    ToneGenerator generator{notes, options};
+
+    CHECK(generator.xg_mode());
+    CHECK(generator.part_tone_map(0) == ToneMap::xg);
+
+    // The bank pair reads XG's way from the first message, with no System On sent.
+    generator.send_channel(0xB0, 32, 18);
+    CHECK(generator.part_lookup_bank(0) == 18);
+
+    // A reset returns to the configured mode rather than dropping to GS: the host's choice is not
+    // something the music did.
+    generator.reset();
+    CHECK(generator.xg_mode());
+
+    // And a Roland message still leaves XG parsing, because a file may legitimately switch.
+    generator.send_sysex(std::vector<std::uint8_t>{0xF0, 0x41, 0x10, 0x42, 0x12, 0x40, 0x00, 0x7F,
+                                                   0x00, 0x41, 0xF7});
+    CHECK_FALSE(generator.xg_mode());
+}
+
+// A program change with no bank select must not decide drum routing.
+//
+// This is the regression the Cave Story file found. Reading an unwritten bank MSB as zero made
+// every program change look like an explicit "melodic", which turned channel 10 into a guitar on
+// any file that sends program changes and no bank selects -- which is most of them.
+TEST_CASE("XG routing follows the default until a bank select says otherwise", "[xg][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    ToneGeneratorOptions options;
+    options.ports = 1;
+    options.map = ToneMap::xg;
+    ToneGenerator generator{notes, options};
+
+    // Channel 10, a program change and nothing else: still drums, and on the XG kit row.
+    generator.send_channel(0xC9, 24, 0);
+    CHECK(generator.part_is_drum(9));
+    CHECK(notes.drums().kit_name(generator.part_drum_kit(9)) == "electro kit");
+
+    // A melodic channel with no bank select stays melodic.
+    CHECK_FALSE(generator.part_is_drum(0));
+
+    // A melodic bank does NOT take the default drum part away. Only XG Part Mode or the GS
+    // use-for-rhythm SysEx can do that; bank select choosing a sound is not a routing decision.
+    generator.send_channel(0xB9, 0, 0);
+    generator.send_channel(0xC9, 24, 0);
+    CHECK(generator.part_is_drum(9));
+
+    // XG Part Mode 0 does take it away, because that is what it is for.
+    generator.send_sysex(std::vector<std::uint8_t>{0xF0, 0x43, 0x10, 0x4C, 0x08, 0x09, 0x07, 0x00,
+                                                   0xF7});
+    CHECK_FALSE(generator.part_is_drum(9));
+
+    // And an explicit drum bank makes drums of a channel that is not channel 10, which a melodic
+    // bank then does undo -- there it is returning the part to its own default, which is melodic.
+    generator.send_channel(0xB3, 0, 127);
+    generator.send_channel(0xC3, 25, 0);
+    CHECK(generator.part_is_drum(3));
+    CHECK(notes.drums().kit_name(generator.part_drum_kit(3)) == "analog kit");
+
+    generator.send_channel(0xB3, 0, 0);
+    generator.send_channel(0xC3, 25, 0);
+    CHECK_FALSE(generator.part_is_drum(3));
+}
