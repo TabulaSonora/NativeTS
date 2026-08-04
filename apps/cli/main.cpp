@@ -1,4 +1,6 @@
+#include "tabulasonora/envelope_machine.hpp"
 #include "tabulasonora/note_renderer.hpp"
+#include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/render_options.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/rom_locator.hpp"
@@ -152,6 +154,64 @@ int render_note_command(const std::string& path,
     }
 
     std::cout << voice.name << ": " << voice.left.size() << " frames\n";
+    return 0;
+}
+
+/// Prints the pitch chain for one note, term by term, without rendering anything.
+///
+/// The instrument for comparing this engine's tuning against the module's *exactly*. Estimating a
+/// fundamental from rendered audio resolves a few cents at best — enough to have found a 320
+/// milli-semitone error, nowhere near enough to chase what is left. `scdec postrace` reads the
+/// module's sampler increment as an integer in 16.16, so the comparison that settles a tuning
+/// question is ratio against ratio, and this is the other half of it.
+///
+/// The terms are printed separately because a disagreement is only useful once it is attributed:
+/// the module's own chain (`partial_compute_pitch` @ `18005fc20`) is `native = root×1000 − fine +
+/// 0x400` against `base = key×1000 + weight + key-follow curve + coarse`, and each of those is a
+/// place this port could differ.
+int pitch_command(const std::string& path, int program, int note, int velocity, int map)
+{
+    const ts::RomImage rom = ts::RomImage::open(path, ts::RomVerification::quick);
+    ts::NoteRenderer renderer{rom};
+    const ts::PatchDirectory& directory = renderer.directory();
+    const ts::EnvelopeMachine envelope{renderer.tables()};
+    const ts::PitchChain pitch{renderer.tables(), envelope};
+
+    const auto tone_map = static_cast<ts::ToneMap>(map);
+    const int tone_number = directory.program_to_tone(program, tone_map, /*bank=*/0);
+    const ts::ResolvedTone resolved = directory.resolve(tone_number, note, velocity);
+
+    std::cout << "program " << program << " note " << note << " velocity " << velocity
+              << " map " << map << " -> tone " << tone_number << " \"" << resolved.name << "\"\n";
+
+    for (const ts::ResolvedPartial& sounding : resolved.partials) {
+        const ts::PartialParameters partial =
+            directory.partial_by_slot(tone_number, sounding.partial_index);
+        const ts::WaveDescriptor& descriptor = sounding.descriptor;
+
+        const int key_center = partial.key_center();
+        const int base = pitch.base_pitch_milli_semitones(partial, note, key_center);
+        const double native = descriptor.native_milli_semitones();
+        const double first_only =
+            (descriptor.root_key * 1000.0) + 1024.0 - descriptor.fine_tune;
+        const double ratio = std::pow(2.0, (base - native) / 12000.0);
+        const double ratio_first = std::pow(2.0, (base - first_only) / 12000.0);
+
+        std::cout << "  partial " << sounding.partial_index << ": wave " << sounding.wave
+                  << ", loop " << descriptor.loop << '\n'
+                  << "    root_key      " << descriptor.root_key << '\n'
+                  << "    fine_tune     " << descriptor.fine_tune << '\n'
+                  << "    second_fine   " << descriptor.second_fine_tune << '\n'
+                  << "    key_center    " << key_center << '\n'
+                  << "    coarse tune   " << partial.coarse_tune_milli_semitones() << '\n'
+                  << "    kf byte 0x13  " << partial.pitch_key_follow() << " (row "
+                  << std::clamp((partial.pitch_key_follow() - 0x40) >> 2, 0, 7) << ")\n"
+                  << "    base_pitch    " << base << '\n'
+                  << "    native        " << native << "   (voice+0x200, both fine tunes)\n"
+                  << "    native_1fc    " << first_only << "   (voice+0x1fc, first fine only)\n"
+                  << "    ratio         " << std::setprecision(10) << ratio << '\n'
+                  << "    ratio_1fc     " << ratio_first << std::setprecision(6) << '\n';
+    }
     return 0;
 }
 
@@ -548,6 +608,14 @@ int main(int argc, char** argv)
     dump_effect->add_option("samples", effect_samples, "How many samples to render")->required();
     dump_effect->add_option("output", output_file, "Output .f32 path")->required();
 
+    CLI::App* pitch = app.add_subcommand(
+        "pitch", "Print the pitch chain for one note, term by term, without rendering.");
+    add_dll(pitch);
+    pitch->add_option("program", program, "Program number, 0-127")->required();
+    pitch->add_option("note", note, "MIDI note, 0-127")->required();
+    pitch->add_option("velocity", velocity, "MIDI velocity, 1-127")->required();
+    pitch->add_option("map", map, "Tone map, 1-4")->required();
+
     int iterations = 3;
     CLI::App* bench = app.add_subcommand("bench", "Time the render path stage by stage.");
     add_dll(bench);
@@ -602,6 +670,9 @@ int main(int argc, char** argv)
         if (render_note->parsed()) {
             return render_note_command(
                 dll, program, note, velocity, hold_seconds, output_file, map);
+        }
+        if (pitch->parsed()) {
+            return pitch_command(dll, program, note, velocity, map);
         }
     } catch (const ts::RomIdentityError& error) {
         std::cerr << "tabula-sonora: " << error.what() << '\n';

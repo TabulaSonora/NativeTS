@@ -169,7 +169,10 @@ int PitchChain::base_pitch_milli_semitones(const PartialParameters& partial,
     const KeyFollow follow = key_follow_key(partial, note, key_center);
     const int key = std::clamp(follow.key, 0, 0x7F);
 
-    const int row = std::clamp((raw[0x13] - 0x40) >> 2, 0, 7);
+    // Four rows, not eight: `g_kf_pitch` is 1024 bytes and `g_kf_pitchrate0` begins where a fifth
+    // row would. No partial in the ROM selects past row 3, so the wider clamp never fired, but it
+    // could only ever have read the neighbouring table.
+    const int row = std::clamp((raw[0x13] - 0x40) >> 2, 0, 3);
     return (key * 1000) + follow.weight + key_follow_[static_cast<std::size_t>((row * 0x80) + key)]
            + ((raw[0x11] - 0x40) * 10);
 }
