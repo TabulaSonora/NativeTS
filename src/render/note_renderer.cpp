@@ -433,7 +433,7 @@ NoteRenderer::Impl::render_partial(int tone_number,
         // Drums take a different pitch route: the note does not transpose the sample. The kit's
         // coarse-pitch plane supplies the key instead, and the tone's own key-follow decides what a
         // step of it is worth. There is no absolute-pitch accumulator to clamp on this path.
-        const double native = (descriptor.root_key * 1000.0) + 1024.0 - descriptor.fine_tune;
+        const double native = descriptor.native_milli_semitones();
         const double base_ratio =
             std::pow(2.0,
                      (PitchChain::drum_pitch_milli_semitones(partial, *drum_coarse_pitch) - native)
@@ -461,7 +461,7 @@ NoteRenderer::Impl::render_partial(int tone_number,
         // then taken as a ratio against the sample's own root.
         const auto base_pitch = static_cast<double>(
             pitch.base_pitch_milli_semitones(partial, note, partial.key_center()));
-        const double native = (descriptor.root_key * 1000.0) + 1024.0 - descriptor.fine_tune;
+        const double native = descriptor.native_milli_semitones();
 
         // Memoised on the exact input. Both modulation terms come from expand(), so they hold one
         // value across each control block; only bend moves per sample, and it is absent on a note

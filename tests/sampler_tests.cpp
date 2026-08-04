@@ -88,6 +88,8 @@ TEST_CASE("a descriptor unpacks its 20-bit position fields", "[sampler]")
     record[0x0B] = 0x0F;
     record[0x0C] = 0xED;
     record[0x0D] = 0xCB; // start = 0xFEDCB
+    record[0x0E] = 0x00;
+    record[0x0F] = 0x04; // second fine tune = 1024, the neutral 80% of the ROM carries
 
     const WaveDescriptor descriptor = WaveDescriptor::parse(record);
 
@@ -101,8 +103,20 @@ TEST_CASE("a descriptor unpacks its 20-bit position fields", "[sampler]")
     CHECK(descriptor.reverse());
     CHECK(descriptor.ping_pong());
 
+    CHECK(descriptor.second_fine_tune == 1024);
+
     // Fine tune 1024 is exactly the root key; the offset is (1024 - fineTune) / 1000.
     CHECK_THAT(descriptor.native_pitch(), WithinAbs(60.0, 1e-12));
+
+    // The second fine tune tunes off that result, not off the root: the module's `voice+0x200`
+    // is `voice+0x1fc - desc[0x0e] + 0x400`. 704 is the value the alto sax's top zone carries,
+    // and 320 milli-semitones is what ignoring it cost -- a third of a semitone, audible.
+    record[0x0E] = 0xC0;
+    record[0x0F] = 0x02; // 704
+    const WaveDescriptor detuned = WaveDescriptor::parse(record);
+    CHECK(detuned.second_fine_tune == 704);
+    CHECK_THAT(detuned.native_milli_semitones(), WithinAbs(60320.0, 1e-9));
+    CHECK_THAT(detuned.native_pitch(), WithinAbs(60.320, 1e-12));
 }
 
 TEST_CASE("bit 1 of the flag byte takes no part in the dispatch", "[sampler]")

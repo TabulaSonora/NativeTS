@@ -369,7 +369,7 @@ double PitchChain::ratio(const PartialParameters& /*partial*/,
                          const WaveDescriptor& descriptor,
                          double pitch_milli_semitones) noexcept
 {
-    const double native = (descriptor.root_key * 1000.0) + 1024.0 - descriptor.fine_tune;
+    const double native = descriptor.native_milli_semitones();
     return std::pow(2.0, (pitch_milli_semitones - native) / 12000.0);
 }
 

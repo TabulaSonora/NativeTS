@@ -2126,8 +2126,7 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
 
         // The note does not transpose the sample: the kit's coarse-pitch plane supplies the key,
         // and the tone's own key-follow decides what a step of it is worth.
-        const double native =
-            (sounding.descriptor.root_key * 1000.0) + 1024.0 - sounding.descriptor.fine_tune;
+        const double native = sounding.descriptor.native_milli_semitones();
 
         VoiceSetup setup;
         setup.channel = channel;

@@ -53,7 +53,7 @@ void PartialVoice::start(VoiceSetup&& setup)
         drum_base_ratio_ = setup.drum_base_ratio;
     } else {
         base_pitch_ = setup.base_pitch;
-        native_pitch_ = (setup.descriptor.root_key * 1000.0) + 1024.0 - setup.descriptor.fine_tune;
+        native_pitch_ = setup.descriptor.native_milli_semitones();
     }
 
     pitch_modulation_ = 0.0;

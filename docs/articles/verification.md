@@ -646,29 +646,58 @@ the **median spread within a wave is 3.4 milli-semitones** — a third of a cent
 own constant offset, and it is a function of neither `root_key` nor `fine_tune`: waves sharing a
 `fine_tune` disagree, and root 60 alone spans −9 to +47.
 
-That pointed at the eight descriptor bytes this port never reads — `0x0E` to `0x15` — two of which
+That pointed at the eight descriptor bytes this port did not read — `0x0E` to `0x15` — two of which
 form a second 16-bit field whose most common value is `0x0400`, the same neutral 1024 as
-`fine_tune`, on 3,814 of 4,259 records.
+`fine_tune`, on 3,415 of 4,259 records. **That was the right place to look**, and the rest of this
+section is the record of it being dismissed and then confirmed.
 
-**That lead is dead, and the DLL's own code says so.** `partial_compute_pitch @ 18005fc20` computes
-*two* native pitches:
+`partial_compute_pitch @ 18005fc20` computes *two* native pitches:
 
 ```c
-voice+0x1fc = root*1000 - fine + 0x400                       // what this port implements
+voice+0x1fc = root*1000 - fine + 0x400                       // what this port implemented
 voice+0x200 = (voice+0x1fc) - *(ushort *)(desc + 0x0e) + 0x400
 ```
 
-So the second field is real and is exactly a second fine tune — but `voice+0x200` is **written and
-never read anywhere in the binary**, while `voice+0x1fc` is what `voice_pitch_keyfollow` subtracts
-to form the exponent. This port's `native` is character-for-character the module's, and the missing
-term is not in the descriptor.
+**This section used to conclude that lead was dead**, on the grounds that `voice+0x200` is *written
+and never read anywhere in the binary* while `voice+0x1fc` is what `voice_pitch_keyfollow`
+subtracts. **That conclusion was wrong, and a measurement overturned it.** A static read of where a
+field is consumed is weaker evidence than the pitch coming out of the speakers, and this is the
+case that proves it: the second fine tune *is* the missing term.
 
-\warning **The cause is still unknown.** Reading the real pitch routine has ruled out the formula
-itself, the second fine tune, and the jitter (below), and the base chain was already measured to
-agree within 5 milli-semitones. The spec's note says why nobody had pinned it down: it records this
-formula as *"verified to ~0.5%"*, and half a percent is 8.6 cents, the exact range of what is left.
+### The second fine tune, measured {#the-second-fine-tune}
 
-Two things worth following from that routine, neither of them the sharpness.
+What exposed it was a listener's report that the alto sax "goes out of whack above C4" — a
+key-dependent complaint that the sweep above cannot see, because it samples three C's an octave
+apart and a multisample zone boundary falls between them. Walking `Alto Sax` chromatically from C3
+to E6 on the SC-55 map, against the module's render of the same notes, gives a **staircase**: flat
+inside each zone and jumping at every boundary, while the module holds within ±8 cents across the
+whole keyboard.
+
+| zone record | `desc[0x0e]` | predicted `−(w − 1024)` | measured, milli-semitones |
+|---|---|---|---|
+| 3423 | 989 | +35 | +57 … +66 |
+| 3424 | 944 | +80 | +72 … +107 |
+| 3425 | 774 | +250 | +262 … +291 |
+| 3426 | 704 | **+320** | **+296 … +343** |
+| 3427 | 968 | +56 | +38 … +90 |
+
+The term tracks the error across a 320 milli-semitone range and seven consecutive zones of one
+patch. At C5–F5 ignoring it cost **a third of a semitone**, which is the audible defect; the
+engine's worst error on that sweep fell from **+34.33 cents to +4.29** when `native` became
+`voice+0x200`. It is neutral on 3,415 of 4,259 records — 80% — which is why an engine ignoring it
+still sounded nearly right everywhere the note sweep happened to look, and why the median moved so
+little that no aggregate caught it.
+
+\warning **It is not the whole mechanism.** Across the 82 single-partial cases of the note sweep the
+mean absolute error improves from 4.22 to 3.77 cents, but 21 cases improve and 12 get *worse*, and
+the median does not move. Multi-partial cases come out worse on average — shifting one of two
+near-unison partials changes how they beat, which the fundamental estimator reads as a tuning
+change — and one note-gate case, `program 99 note 48 map 1`, moved out of tolerance on band level
+rather than pitch. Something else interacts with this term, and the residual sharpness above is
+still unexplained. What is settled is that the descriptor field is real, is consumed, and is worth
+hundreds of milli-semitones on the records that carry it.
+
+Two further things worth following from that routine, neither of them the residual sharpness.
 
 It selects the key-follow row as *row 2 when the partial node's `+0x169` is zero, otherwise
 `+0x168`, skipping the curve entirely when that is zero* — which is not this port's

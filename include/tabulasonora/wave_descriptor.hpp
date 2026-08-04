@@ -27,6 +27,13 @@ struct WaveDescriptor {
     int root_key = 0;
     /// Fine-tune word; native pitch is `root_key + (1024 - fine_tune) / 1000`.
     int fine_tune = 0;
+    /// Second fine-tune word, at descriptor `0x0E`, neutral at 1024 like the first.
+    ///
+    /// `partial_compute_pitch @ 18005fc20` computes two native pitches, the second being
+    /// `voice+0x200 = voice+0x1fc - desc[0x0e] + 0x400`, and it is the second the sampler tunes
+    /// to. It is neutral on most records — which is why an engine ignoring it still sounds nearly
+    /// right — and reaches 320 milli-semitones on the ones where it is not.
+    int second_fine_tune = 1024;
     /// Raw flag byte. Bit 0 is bidirectional, bit 2 is reverse; bit 1 takes no part in the
     /// dispatch.
     int flags = 0;
@@ -40,10 +47,19 @@ struct WaveDescriptor {
     /// True when the sampler plays this wave bidirectionally (ping-pong).
     [[nodiscard]] constexpr bool ping_pong() const noexcept { return (flags & 1) != 0; }
 
-    /// Native pitch in semitones — the effective root, including fine tune.
+    /// Native pitch in semitones — the effective root, including both fine tunes.
     [[nodiscard]] constexpr double native_pitch() const noexcept
     {
-        return root_key + ((1024.0 - fine_tune) / 1000.0);
+        return native_milli_semitones() / 1000.0;
+    }
+
+    /// Native pitch in milli-semitones — what the sampler's ratio is taken against.
+    ///
+    /// This is the module's `voice+0x200`: the first fine tune off the root, then the second one
+    /// off that. Every ratio in this engine divides by this, so the two must not drift apart.
+    [[nodiscard]] constexpr double native_milli_semitones() const noexcept
+    {
+        return (root_key * 1000.0) + 1024.0 - fine_tune - (second_fine_tune - 1024.0);
     }
 
     /// Parses a descriptor from its `stride` raw bytes.
@@ -62,6 +78,7 @@ struct WaveDescriptor {
             .start = start,
             .root_key = record[0x06],
             .fine_tune = record[0x04] | (record[0x05] << 8),
+            .second_fine_tune = record[0x0E] | (record[0x0F] << 8),
             .flags = record[0x0A],
         };
     }
