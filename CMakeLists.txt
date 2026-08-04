@@ -13,15 +13,29 @@ endif()
 # preset spells the path as $env{VCPKG_ROOT}/scripts/..., so an unset VCPKG_ROOT arrives here as a
 # path rooted at /, which is the usual way to end up in that dead end.
 if(DEFINED CMAKE_TOOLCHAIN_FILE AND NOT EXISTS "${CMAKE_TOOLCHAIN_FILE}")
-    if("$ENV{VCPKG_ROOT}" STREQUAL "")
-        set(ts_vcpkg_state "VCPKG_ROOT is not set in the environment")
+    # Say which toolchain, not just which variable. The web presets point at Emscripten's file and
+    # the rest at vcpkg's, and reporting VCPKG_ROOT for a missing Emscripten toolchain sends the
+    # reader to the wrong tool entirely -- which it did.
+    if(CMAKE_TOOLCHAIN_FILE MATCHES "[Ee]mscripten")
+        if("$ENV{EMSDK}" STREQUAL "")
+            # One argument, not four: set() with several strings makes a list, and CMake joins a
+            # list with semicolons when it interpolates one into a message.
+            string(CONCAT ts_toolchain_state
+                "EMSDK is not set. Under an emsdk checkout, source its emsdk_env.sh first. For a "
+                "distribution package EMSDK does not apply -- use the `web-system` preset, or pass "
+                "-DCMAKE_TOOLCHAIN_FILE=<prefix>/cmake/Modules/Platform/Emscripten.cmake yourself")
+        else()
+            set(ts_toolchain_state "EMSDK is '$ENV{EMSDK}'")
+        endif()
+    elseif("$ENV{VCPKG_ROOT}" STREQUAL "")
+        set(ts_toolchain_state "VCPKG_ROOT is not set in the environment")
     else()
-        set(ts_vcpkg_state "VCPKG_ROOT is '$ENV{VCPKG_ROOT}'")
+        set(ts_toolchain_state "VCPKG_ROOT is '$ENV{VCPKG_ROOT}'")
     endif()
 
     message(FATAL_ERROR
         "No toolchain file at '${CMAKE_TOOLCHAIN_FILE}'.\n"
-        "${ts_vcpkg_state}; see the build instructions in README.md.\n"
+        "${ts_toolchain_state}; see the build instructions in README.md.\n"
         "Delete the build directory before retrying -- a configure that fails here leaves a cache "
         "that fails differently next time.")
 endif()

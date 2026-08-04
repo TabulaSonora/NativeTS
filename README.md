@@ -163,7 +163,8 @@ browser WAV export is byte-identical to `tabula-sonora render --stream` of the s
 [the documentation's page on it](https://tabulasonora.github.io/NativeTS/web.html).
 
 ```
-cmake --preset web && cmake --build --preset web    # under the emsdk environment
+cmake --preset web && cmake --build --preset web           # under the emsdk environment
+cmake --preset web-system && cmake --build --preset web-system   # distro emscripten package
 cd web && npm install && npm run build
 ```
 

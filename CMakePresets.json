@@ -108,6 +108,13 @@
       }
     },
     {
+      "name": "web-system",
+      "displayName": "Emscripten web engine (distribution package)",
+      "inherits": "web",
+      "binaryDir": "${sourceDir}/build/web-system",
+      "toolchainFile": "/usr/lib/emscripten/cmake/Modules/Platform/Emscripten.cmake"
+    },
+    {
       "name": "web-debug",
       "displayName": "Emscripten web engine (debug)",
       "inherits": "web",
@@ -136,6 +143,7 @@
     { "name": "player", "configurePreset": "player" },
     { "name": "cog", "configurePreset": "cog" },
     { "name": "web", "configurePreset": "web" },
+    { "name": "web-system", "configurePreset": "web-system" },
     { "name": "web-debug", "configurePreset": "web-debug" },
     { "name": "debug-vs", "configurePreset": "debug-vs", "configuration": "Debug" },
     { "name": "release-vs", "configurePreset": "release-vs", "configuration": "RelWithDebInfo" },
