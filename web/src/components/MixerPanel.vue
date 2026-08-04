@@ -17,7 +17,7 @@
         exactly as it would on the module.
     -->
     <section class="panel enter-rise">
-        <h2>Mixer</h2>
+        <h2>Mixer<span v-if="xgMode" class="mode-badge" title="XG System On, or --map xg">XG</span></h2>
 
         <div class="strips">
             <div v-for="channel in visible" :key="channel"
@@ -108,6 +108,11 @@ const visible = computed<number[]>(() => {
 function part(channel: number): Partial<ChannelSnapshot> {
     return store.channels[channel] ?? {};
 }
+
+// A mode, so it is read live rather than from whatever the engine was configured with. Without it
+// the only sign that a file did *not* switch to XG is that its kit names come out in capitals,
+// which is a true inference and a poor interface.
+const xgMode = computed(() => store.snapshot?.engine?.xgMode === true);
 
 // Asked of the engine, which knows: GS reroutes a part to the drum path over SysEx and XG does it
 // from bank select alone, so the channel number answers neither direction under XG. The channel

@@ -84,7 +84,7 @@ tabula-sonora render song.mid out.wav --map 4
 
 | option | meaning |
 |---|---|
-| `--map 1..4` | SC-55, SC-88, SC-88Pro, SC-8820 — the same program resolves to different tones |
+| `--map 1..4`, `--map xg` | SC-55, SC-88, SC-88Pro, SC-8820 — the same program resolves to different tones. `xg` is not a fifth vintage: it starts the engine in XG mode, below. Names work too (`--map sc88pro`) |
 | `--mute 1,2` / `--solo 5,6` | channels as a mixer labels them, 1–16 |
 | `--tail SEC`, `--end SEC` | release tail, and truncation |
 | `--volume G` | linear gain on the finished mix |
@@ -264,6 +264,74 @@ ts::ToneGenerator engine(notes, { .channels = &channels });
 ```
 
 Writing the result out is ts::wav::write.
+
+## XG
+
+The module speaks a second SysEx dialect, and it is a **mode** rather than a set of extra messages:
+XG System On moves every part onto the XG tone and drum maps, and any Roland message or GM reset
+moves them back. A file that carries `F0 43 10 4C 00 00 7E 00 F7` switches the engine over on its
+own and nothing needs configuring.
+
+Many XG files send no System On at all, because a real XG module is already in XG when it powers on.
+For those, say so:
+
+```
+tabula-sonora render song.mid out.wav --map xg
+```
+
+```cpp
+ts::ToneGenerator engine(notes, { .map = ts::ToneMap::xg });
+```
+
+ts::ToneMap::xg is the switch, rather than a separate flag, because on the module the two are one
+thing. It is a *starting* state: a file may still change mode, and ts::ToneGenerator::reset returns
+to it. Nothing infers XG from the shape of a file's bank selects — a bank LSB of 18 is a legitimate
+GS map selector, so guessing would break the files that mean it.
+
+What changes under XG is worth knowing if you display anything:
+
+- The bank pair is inverted. The **LSB** carries the variation; the MSB chooses melodic, the SFX
+  voice bank (`0x40`), the SFX kits (`0x7E`) or the drum kits (`0x7F`).
+- **Any** channel can be a drum part, chosen by bank select alone. Channel 10 is no longer the
+  answer to "is this drums", in either direction.
+- Every part moves to the XG map at once, so one map for the whole mixer is wrong the moment a file
+  switches.
+
+So the engine answers per part rather than leaving a caller to infer:
+
+```cpp
+if (engine.xg_mode()) { /* the file, or the host, put it here */ }
+
+for (int part = 0; part < engine.parts(); ++part) {
+    if (engine.part_is_drum(part)) {
+        const int kit = engine.part_drum_kit(part);
+        std::cout << notes.drums().kit_name(kit) << '\n';      // "analog kit"
+    } else {
+        const int tone = notes.directory().program_to_tone(
+            engine.part(part).program,
+            engine.part_tone_map(part),        // ToneMap::xg while the mode holds
+            engine.part_lookup_bank(part));    // not part().bank under XG
+        std::cout << notes.directory().tone(tone)->name() << '\n';
+    }
+}
+```
+
+ts::ToneGenerator::part_lookup_bank is the one most easily missed: under XG it is the bank *LSB*,
+except for bank MSB 64, where the module substitutes the SFX voice column. Reading `part().bank`
+instead names a real instrument — the wrong one, silently.
+
+ts::DrumKitTable::kit_name reads the kit's own name out of its ROM record. Three things not to
+assume about the result are documented on it; the shortest is that the casing is the ROM's, and an
+ALL-CAPS kit name on XG-flavoured material means the drum row is *not* following XG.
+
+For a front end that needs to know what an XG address means without acting on it,
+ts::decode_xg_sysex classifies a message and remaps its part number, and ts::decode_xg_multi_part
+turns a Multi Part parameter into the same ts::ControlUpdate vocabulary a Control Change decodes to.
+Part numbers reach `0x3F`; range-check them against ts::ToneGenerator::parts and **ignore** what
+does not fit, rather than masking it into range.
+
+ts::tone_map_choices is the name/value list the command line validates against, if you are building
+one of your own.
 
 ## Holding the engine {#holding-the-engine}
 

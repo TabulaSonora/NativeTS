@@ -233,6 +233,20 @@ header .sec-label {
     margin: 0 0 var(--space-md);
 }
 
+/* A mode the music can turn on and off, so it is a state annotation rather than a heading: purple
+   is the token the palette reserves for exactly that, and it leaves the page's orange marker alone.
+   Only rendered while the mode holds -- an always-present badge reading "GS" would say nothing. */
+.panel > h2 > .mode-badge {
+    display: inline-block;
+    margin-left: var(--space-sm);
+    padding: 0 var(--space-xs);
+    border: 1px solid var(--purple);
+    border-radius: var(--radius-btn);
+    color: var(--purple);
+    letter-spacing: var(--tracking-label);
+    vertical-align: baseline;
+}
+
 .row {
     display: flex;
     flex-wrap: wrap;

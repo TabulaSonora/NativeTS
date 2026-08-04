@@ -179,6 +179,15 @@ share each byte: the sound controller, an NRPN and the part SysEx `40 1x 3x` all
 address in the engine. TVF resonance is deliberately absent from the set. Its byte exists and all
 three handlers write it; nothing in the engine ever reads it.
 
+**Two SysEx dialects.** GS is not the only one. XG System On switches the engine into a mode with
+its own parameter set, its own tone and drum maps, and an inverted bank pair — the variation in the
+LSB, and the MSB selecting melodic, SFX voices, SFX kits or drum kits. Any Roland message or GM
+reset switches back, so a file mixing the two flips the instrument rather than layering them. The
+decode is shared between front ends the way the GS one is (ts::decode_xg_sysex,
+ts::decode_xg_multi_part), and what *changes per part* — its map, its lookup bank, whether it is
+drums, which kit — the engine reports rather than leaving a caller to infer from the channel number,
+because under XG the channel number answers none of it. See the getting-started article.
+
 **The pitch ramp.** ts::PitchRamp is the one that is easy to leave out and audible when you do. The
 engine does not step a voice's pitch once per 10 ms tick: it records the pitch entering the block
 and the pitch leaving it, and glides between them, writing a fresh sampler increment every eight
