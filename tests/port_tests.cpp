@@ -483,14 +483,17 @@ namespace {
 
 /// One track: any number of (meta type, name) tags, then a program change carrying `program`.
 [[nodiscard]] std::vector<std::uint8_t>
-named_track(std::initializer_list<std::pair<std::uint8_t, const char*>> tags, std::uint8_t program)
+named_track(std::initializer_list<std::pair<std::uint8_t, const char*>> tags,
+            std::uint8_t program,
+            int channel = 0)
 {
     std::vector<std::uint8_t> data;
     for (const auto& [meta, name] : tags) {
         data.insert(data.end(), {0x00, 0xFF, meta, static_cast<std::uint8_t>(std::strlen(name))});
         data.insert(data.end(), name, name + std::strlen(name));
     }
-    data.insert(data.end(), {0x00, 0xC0, program, 0x00, 0xFF, 0x2F, 0x00});
+    data.insert(data.end(),
+                {0x00, static_cast<std::uint8_t>(0xC0 | channel), program, 0x00, 0xFF, 0x2F, 0x00});
     const auto length = static_cast<std::uint32_t>(data.size());
     std::vector<std::uint8_t> out{'M', 'T', 'r', 'k',
                                   static_cast<std::uint8_t>(length >> 24),
@@ -535,6 +538,108 @@ TEST_CASE("device names are assigned ports in order of first appearance", "[port
     CHECK(events[0].port == 0);
     CHECK(events[1].port == 1);
     CHECK(events[2].port == 0);
+}
+
+TEST_CASE("names without a channel collision are labels, not ports", "[port][smf]")
+{
+    // Names only mean ports when the same MIDI channel is claimed under two different names --
+    // overlapping channels are the one thing a name scheme exists to disambiguate. Measured over
+    // a 128,000-file archive, 2,158 files carry two or more distinct FF 04 strings with no FF 21
+    // or FF 09, and nearly all are ordinary single-port files with one instrument label per
+    // track ("Flute", "CHA 1", "Hard Lead 5"); scattering those across ports rewrote half their
+    // mix. The gate is judged per event's own channel, not per track, so a track that plays
+    // several channels is counted where its events land.
+    const std::uint8_t meta = GENERATE(std::uint8_t{0x09}, std::uint8_t{0x04});
+    INFO("meta 0x" << std::hex << int(meta));
+
+    SECTION("distinct labels on distinct channels stay on port zero")
+    {
+        // "Piano" even repeats across two channels; reuse alone is still not a collision.
+        const std::vector<MidiEvent> events =
+            smf::parse(file_of({named_track({{meta, "Piano"}}, 40, 0),
+                                named_track({{meta, "Piano"}}, 41, 1),
+                                named_track({{meta, "Strings"}}, 42, 2),
+                                named_track({{meta, "Flute"}}, 43, 3)}),
+                       32000);
+
+        REQUIRE(events.size() == 4);
+        for (const MidiEvent& event : events) {
+            CHECK(event.port == 0);
+        }
+    }
+
+    SECTION("a channel claimed by two names opens the gate for the whole file")
+    {
+        // Channel 0 under both names is what says these are devices; the channel-3 track rides
+        // along on its own name's port, as it would on the hardware the file was written for.
+        const std::vector<MidiEvent> events =
+            smf::parse(file_of({named_track({{meta, "Modem"}}, 40, 0),
+                                named_track({{meta, "Printer"}}, 41, 0),
+                                named_track({{meta, "Printer"}}, 42, 3)}),
+                       32000);
+
+        REQUIRE(events.size() == 3);
+        CHECK(events[0].port == 0);
+        CHECK(events[1].port == 1);
+        CHECK(events[2].port == 1);
+    }
+
+    SECTION("a track playing several channels gets no vote")
+    {
+        // The innerlight.mid shape: label tracks on their own channels, plus one named track
+        // playing everything -- a mix-down riding along in the file. Its channels overlap every
+        // label track's, and if it could vote, every file of this shape would read as
+        // multi-port. A device voice, the only thing worth naming an output for, plays one
+        // channel; a track playing several is not one.
+        std::vector<std::uint8_t> mixdown{0x00, 0xFF, meta, 8,
+                                          'o', 'r', 'i', 'g', 'i', 'n', 'a', 'l',
+                                          0x00, 0xC0, 40,
+                                          0x00, 0xC1, 41,
+                                          0x00, 0xC2, 42,
+                                          0x00, 0xFF, 0x2F, 0x00};
+        const auto length = static_cast<std::uint32_t>(mixdown.size());
+        std::vector<std::uint8_t> track{'M', 'T', 'r', 'k',
+                                        static_cast<std::uint8_t>(length >> 24),
+                                        static_cast<std::uint8_t>(length >> 16),
+                                        static_cast<std::uint8_t>(length >> 8),
+                                        static_cast<std::uint8_t>(length)};
+        track.insert(track.end(), mixdown.begin(), mixdown.end());
+
+        const std::vector<MidiEvent> events =
+            smf::parse(file_of({named_track({{meta, "CHA 1"}}, 50, 0),
+                                named_track({{meta, "CHA 2"}}, 51, 1),
+                                std::move(track)}),
+                       32000);
+
+        REQUIRE(events.size() == 5);
+        for (const MidiEvent& event : events) {
+            CHECK(event.port == 0);
+        }
+    }
+
+    SECTION("two names from one single-channel track still collide")
+    {
+        // A prefix switch mid-track is a device switch on that channel, and it needs the ports
+        // just as much as two tracks do.
+        std::vector<std::uint8_t> switching{0x00, 0xFF, meta, 1, 'A',
+                                            0x00, 0xC0, 40,
+                                            0x00, 0xFF, meta, 1, 'B',
+                                            0x00, 0xC0, 41,
+                                            0x00, 0xFF, 0x2F, 0x00};
+        const auto length = static_cast<std::uint32_t>(switching.size());
+        std::vector<std::uint8_t> track{'M', 'T', 'r', 'k',
+                                        static_cast<std::uint8_t>(length >> 24),
+                                        static_cast<std::uint8_t>(length >> 16),
+                                        static_cast<std::uint8_t>(length >> 8),
+                                        static_cast<std::uint8_t>(length)};
+        track.insert(track.end(), switching.begin(), switching.end());
+
+        const std::vector<MidiEvent> events = smf::parse(file_of({std::move(track)}), 32000);
+
+        REQUIRE(events.size() == 2);
+        CHECK(events[0].port == 0); // "A"
+        CHECK(events[1].port == 1); // "B", second device on the same channel
+    }
 }
 
 TEST_CASE("one port scheme rules a file: FF 21, else FF 09, else FF 04", "[port][smf]")

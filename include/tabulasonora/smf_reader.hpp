@@ -38,9 +38,14 @@ struct MidiEvent {
     /// it — names an output instead. One scheme applies per file, preferred in that order: any
     /// `FF 21` anywhere means the numbers rule and the names are ignored, else `FF 09` names,
     /// else `FF 04` names. Names are assigned numbers in order of first appearance, deduplicated
-    /// by the string exactly as stored. Untagged files are all port 0, which is what they have
-    /// always been. The engine masks this to the ports it was created with, so a file asking for
-    /// port 3 on a two-port engine folds onto port 1 rather than being dropped.
+    /// by the string exactly as stored — but a name scheme only applies at all when some MIDI
+    /// channel is claimed under more than one distinct name, and only tracks that play exactly
+    /// one channel get a vote: a named track spanning several channels is a mix-down riding
+    /// along, not a device voice. That collision is the one thing sixteen channels cannot
+    /// express alone; without it the names are instrument labels,
+    /// and the file is the single-port file it looks like. Untagged files are all port 0, which
+    /// is what they have always been. The engine masks this to the ports it was created with, so
+    /// a file asking for port 3 on a two-port engine folds onto port 1 rather than being dropped.
     int port = 0;
 
     /// The channel a channel message addresses.

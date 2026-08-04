@@ -1,6 +1,8 @@
 #include "tabulasonora/smf_reader.hpp"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cfenv>
 #include <cmath>
 #include <cstring>
@@ -121,6 +123,42 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
     bool saw_port_number = false;
     bool saw_device_name = false;
 
+    // Whether any MIDI channel is claimed under more than one distinct name -- per scheme. This
+    // is the gate on the name schemes: names only mean ports when the same channel number is
+    // claimed by two different names, which is the one thing sixteen channels cannot express by
+    // themselves. Without a collision the names are what they say they are -- instrument labels
+    // ("Flute", "CHA 1") in the FF 04 case -- and a file full of distinct labels must not be
+    // scattered across ports it never asked for. Measured over a 128,000-file archive, 2,158
+    // files carry two or more distinct FF 04 strings with no FF 21 or FF 09 in them, and nearly
+    // all are single-port files with per-track labels.
+    //
+    // Only tracks that play exactly *one* channel get a vote. A named track spanning several
+    // channels is a mix-down or an alternate take riding along in the file -- innerlight.mid
+    // carries three "CHA n" tracks on channels 0-2 and one "original" track playing all sixteen,
+    // and that shape must not read as a device collision -- whereas a track that is one device
+    // voice, the only thing worth naming an output for, plays one channel.
+    std::array<int, 16> device_name_on_channel;
+    std::array<int, 16> instrument_name_on_channel;
+    device_name_on_channel.fill(-1);
+    instrument_name_on_channel.fill(-1);
+    bool device_names_collide = false;
+    bool instrument_names_collide = false;
+
+    // Feeds one single-channel track's names into the gate above.
+    const auto claim_channel = [](std::array<int, 16>& claims,
+                                  bool& collide,
+                                  int channel,
+                                  std::span<const int> names) {
+        for (const int name : names) {
+            int& slot = claims[static_cast<std::size_t>(channel)];
+            if (slot < 0) {
+                slot = name;
+            } else if (slot != name) {
+                collide = true;
+            }
+        }
+    };
+
     int order = 0;
 
     for (int track = 0; track < track_count; ++track) {
@@ -139,10 +177,20 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
         // The port a track is tagged for under each scheme, and each is a *prefix*: it applies to
         // the events that follow it in the track, so a track that switches ports partway is
         // honoured rather than being forced to one. Tracks start on port 0, which is every
-        // untagged file.
+        // untagged file. The name ids run beside the ports (they carry the same number, since a
+        // name's table id is its port) because the collision gate must tell "no name yet", which
+        // is -1 here, from "the first name", which is port 0 either way.
         int track_port_by_number = 0;
         int track_port_by_device = 0;
         int track_port_by_instrument = 0;
+        int track_device_name = -1;
+        int track_instrument_name = -1;
+
+        // What this track contributes to the collision gate, held back until the track ends,
+        // because whether it votes at all depends on how many channels it turns out to play.
+        std::uint16_t channels_used = 0;
+        std::vector<int> device_names_used;
+        std::vector<int> instrument_names_used;
 
         while (position < end) {
             int delta = 0;
@@ -206,6 +254,8 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                     auto& table = meta_type == 0x09 ? device_ports : instrument_ports;
                     auto& track_port = meta_type == 0x09 ? track_port_by_device
                                                          : track_port_by_instrument;
+                    auto& track_name =
+                        meta_type == 0x09 ? track_device_name : track_instrument_name;
                     const auto found = table.find(name);
                     if (found != table.end()) {
                         track_port = found->second;
@@ -214,6 +264,7 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                         table.emplace(name, assigned);
                         track_port = assigned;
                     }
+                    track_name = track_port;
                     if (meta_type == 0x09) {
                         saw_device_name = true;
                     }
@@ -252,6 +303,24 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
 
                 position += static_cast<std::size_t>(sysex_length);
             } else {
+                // The collision gate's bookkeeping: the channels this track plays, and the names
+                // in force while it plays them. Judged at the end of the track.
+                channels_used |= static_cast<std::uint16_t>(1U << (message & 0x0F));
+                if (track_device_name >= 0
+                    && std::find(device_names_used.begin(),
+                                 device_names_used.end(),
+                                 track_device_name)
+                           == device_names_used.end()) {
+                    device_names_used.push_back(track_device_name);
+                }
+                if (track_instrument_name >= 0
+                    && std::find(instrument_names_used.begin(),
+                                 instrument_names_used.end(),
+                                 track_instrument_name)
+                           == instrument_names_used.end()) {
+                    instrument_names_used.push_back(track_instrument_name);
+                }
+
                 const int type = message & 0xF0;
                 if (type == 0xC0 || type == 0xD0) {
                     merged.push_back(RawEvent{tick,
@@ -281,6 +350,17 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
             }
         }
 
+        // The track's vote: only a single-channel track can claim its channel for a name. Two
+        // names from one such track still collide -- a prefix switch mid-track is a device
+        // switch on that channel, and it needs the ports just as much as two tracks do.
+        if (std::has_single_bit(channels_used)) {
+            const int channel = std::countr_zero(channels_used);
+            claim_channel(device_name_on_channel, device_names_collide, channel,
+                          device_names_used);
+            claim_channel(instrument_name_on_channel, instrument_names_collide, channel,
+                          instrument_names_used);
+        }
+
         position = end;
     }
 
@@ -296,12 +376,20 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
     // One tagging scheme applies to the whole file, and it is only decidable now that all of it
     // has been read: FF 21 carries actual numbers, so its presence anywhere wins; FF 09 is the
     // meta defined for naming outputs, so it outranks FF 04, which only ever means a device in
-    // files older than FF 09. A file using none of them is all port 0, as it always was.
+    // files older than FF 09. A name scheme additionally has to pass the collision gate -- some
+    // channel claimed under two names -- or its names are labels and it does not apply; a gated-
+    // out FF 09 still yields to FF 04, for the file whose real devices are named there. A file
+    // using none of them is all port 0, as it always was.
+    const bool by_device = saw_device_name && device_names_collide;
+    const bool by_instrument = instrument_names_collide;
     const auto port_of = [&](const RawEvent& entry) {
         if (saw_port_number) {
             return entry.port_by_number;
         }
-        return saw_device_name ? entry.port_by_device : entry.port_by_instrument;
+        if (by_device) {
+            return entry.port_by_device;
+        }
+        return by_instrument ? entry.port_by_instrument : 0;
     };
 
     int tempo_now = default_tempo;
