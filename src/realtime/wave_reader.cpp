@@ -25,7 +25,10 @@ void WaveReader::start(const DecodedWave& wave)
         path_index_ = 0;
         path_leg_ = 0;
         path_ended_ = false;
-        predictor_ = 0;
+        // From the preamble seed, not zero: the decoder's predictor enters the data start
+        // carrying the block-boundary preamble's integral, and an unaligned wave rides it as a
+        // constant -- the crash's -0.041015625, measured against the module's own trace.
+        predictor_ = wave.seed;
     }
 }
 

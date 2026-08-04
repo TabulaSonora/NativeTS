@@ -14,6 +14,16 @@ struct WaveStreams {
     /// One signed byte per sample, `sample_count + 1` long — the ping-pong sampler turns around
     /// *on* index `sample_count`, so that extra step is read.
     std::vector<std::uint8_t> delta;
+    /// The deltas between the 32-sample exponent-block boundary and the data start —
+    /// `scale_phase` of them, empty for an aligned wave.
+    ///
+    /// The engine's decoder does not begin at the data start: its predictor is zero at the block
+    /// boundary *below* it, and these deltas are integrated in on the way. Their sum rides under
+    /// every sample of the wave as a constant — measured live, `Crash Cym.1`'s eleven preamble
+    /// deltas sum to exactly −0.041015625, and subtracting the module's predictor trace from this
+    /// engine's decode of the same wave leaves precisely that constant at correlation 1.0. This
+    /// is the in-signal DC the verification article documents on the crashes and the sine kick.
+    std::vector<std::uint8_t> preamble_delta;
     /// Shift-exponent nibbles: byte `i >> 5` holds the exponents for samples `i`, with the low
     /// nibble used when `(i >> 4) & 1` is zero and the high nibble otherwise.
     std::vector<std::uint8_t> scale;

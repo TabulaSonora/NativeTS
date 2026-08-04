@@ -188,6 +188,44 @@ TEST_CASE("the predictor stream matches an independent decoder", "[sampler][scco
     CHECK(samples > 1'000'000);
 }
 
+TEST_CASE("an unaligned wave rides its preamble sum as a constant", "[sampler][sccore]")
+{
+    // The engine's decoder zeroes its predictor at the 32-sample exponent-block boundary below
+    // the data start, not at the data start, and integrates the preamble deltas in on the way.
+    // The sum rides under every sample of the wave -- the "module has DC" of the verification
+    // article, and the whole audible body of transcendental.mid's pitch-bent sine kick.
+    //
+    // `Crash Cym.1`'s wave is the case measured live: region 4, data start 370059 (eleven
+    // preamble deltas), and subtracting a start-at-zero decode from the module's own predictor
+    // trace leaves exactly -0.041015625 at correlation 1.0. The constant asserted here is the
+    // module's, not this engine's own output re-pinned.
+    Fixture fixture = Fixture::make();
+
+    const WaveDescriptor crash{
+        .region = 4, .loop = 370059, .end = 385475, .start = 399566,
+        .root_key = 60, .fine_tune = 1024, .flags = 0,
+    };
+    const DecodedWave* wave = fixture.sampler().decode(crash);
+    REQUIRE(wave != nullptr);
+    CHECK(wave->seed == -5505024);
+    CHECK_THAT(static_cast<double>(wave->seed) * codec::output_scale,
+               WithinAbs(-0.041015625, 1e-12));
+
+    // The seed is the preamble's integral and nothing else: re-integrating the wave's own steps
+    // from it reproduces the decoded samples exactly.
+    std::int32_t predictor = wave->seed;
+    for (std::size_t i = 0; i < 64; ++i) {
+        predictor = fx::wadd(predictor, wave->steps[i]);
+        REQUIRE(wave->samples[i]
+                == static_cast<float>(static_cast<double>(predictor) * codec::output_scale));
+    }
+
+    // An aligned wave has no preamble and no displacement.
+    const auto aligned = fixture.wave_rom().read_streams(0, 0x1000, 0x2000);
+    REQUIRE(aligned.has_value());
+    CHECK(aligned->preamble_delta.empty());
+}
+
 TEST_CASE("looping is decided by a sustain region, not the loop flag", "[sampler][sccore]")
 {
     // The descriptor's loop flag reads zero for piano, so trusting it makes held notes run out as

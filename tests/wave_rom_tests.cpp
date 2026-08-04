@@ -93,6 +93,7 @@ TEST_CASE("a wave reads its delta and scale streams", "[waverom][sccore]")
     CHECK(streams->data_start == 0x1000);
     CHECK(streams->scale_phase == 0);
     CHECK(streams->sample_count == 0x1000);
+    CHECK(streams->preamble_delta.empty()); // aligned: the decoder's zero is the data start
 
     // One extra delta: the ping-pong sampler applies the step at the turnaround index.
     CHECK(streams->delta.size() == 0x1001);
@@ -108,14 +109,18 @@ TEST_CASE("an unaligned data start is kept, not rounded to a block", "[waverom][
     const WaveRom waves{rom};
 
     // The codec stores no absolute value per block, only differences, so a wave may begin partway
-    // into an exponent block. Decoding carries the phase and indexes the exponents absolutely
-    // rather than rounding the start down, which would begin integrating early and -- with no leak
-    // in the predictor and no DC blocker downstream -- displace the whole wave.
+    // into an exponent block. Decoding carries the phase and indexes the exponents absolutely --
+    // the data start itself is kept, playback begins there. But the *predictor* does not begin
+    // there: the engine zeroes it at the block boundary below and integrates the preamble in,
+    // displacing the whole wave by the preamble's sum. Measured live on the module, that
+    // displacement is real -- `Crash Cym.1` sits exactly -0.041015625 below a start-at-zero
+    // decode, at correlation 1.0 -- so the preamble deltas come back alongside the wave's own.
     const auto streams = waves.read_streams(0, 0x101F, 0x2000);
     REQUIRE(streams.has_value());
     CHECK(streams->data_start == 0x101F);
     CHECK(streams->scale_phase == 0x1F);
     CHECK(streams->sample_count == 0x2000 - 0x101F);
+    CHECK(streams->preamble_delta.size() == 0x1F);
 
     // The scale stream has to cover the phase as well as the samples.
     CHECK(streams->scale.size()

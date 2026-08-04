@@ -35,6 +35,12 @@ std::optional<WaveStreams> WaveRom::read_streams(int region, int loop, int start
     WaveStreams streams;
     streams.delta = rom_->read(delta_offset, static_cast<std::size_t>(delta_length));
     streams.scale = rom_->read(scale_offset, static_cast<std::size_t>(scale_length));
+    if (scale_phase > 0) {
+        // The block-boundary preamble, which seeds the decode -- see the field's own comment.
+        // Its exponents are the same scale byte the phase indexes into, already read above.
+        streams.preamble_delta =
+            rom_->read(base + (loop & ~0x1F), static_cast<std::size_t>(scale_phase));
+    }
     streams.sample_count = sample_count;
     streams.data_start = loop;
     streams.scale_phase = scale_phase;

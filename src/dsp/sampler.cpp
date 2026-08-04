@@ -70,8 +70,23 @@ std::unique_ptr<DecodedWave> Sampler::decode_core(const WaveDescriptor& descript
     // sample instead, which then plays twice per pass; on a short single-cycle loop that is an
     // audible click every period. The Python reference stops one short here and the hardware does
     // not, which is one of the documented places this engine follows the hardware.
+    //
+    // The predictor is NOT zero at the data start. The engine's decoder zeroes it at the 32-sample
+    // exponent-block boundary *below* the start and integrates the preamble deltas in on the way,
+    // so every sample of an unaligned wave rides their sum as a constant. Measured live on the
+    // module: `Crash Cym.1`'s eleven preamble deltas sum to exactly -0.041015625, and its
+    // predictor trace equals this decode plus precisely that constant at correlation 1.0. That
+    // constant is the "module has DC" of the verification article -- the crash rows' missing
+    // floor, and the whole audible body of transcendental.mid's pitch-bent sine kick, whose
+    // zone carries a -0.139 preamble under a 45 Hz lowpass that removes everything else.
     wave->samples.resize(sample_count + 1);
     std::int32_t predictor = 0;
+    for (std::size_t j = 0; j < streams->preamble_delta.size(); ++j) {
+        predictor = fx::wadd(predictor,
+                             codec::step(streams->preamble_delta[j],
+                                         codec::scale_at(streams->scale, static_cast<int>(j))));
+    }
+    wave->seed = predictor;
     for (std::size_t i = 0; i <= sample_count; ++i) {
         predictor = fx::wadd(predictor, wave->steps[i]);
         wave->samples[i] = static_cast<float>(static_cast<double>(predictor) * codec::output_scale);
@@ -227,9 +242,11 @@ std::vector<float> Sampler::build_ping_pong_buffer(const DecodedWave& wave, int 
     // The index is unchanged on a turnaround, so that sample's delta is applied twice; and the
     // predictor keeps accumulating in both directions rather than subtracting, which makes the
     // backward leg the wave inverted and time-reversed. Both turnarounds are continuous by
-    // construction -- there is no seam and no phase jump.
+    // construction -- there is no seam and no phase jump. The integration starts from the same
+    // preamble seed the straight decode carries, or the rebuilt traversal would sit a constant
+    // below the wave it extends.
     std::vector<float> buffer(indices.size());
-    std::int32_t predictor = 0;
+    std::int32_t predictor = wave.seed;
     for (std::size_t i = 0; i < indices.size(); ++i) {
         predictor = fx::wadd(predictor, wave.steps[static_cast<std::size_t>(indices[i])]);
         buffer[i] = static_cast<float>(static_cast<double>(predictor) * codec::output_scale);

@@ -450,7 +450,9 @@ tightened in the same commit.
 
 ### The module has a DC offset, and we do not {#the-module-has-dc}
 
-Chasing the crash turned up something else, which is not fixed and is worth stating precisely.
+Chasing the crash turned up something else, which is worth stating precisely. **Since resolved —
+the cause and the fix are at the end of this section**, and the measurements below are kept as
+the record of how it was cornered.
 
 The module's rendered output carries a **large negative DC offset that scales with the envelope** —
 so it is in the signal, not added downstream. On `Crash Cym.1` the mean is −0.68 of the RMS,
@@ -489,8 +491,20 @@ What differs is the output. At key 39 the patch's lowpass sits at ~45 Hz, so the
 311 Hz is 36 dB down in **both** engines — but the module's render is dominated by a **0 Hz
 component** the filter passes untouched, an envelope-shaped DC transient per hit. That thump *is*
 the kick, and it is the same in-signal DC this section measures on the crashes and `Whistle`,
-reaching audibility through a filter narrow enough to leave nothing else. One cause now stands
-behind the crash rows, the `Whistle` lead, and the loudest surviving song-gate rows.
+reaching audibility through a filter narrow enough to leave nothing else.
+
+**The origin, found and implemented.** The module's decoder does not zero its predictor at a
+wave's data start. It zeroes at the 32-sample exponent-block boundary *below* the start and
+integrates the preamble deltas in on the way, so an unaligned wave rides their sum as a constant
+under every sample. Proved by subtraction: `scdec drumpred` reads the crash voice's live
+predictor, and against a start-at-zero decode of the same wave the difference is **exactly
+−0.041015625 at correlation 1.0** — which is precisely the sum of the crash's eleven preamble
+deltas read from the ROM. The sine-kick zone's nineteen sum to −0.139, the whistle's fourteen to
+zero, which is why each sounded the way it did. The decode now seeds its predictor with that
+integral (`WaveStreams::preamble_delta`, `DecodedWave::seed`, and the realtime ping-pong reader's
+own integrator). Rendered against the module afterwards: the crash's DC tracks it to the fourth
+decimal, the kick probe's envelope follows the module's through the whole gesture, and the two
+songs this chase started from close from **−3.1 dB and −5.6 dB of RMS to +0.12 and −0.05 dB**.
 
 Two more measured leads from the same pass, both unfixed:
 
