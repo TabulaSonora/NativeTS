@@ -33,7 +33,7 @@
                           aria-hidden="true">{{ part(channel).voices || 0 }}</span>
                 </span>
 
-                <span class="sounding" :title="sounding(channel)">{{ sounding(channel) }}</span>
+                <span class="sounding" :title="details(channel)">{{ sounding(channel) }}</span>
 
                 <span class="buttons">
                     <button class="btn btn-secondary btn-tiny"
@@ -203,6 +203,32 @@ function sounding(channel: number): string {
         return strip.name || (strip.kit !== undefined && strip.kit >= 0 ? `kit #${strip.kit}` : '—');
     }
     return strip.name ?? '—';
+}
+
+/**
+ * The tooltip behind a patch name: what a file had to send to land on this sound.
+ *
+ * Bank MSB and the Program Change value as **MIDI numbers them** — zero-based, the byte that is
+ * actually in the file — because the reason to want them is to match a sound heard against the
+ * bytes that selected it, and a display that helpfully added one would defeat exactly that. The
+ * strips are labelled 1–16 because that is how a mixer labels channels; this is the other
+ * convention on purpose, and says which it is.
+ *
+ * A drum part carries its kit number too. The kit is not the program: a program change on a drum
+ * part resolves through the kit table into a record with its own name, which is what the row
+ * shows, so the number behind it would otherwise be unreachable from the interface.
+ */
+function details(channel: number): string {
+    const strip = part(channel);
+    if (strip.program === undefined) {
+        return '';
+    }
+
+    const parts = [`Bank MSB ${strip.bank ?? 0}`, `PC ${strip.program}`];
+    if (isDrums(channel) && strip.kit !== undefined && strip.kit >= 0) {
+        parts.push(`kit ${strip.kit}`);
+    }
+    return `${sounding(channel)} — ${parts.join(' · ')} (as MIDI numbers them, from 0)`;
 }
 
 function allOn() {

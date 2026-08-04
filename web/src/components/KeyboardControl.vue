@@ -8,7 +8,7 @@
         playing dynamics: near the pivot at the top is soft, at the front edge is as hard as the
         panel's ceiling allows.
     -->
-    <div class="keyboard" @pointerleave="releaseAll">
+    <div class="keyboard" :style="width" @pointerleave="releaseAll">
         <button
             v-for="key in keys"
             :key="key.note"
@@ -66,6 +66,24 @@ const keys = computed(() => {
         }
     }
     return list;
+});
+
+/**
+ * The keyboard fills the width it is given, by making one key a fraction of it.
+ *
+ * Every key is positioned off `--key-width` — the white keys' own width, the black keys' 0.6 of
+ * it, and every `left` — so redefining that one property in percent is the whole of it: the
+ * percentages resolve against `.keyboard`, which is the keys' containing block. Nothing here needs
+ * a resize observer, and there is no layout pass in JavaScript to go stale.
+ *
+ * Clamped at both ends. Below about 20px a white key is narrower than a fingertip, and past 56px
+ * the octave stops reading as a keyboard and starts reading as a row of buttons; between them it
+ * tracks the panel. Only the width scales — the heights stay the fixed pixel values `velocityAt`
+ * divides by, so where a pointer lands still means the same thing at every size.
+ */
+const width = computed(() => {
+    const whites = keys.value.filter(key => !key.black).length;
+    return `--key-width: clamp(20px, calc(100% / ${Math.max(1, whites)}), 56px);`;
 });
 
 const held = reactive(new Set<number>());
