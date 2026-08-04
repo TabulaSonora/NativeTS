@@ -220,7 +220,8 @@ struct ToneGenerator::Impl {
     void commit_data_entry_lsb(Part& part, int value);
     void
     gs_part_parameter(int part_index, Part& part, int address, std::span<const std::uint8_t> data);
-    void gs_drum_setup(int port, int parameter, int key, std::span<const std::uint8_t> data);
+    void gs_drum_setup(int port, int map, int parameter, int key,
+                       std::span<const std::uint8_t> data);
     void release_sustained(int channel, Part& part);
     void flush_part_voices(int channel);
 
@@ -761,8 +762,10 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
     }
 
     if (a1 == 0x41 || a1 == 0x51) {
-        // Drum setup: a2 is (map << 4) | parameter, a3 the first key.
-        impl_->gs_drum_setup(block_port, a2 & 0x0F, a3, data);
+        // Drum setup: a2 is (map << 4) | parameter, a3 the first key. The map nibble picks which
+        // of the two per-map setup buffers the module writes -- bit 12 of the address index, so
+        // only its low bit counts -- and parts read the buffer of the map they are assigned to.
+        impl_->gs_drum_setup(block_port, (a2 >> 4) & 1, a2 & 0x0F, a3, data);
         return;
     }
 }
@@ -958,12 +961,17 @@ void ToneGenerator::Impl::gs_part_parameter(int part_index,
 }
 
 void ToneGenerator::Impl::gs_drum_setup(int port,
+                                        int map,
                                         int parameter,
                                         int key,
                                         std::span<const std::uint8_t> data)
 {
     // The engine keeps one drum-setup buffer per map, shared by every part on that map; here the
-    // overrides live on the parts, so the write lands on each of the port's rhythm parts.
+    // overrides live on the parts, so the write lands on each of the port's rhythm parts *on the
+    // addressed map*. That filter is not pedantry: files carry MAP2 setup blocks -- intro-4.mid
+    // writes its entire drum setup there, per-key Rx switches included -- while their rhythm
+    // part sits on the default MAP1, and on the module those writes land in a buffer no part
+    // reads. Applying them anyway silenced the file's kick and snare.
     const int base = (port & (port_count - 1)) * Sequence::channel_count;
     for (int i = 0; i < Sequence::channel_count; ++i) {
         const int index = base + i;
@@ -971,6 +979,10 @@ void ToneGenerator::Impl::gs_drum_setup(int port,
             continue;
         }
         Part& part = parts[static_cast<std::size_t>(index)];
+        // Use-for-rhythm value 2 is MAP2; 1, or the channel-default -1, is MAP1.
+        if ((part.rhythm == 2 ? 1 : 0) != map) {
+            continue;
+        }
 
         for (std::size_t offset = 0; offset < data.size(); ++offset) {
             const int note = key + static_cast<int>(offset);

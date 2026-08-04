@@ -602,6 +602,23 @@ TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
     // Assign group clamps to the engine's 1-4.
     generator.send_sysex(dt1({0x41, 0x03, 40, 7}));
     CHECK(generator.part(9).drum_keys.group(40) == 4);
+
+    // The map nibble is part of the address: a MAP2 write (41 1x) lands in the buffer parts on
+    // MAP2 read, and the default rhythm part is on MAP1, so nothing here may move. intro-4.mid
+    // is the real case -- its whole drum setup, Rx switches included, is written to MAP2 while
+    // its rhythm part never leaves MAP1, and the module plays it as if the block were not there.
+    generator.send_sysex(dt1({0x41, 0x12, 50, 99}));
+    CHECK_FALSE(generator.part(9).drum_keys.level(50).has_value());
+    generator.send_sysex(dt1({0x41, 0x18, 38, 0x00}));
+    generator.send_channel(0x99, 38, 100);
+    CHECK(generator.note_count() == 1); // the MAP2 Rx Note On revocation does not reach MAP1
+
+    // Reassigned to MAP2 (use-for-rhythm = 2), the part hears MAP2 writes instead.
+    generator.send_sysex(dt1({0x40, 0x10, 0x15, 0x02}));
+    generator.send_sysex(dt1({0x41, 0x12, 50, 99}));
+    CHECK(generator.part(9).drum_keys.level(50) == 99);
+    generator.send_sysex(dt1({0x41, 0x02, 51, 98}));
+    CHECK_FALSE(generator.part(9).drum_keys.level(51).has_value()); // and MAP1 writes no longer land
 }
 
 TEST_CASE("a drum key's receive switches govern its whole life", "[stream][sccore]")
