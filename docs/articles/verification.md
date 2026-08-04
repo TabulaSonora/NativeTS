@@ -793,9 +793,14 @@ is zero on 3,900 of the 4,096 partial blocks, so a non-zero `+0x169` would leave
 partial with no curve at all, and no curve measures 16 of 550 exact against row 2's 225 on the same
 cases. The row is 2, always. This port used `clamp((block[0x13] − 0x40) >> 2, 0, 3)`, which lands on
 rows 0, 1 and 3 for 760 of the 4,096 blocks; every case the pitch word can reach carries
-`block[0x13] = 0x4a` and already resolved to 2, so the correction is a no-op on the corpus and on
-all three oracle gates, and it is made because the binary says so rather than because a measurement
-moved.
+`block[0x13] = 0x4a` and already resolved to 2, so the correction is made because the binary says so
+rather than because a measurement moved.
+
+It is **not** silent, though it is close to it. `onestop.mid` renders to a different hash, and
+`shangai.mid`'s song-gate peak deviation moves from 0.0320 to 0.0322 — a hair worse — while every
+other song row is bit-identical and all three gates fail or pass exactly the rows they did before.
+That is what a correction with no measurement behind it looks like: the blocks it touches are ones
+the pitch word cannot reach, so the only honest claim is that the binary reads row 2.
 
 What the pitch word says about the failing note-gate rows is worth having:
 
