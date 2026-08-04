@@ -92,20 +92,26 @@ using namespace ftxui;
 /// so reading it from the UI thread while the render thread renders is safe.
 class ProgramNames {
 public:
-    ProgramNames(const ts::PatchDirectory& directory, ts::ToneMap map)
-        : directory_(&directory), map_(map)
+    ProgramNames(const ts::PatchDirectory& directory, const ts::DrumKitTable& drums)
+        : directory_(&directory), drums_(&drums)
     {
     }
 
-    [[nodiscard]] const std::string& name(int program, int bank)
+    /// Names a melodic part's current program on the map it currently resolves against.
+    ///
+    /// The map is a parameter rather than a constructor argument because it is not fixed: a bank
+    /// LSB names a vintage, and XG System On moves every part onto the XG map mid-song. It is part
+    /// of the cache key for the same reason -- one program and bank name two different instruments
+    /// on two maps, and a cache that ignored the map would show whichever was asked for first.
+    [[nodiscard]] const std::string& name(int program, int bank, int map)
     {
-        const int key = (bank << 8) | program;
+        const int key = (map << 16) | (bank << 8) | program;
         if (const auto found = cache_.find(key); found != cache_.end()) {
             return found->second;
         }
 
         std::string resolved = "--";
-        const int tone = directory_->program_to_tone(program, map_, bank);
+        const int tone = directory_->program_to_tone(program, static_cast<ts::ToneMap>(map), bank);
         if (tone >= 0) {
             if (const std::optional<ts::Tone> record = directory_->tone(tone);
                 record && record->is_defined()) {
@@ -116,9 +122,27 @@ public:
         return cache_.emplace(key, std::move(resolved)).first->second;
     }
 
+    /// Names a drum kit from its record, rather than showing the index.
+    [[nodiscard]] const std::string& kit(int index)
+    {
+        const int key = kit_key_base | index;
+        if (const auto found = cache_.find(key); found != cache_.end()) {
+            return found->second;
+        }
+
+        std::string resolved = index >= 0 ? drums_->kit_name(index) : std::string{};
+        if (resolved.empty()) {
+            resolved = index >= 0 ? "Kit " + std::to_string(index) : "--";
+        }
+        return cache_.emplace(key, std::move(resolved)).first->second;
+    }
+
 private:
+    /// Kits share the cache with programs; this keeps their keys clear of any (map, bank, program).
+    static constexpr int kit_key_base = 1 << 28;
+
     const ts::PatchDirectory* directory_;
-    ts::ToneMap map_;
+    const ts::DrumKitTable* drums_;
     std::map<int, std::string> cache_;
 };
 
@@ -130,7 +154,6 @@ struct Ui {
 
     std::string title;
     std::string subtitle;
-    int drum_channel = 9;
 
     int selected = 0;
 
@@ -271,11 +294,13 @@ struct Ui {
         const int channel = part_index % 16;
         const int port = part_index / 16;
         const ts::player::PartSnapshot& part = state.parts[static_cast<std::size_t>(part_index)];
-        const bool drums = channel == ui.drum_channel;
+        // From the engine, not from the channel number: GS reroutes a part to the drum path over
+        // SysEx and XG does it from bank select, so channel 10 is neither necessary nor sufficient.
+        const bool drums = part.drums;
         const bool audible = soloing ? part.soloed : !part.muted;
 
-        std::string label = drums ? "Drums kit " + std::to_string(state.drum_kit)
-                                  : ui.names->name(part.program, part.bank);
+        std::string label = drums ? ui.names->kit(part.kit)
+                                  : ui.names->name(part.program, part.lookup_bank, part.map);
         label.resize(13, ' ');
 
         std::ostringstream number;
@@ -363,13 +388,12 @@ int run(const std::string& dll,
         std::make_unique<ts::player::StreamingSource>(notes, engine, midi, options.tail_seconds);
 
     ts::player::Playback playback{std::move(streaming), device};
-    ProgramNames names{notes.directory(), options.map};
+    ProgramNames names{notes.directory(), notes.drums()};
 
     Ui ui;
     ui.playback = &playback;
     ui.channels = &channels;
     ui.names = &names;
-    ui.drum_channel = options.drum_channel;
     ui.title = midi.filename().string();
 
     static const char* const map_names[] = {"", "SC-55", "SC-88", "SC-88Pro", "SC-8820"};

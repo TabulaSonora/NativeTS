@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace ts {
@@ -107,6 +108,15 @@ public:
     /// absence rather than a zero.
     [[nodiscard]] std::optional<int> kit_for_program(int program, int row = 0) const noexcept;
 
+    /// The kit's name, as the ROM record carries it, trimmed of trailing spaces.
+    ///
+    /// Twelve bytes at `+0x500` of the record, the same field the module's rhythm-set name dump
+    /// reads. A mixer that shows "kit 73" is showing an index nobody chose; the record has been
+    /// carrying "Analog Kit" all along.
+    ///
+    /// Empty for a kit index outside the table.
+    [[nodiscard]] std::string kit_name(int kit) const;
+
     /// Reads one key's settings from a kit; kit 0 is GM Standard.
     ///
     /// Throws `std::out_of_range` if the note is outside 0–127.
@@ -141,6 +151,9 @@ private:
     // 0x300 reverb depth, 0x380 chorus depth, 0x400 delay depth — per key, and not yet wired.
     /// Receive flags. Bit 0 is `Rx.Note Off`; the byte otherwise reads 0x10 across every kit.
     static constexpr int receive_plane = 0x480;
+    /// Twelve ASCII bytes naming the kit.
+    static constexpr int name_plane = 0x500;
+    static constexpr int name_length = 12;
 
     std::int64_t kit_base_ = 0;
     std::vector<std::uint8_t> bank_row_;

@@ -213,6 +213,32 @@ public:
     /// The drum map row this engine actually resolves against.
     [[nodiscard]] int effective_drum_map_row() const noexcept;
 
+    /// Whether the engine is in XG mode, having seen XG System On and no Roland or GM reset since.
+    [[nodiscard]] bool xg_mode() const noexcept;
+
+    /// Which tone map a part's program change currently resolves against.
+    ///
+    /// Not `ToneGeneratorOptions::map`: a bank select LSB names a vintage, and XG mode overrides
+    /// both and puts every part on the XG map. A display that names programs has to ask per part
+    /// and per moment, because this changes while the music plays.
+    [[nodiscard]] ToneMap part_tone_map(int index) const noexcept;
+
+    /// The bank a part's melodic lookup is given.
+    ///
+    /// Usually `part(i).bank`, but not under XG: the bank pair is inverted there, and bank MSB 64
+    /// substitutes the SFX voice column rather than any variation the part stored.
+    [[nodiscard]] int part_lookup_bank(int index) const noexcept;
+
+    /// Whether a part is currently sounding drums.
+    ///
+    /// The channel number does not answer this. GS routes a part to the drum path with
+    /// use-for-rhythm SysEx, and XG does it from bank select alone, so under XG any part can be
+    /// drums and the drum part can be melodic.
+    [[nodiscard]] bool part_is_drum(int index) const noexcept;
+
+    /// The drum kit a part would sound, or -1 if it is not a drum part.
+    [[nodiscard]] int part_drum_kit(int index) const noexcept;
+
     /// Silences everything and returns every part to its power-on state.
     void reset();
 

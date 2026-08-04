@@ -360,18 +360,36 @@ std::string WebSession::snapshot_json() const
 
         const Part& part = engine_->part(channel);
 
+        // Asked of the engine per part, not taken from `settings_.map`: a bank LSB names a vintage
+        // and XG System On moves every part onto the XG map, so one map for the whole mixer names
+        // the wrong instrument as soon as a file switches mode. Drum routing moves the same way --
+        // XG reaches it from bank select alone, on any channel.
+        const bool drums = engine_->part_is_drum(channel);
+        const int kit = engine_->part_drum_kit(channel);
+
         std::string name = nothing;
         if (notes_) {
-            const auto& directory = notes_->directory();
-            const int tone = directory.program_to_tone(part.program, settings_.map, part.bank);
-            if (auto record = directory.tone(tone); tone >= 0 && record && record->is_defined()) {
-                name = trimmed(record->name());
+            if (drums) {
+                name = trimmed(notes_->drums().kit_name(kit));
+                if (name.empty() && kit >= 0) {
+                    name = "Kit " + std::to_string(kit);
+                }
+            } else {
+                const auto& directory = notes_->directory();
+                const int tone = directory.program_to_tone(
+                    part.program, engine_->part_tone_map(channel), engine_->part_lookup_bank(channel));
+                if (auto record = directory.tone(tone); tone >= 0 && record && record->is_defined()) {
+                    name = trimmed(record->name());
+                }
             }
         }
 
         channels.push_back(json{{"program", part.program},
                                 {"bank", part.bank},
                                 {"name", name},
+                                {"drums", drums},
+                                {"kit", kit},
+                                {"map", static_cast<int>(engine_->part_tone_map(channel))},
                                 {"volume", part.volume()},
                                 {"pan", part.pan},
                                 {"expression", part.expression()},
@@ -386,6 +404,7 @@ std::string WebSession::snapshot_json() const
                         {"activeVoices", engine_ ? engine_->active_voices() : 0},
                         {"noteCount", engine_ ? engine_->note_count() : 0},
                         {"drumKit", engine_ ? engine_->drum_kit() : -1},
+                        {"xgMode", engine_ ? engine_->xg_mode() : false},
                         {"drumKits", drum_kits_json(engine_ ? &*engine_ : nullptr)},
                         {"effectiveDrumMapRow", effective_drum_map_row()},
                         {"songComplete", song_complete()},

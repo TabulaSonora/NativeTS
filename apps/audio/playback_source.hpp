@@ -20,6 +20,26 @@ struct PartSnapshot {
     bool soloed = false;
     /// Whether the file addresses this part at all. A mixer lists these and hides the rest.
     bool present = false;
+
+    /// Whether this part is sounding drums *now*.
+    ///
+    /// Not "is this the drum channel". GS can route any part to the drum path over SysEx and XG
+    /// does it from bank select alone, so a mixer that compares the channel number to a configured
+    /// drum channel mislabels both directions under XG: a melodic part on channel 10, and drums
+    /// anywhere else.
+    bool drums = false;
+
+    /// The kit sounding on a drum part, or -1.
+    int kit = -1;
+
+    /// The tone map this part's program resolves against, as `ToneMap`.
+    ///
+    /// Per part and per moment: a bank LSB names a vintage and XG System On moves every part to the
+    /// XG map, so one map for the whole mixer is wrong as soon as a file changes mode.
+    int map = 0;
+
+    /// The bank the melodic lookup is given, which is not `bank` under XG.
+    int lookup_bank = 0;
 };
 
 /// What the engine was doing when the render thread last looked.

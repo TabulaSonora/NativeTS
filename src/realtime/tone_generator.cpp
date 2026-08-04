@@ -493,6 +493,36 @@ int ToneGenerator::effective_drum_map_row() const noexcept
     return impl_->effective_drum_map_row();
 }
 
+bool ToneGenerator::xg_mode() const noexcept
+{
+    return impl_->xg_mode;
+}
+
+ToneMap ToneGenerator::part_tone_map(int index) const noexcept
+{
+    return impl_->tone_map_for(part(index));
+}
+
+int ToneGenerator::part_lookup_bank(int index) const noexcept
+{
+    return impl_->lookup_bank_for(part(index));
+}
+
+bool ToneGenerator::part_is_drum(int index) const noexcept
+{
+    const int clamped = std::clamp(index, 0, static_cast<int>(impl_->parts.size()) - 1);
+    return impl_->is_drum_part(clamped);
+}
+
+int ToneGenerator::part_drum_kit(int index) const noexcept
+{
+    if (!part_is_drum(index)) {
+        return -1;
+    }
+    const int clamped = std::clamp(index, 0, static_cast<int>(impl_->parts.size()) - 1);
+    return impl_->drum_kit[impl_->kit_slot(clamped)];
+}
+
 void ToneGenerator::reset()
 {
     for (int i = 0; i < static_cast<int>(impl_->slots.size()); ++i) {

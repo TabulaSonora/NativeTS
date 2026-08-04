@@ -1,5 +1,8 @@
 #include "tabulasonora/control_decode.hpp"
 
+#include "tabulasonora/drum_kit_table.hpp"
+#include "tabulasonora/note_renderer.hpp"
+#include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/patch_directory.hpp"
 #include "tabulasonora/table_set.hpp"
 #include "tabulasonora/tone_generator.hpp"
@@ -195,4 +198,83 @@ TEST_CASE("an XG part above the configured count is dropped, not wrapped", "[xg]
 
     // Part 32 does not, at two ports. Folding it would mask to part 0 and silence the note too.
     CHECK(peak_with_volume_aimed_at(0x20) > 0.0);
+}
+
+// What a mixer shows for an XG part.
+//
+// Both UIs used to name programs against one fixed tone map and decide drums by comparing the
+// channel number to a configured drum channel. Neither holds under XG: System On moves every part
+// onto the XG map, the bank pair is inverted, and bank MSB 127 makes a drum part of any channel.
+// The engine now answers all three per part, which is what these pin.
+TEST_CASE("the engine reports per-part map, bank and drum state for a display", "[xg][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    ToneGeneratorOptions options;
+    options.ports = 1;
+    options.map = ToneMap::sc8820; // Deliberately not XG, so the override is what is being seen.
+    ToneGenerator generator{notes, options};
+
+    const auto xg = [&](std::vector<std::uint8_t> bytes) { generator.send_sysex(bytes); };
+
+    CHECK_FALSE(generator.xg_mode());
+    CHECK(generator.part_tone_map(0) == ToneMap::sc8820);
+
+    xg({0xF0, 0x43, 0x10, 0x4C, 0x00, 0x00, 0x7E, 0x00, 0xF7});
+    CHECK(generator.xg_mode());
+
+    // Every part moves to the XG map, whatever the host configured.
+    CHECK(generator.part_tone_map(0) == ToneMap::xg);
+    CHECK(generator.part_tone_map(9) == ToneMap::xg);
+
+    // The bank LSB is the variation and lands in the lookup bank; the MSB does not.
+    generator.send_channel(0xB0, 32, 40);
+    CHECK(generator.part_lookup_bank(0) == 40);
+
+    // Bank MSB 64 substitutes the SFX voice column, which is bank 125 -- where program 90 is
+    // Submarine and not the Polysynth it is at bank 0.
+    generator.send_channel(0xB0, 0, 64);
+    CHECK(generator.part_lookup_bank(0) == 0x7D);
+
+    // Drums from bank select alone, on a channel that is not the drum channel.
+    CHECK_FALSE(generator.part_is_drum(2));
+    generator.send_channel(0xB2, 0, 127);
+    generator.send_channel(0xC2, 25, 0);
+    CHECK(generator.part_is_drum(2));
+
+    const int kit = generator.part_drum_kit(2);
+    REQUIRE(kit >= 0);
+    CHECK(notes.drums().kit_name(kit) == "analog kit");
+
+    // And a kit name is a name, not an index -- what the mixer used to show.
+    CHECK_FALSE(notes.drums().kit_name(kit).empty());
+}
+
+TEST_CASE("XG drum kits are named from their records", "[xg][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    DrumKitTable drums{rom};
+
+    // Row 4 is XG's. The names come out of the kit records rather than a table in this repo.
+    const auto name_of = [&](int program) {
+        const std::optional<int> kit = drums.kit_for_program(program, 4);
+        REQUIRE(kit);
+        return drums.kit_name(*kit);
+    };
+    CHECK(name_of(0) == "standard kit");
+    CHECK(name_of(25) == "analog kit");
+    CHECK(name_of(48) == "classic kit");
+    CHECK(name_of(120) == "SFX 1 kit");
+
+    // The same program on a GS row is a different kit entirely, which is the whole reason the row
+    // has to follow the mode.
+    const std::optional<int> gs = drums.kit_for_program(25, 0);
+    REQUIRE(gs);
+    CHECK(drums.kit_name(*gs) == "TR-808");
+
+    CHECK(drums.kit_name(-1).empty());
+    CHECK(drums.kit_name(100000).empty());
 }

@@ -71,6 +71,20 @@ std::optional<int> DrumKitTable::kit_for_program(int program, int row) const noe
                : std::optional{static_cast<int>(kit_index_[static_cast<std::size_t>(level2)])};
 }
 
+std::string DrumKitTable::kit_name(int kit) const
+{
+    const auto offset = static_cast<std::size_t>(kit) * kit_stride + name_plane;
+    if (kit < 0 || offset + name_length > kits_.size()) {
+        return {};
+    }
+
+    std::string name(reinterpret_cast<const char*>(kits_.data() + offset), name_length);
+    while (!name.empty() && (name.back() == ' ' || name.back() == '\0')) {
+        name.pop_back();
+    }
+    return name;
+}
+
 DrumKey DrumKitTable::key(int note, int kit) const
 {
     if (note < 0 || note >= key_count) {
