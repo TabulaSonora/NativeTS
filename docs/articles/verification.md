@@ -473,6 +473,25 @@ So roughly a third of what those rows call a level error is a DC term this engin
 reproduce. The bounds are left where the measurement puts them — the gate compares what the module
 actually outputs — but the cause is now named.
 
+**The sine kick is the same DC, heard.** `transcendental.mid` builds its drum beat by hand: the
+SC-55 map's `Sine Wave` (bank 8, program 80, bend range 24) struck with a `+24` bend that dives
+four octaves per hit. Soloed against the module, each of its two kick channels renders **3.63 dB
+light** here, and the whole song reads 3 dB light in the song gate. Chasing that as a control-slew
+difference went nowhere for a measured reason: `tvftrace` shows the module's per-voice state at
+this patch is *identical* to this engine's — cutoff units 133916 at key 39 and 171208 at key 60 to
+the unit, pitch-ramp targets exactly ±2 octaves, cutoff unmoved by bend. The per-voice control
+ramps are not a gap either. `voice_set_ramp_target_0` sets `step = ((target − current) × rate) >>
+13` stepped per sample toward a clamp at the target, the divider masks are `{0, 7, 31, 127}` from
+bits 12–13 of the rate word, and the pitch path's rate word is `0x4FFF` — rate 4095, mask 0 —
+which converges in about two samples. The module's bend is as instant as ours.
+
+What differs is the output. At key 39 the patch's lowpass sits at ~45 Hz, so the bent-up sine at
+311 Hz is 36 dB down in **both** engines — but the module's render is dominated by a **0 Hz
+component** the filter passes untouched, an envelope-shaped DC transient per hit. That thump *is*
+the kick, and it is the same in-signal DC this section measures on the crashes and `Whistle`,
+reaching audibility through a filter narrow enough to leave nothing else. One cause now stands
+behind the crash rows, the `Whistle` lead, and the loudest surviving song-gate rows.
+
 Two more measured leads from the same pass, both unfixed:
 
 - **A one-entry offset in the envelope shape**, now corrected. `env_ramp_segment` interpolates from
