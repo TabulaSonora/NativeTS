@@ -14,6 +14,7 @@
 #include <CLI/CLI.hpp>
 
 #include <algorithm>
+#include <optional>
 #include <chrono>
 #include <exception>
 #include <filesystem>
@@ -191,6 +192,13 @@ int pitch_command(const std::string& path, int program, int note, int velocity, 
 
         const int key_center = partial.key_center();
         const int base = pitch.base_pitch_milli_semitones(partial, note, key_center);
+
+        // The settled pitch envelope, which a traced increment carries and `base` does not. A
+        // patch whose envelope sustains away from zero reads as a tuning error against the module
+        // unless this is added in, and it sustains steadily, so no steadiness filter catches it.
+        const std::optional<ts::PitchEnvelope> envelope =
+            pitch.envelope_offsets(partial, note, velocity);
+        const int sustain = envelope ? envelope->targets.back() : 0;
         const double native = descriptor.native_milli_semitones();
         const double first_only =
             (descriptor.root_key * 1000.0) + 1024.0 - descriptor.fine_tune;
@@ -207,6 +215,8 @@ int pitch_command(const std::string& path, int program, int note, int velocity, 
                   << "    kf byte 0x13  " << partial.pitch_key_follow() << " (row "
                   << std::clamp((partial.pitch_key_follow() - 0x40) >> 2, 0, 7) << ")\n"
                   << "    base_pitch    " << base << '\n'
+                  << "    pitch_sustain " << sustain << '\n'
+                  << "    base_settled  " << (base + sustain) << '\n'
                   << "    native        " << native << "   (voice+0x200, both fine tunes)\n"
                   << "    native_1fc    " << first_only << "   (voice+0x1fc, first fine only)\n"
                   << "    ratio         " << std::setprecision(10) << ratio << '\n'

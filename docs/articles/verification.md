@@ -660,9 +660,9 @@ voice+0x200 = (voice+0x1fc) - *(ushort *)(desc + 0x0e) + 0x400
 
 **This section used to conclude that lead was dead**, on the grounds that `voice+0x200` is *written
 and never read anywhere in the binary* while `voice+0x1fc` is what `voice_pitch_keyfollow`
-subtracts. **That conclusion was wrong, and a measurement overturned it.** A static read of where a
-field is consumed is weaker evidence than the pitch coming out of the speakers, and this is the
-case that proves it: the second fine tune *is* the missing term.
+subtracts. The decompilation is right about that — `voice+0x200` is written once at
+`18005fc20` and read nowhere, three occurrences in the whole listing and two of them on unrelated
+pointers. **But the field is not inert, and where it is consumed is still unknown.**
 
 ### The second fine tune, measured {#the-second-fine-tune}
 
@@ -688,14 +688,35 @@ engine's worst error on that sweep fell from **+34.33 cents to +4.29** when `nat
 still sounded nearly right everywhere the note sweep happened to look, and why the median moved so
 little that no aggregate caught it.
 
-\warning **It is not the whole mechanism.** Across the 82 single-partial cases of the note sweep the
-mean absolute error improves from 4.22 to 3.77 cents, but 21 cases improve and 12 get *worse*, and
-the median does not move. Multi-partial cases come out worse on average — shifting one of two
-near-unison partials changes how they beat, which the fundamental estimator reads as a tuning
-change — and one note-gate case, `program 99 note 48 map 1`, moved out of tolerance on band level
-rather than pitch. Something else interacts with this term, and the residual sharpness above is
-still unexplained. What is settled is that the descriptor field is real, is consumed, and is worth
-hundreds of milli-semitones on the records that carry it.
+### The term is conditional, and the condition is the open question {#the-second-fine-tune-is-conditional}
+
+Audio estimation cannot settle what is left, so `tabula-sonora pitch` prints the chain term by term
+and `scdec postrace` reads the module's own sampler increment as an integer in 16.16. Ratio against
+ratio resolves a thousandth of a cent where estimating a fundamental resolves a few. Measured that
+way, on cases whose traced increment is constant so that the two sides are the same quantity:
+
+| | median | mean | worst |
+|---|---|---|---|
+| `Alto Sax` across its zones, **with** the term | — | — | 5 of 6 non-neutral zones closer |
+| the 28-case corpus, **with** the term | 2.03 | 2.37 | 14.29 |
+| the 28-case corpus, **without** it | **1.14** | **1.74** | **4.66** |
+
+Both measurements are sound and they disagree, which is itself the finding: **the module applies
+this term for some patches and not others.** `Alto Sax` and `Piano 1` want it; `Vibraphone`,
+`Nylon Gt.` and `Trumpet` are further from the module with it than without. Applied
+unconditionally — which is what this engine currently does — it is right where a listener first
+noticed it wrong and wrong elsewhere, and the corpus median prefers it off.
+
+\warning **What gates it is not known.** Nor is a second effect the same instrument turned up: at
+`Alto Sax` notes 48 and 50 — the same zone, the same wave, the same partial, and a neutral second
+fine tune on both — the engine is +4.69 and +0.78 cents off. Four cents of disagreement between two
+notes a tone apart cannot come from the native pitch, so a key-dependent term is wrong as well, and
+the key-follow curve and the `voice+0x16a` weight are where it must live.
+
+\note One candidate died here and is recorded so it is not rediscovered: the partial block's signed
+16-bit at `+0x16` reproduces `Alto Sax` at key 41 *exactly* — base 40928 against the module's
+implied 40928 — and makes 13 of 13 non-zero cases worse across the corpus. It was a term fitted to
+a single data point, which is what one data point is always able to do.
 
 Two further things worth following from that routine, neither of them the residual sharpness.
 
