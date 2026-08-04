@@ -100,11 +100,6 @@ struct RenderOptions {
     /// Per-channel mute and solo, or nothing for everything audible.
     const ChannelMask* channels = nullptr;
 
-    /// How long a drum hit rings before its release is spliced in.
-    double drum_ring_seconds = 1.8;
-
-    /// Extra time past a drum's ring.
-    double drum_tail_seconds = 0.4;
 };
 
 /// A finished render.

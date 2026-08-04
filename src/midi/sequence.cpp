@@ -65,6 +65,8 @@ void DrumKeyOverrides::reset() noexcept
     reverb_.fill(-1);
     chorus_.fill(-1);
     delay_.fill(-1);
+    rx_note_off_.fill(-1);
+    rx_note_on_.fill(-1);
     any_ = false;
 }
 
@@ -121,6 +123,16 @@ void DrumKeyOverrides::set_delay(int note, int entry) noexcept
     set_plane(delay_, note, entry, any_);
 }
 
+void DrumKeyOverrides::set_rx_note_off(int note, bool on) noexcept
+{
+    set_plane(rx_note_off_, note, on ? 1 : 0, any_);
+}
+
+void DrumKeyOverrides::set_rx_note_on(int note, bool on) noexcept
+{
+    set_plane(rx_note_on_, note, on ? 1 : 0, any_);
+}
+
 std::optional<int> DrumKeyOverrides::play_key(int note) const noexcept
 {
     return read_plane(play_key_, note);
@@ -134,6 +146,18 @@ std::optional<int> DrumKeyOverrides::level(int note) const noexcept
 std::optional<int> DrumKeyOverrides::group(int note) const noexcept
 {
     return read_plane(group_, note);
+}
+
+std::optional<bool> DrumKeyOverrides::rx_note_off(int note) const noexcept
+{
+    const std::optional<int> entry = read_plane(rx_note_off_, note);
+    return entry ? std::optional{*entry != 0} : std::nullopt;
+}
+
+std::optional<bool> DrumKeyOverrides::rx_note_on(int note) const noexcept
+{
+    const std::optional<int> entry = read_plane(rx_note_on_, note);
+    return entry ? std::optional{*entry != 0} : std::nullopt;
 }
 
 void DrumKeyOverrides::set_pitch(int note, int entry) noexcept

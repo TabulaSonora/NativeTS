@@ -354,7 +354,6 @@ int run(const std::string& dll,
     engine.reverb = options.reverb;
     engine.chorus = options.chorus;
     engine.delay = options.delay;
-    engine.drum_ring_seconds = options.drum_ring_seconds;
 
     // Always attached, unlike the offline path's optional mask: the mixer has to be able to mute a
     // channel that started out audible, and the engine reads this pointer live.

@@ -61,11 +61,6 @@ struct VoiceSetup {
 
     /// Sample at which a voice is force-released, or -1 to let its envelope decide.
     ///
-    /// A backstop, not a model. The module has no such timer: a drum voice runs its amplitude
-    /// envelope and is freed when that reaches silence. This exists only for the case the envelope
-    /// cannot end on its own — a last segment whose target is above zero holds forever — where
-    /// without it the voice would never be reclaimed.
-    std::int64_t auto_release_samples = -1;
     /// Samples the envelope machine stays held at its note-on state.
     std::int64_t envelope_hold_samples = 0;
     /// Whether this tone responds to a half-pressed damper.
@@ -224,7 +219,6 @@ private:
     std::int64_t sample_ = 0;
     std::int64_t note_off_ = -1;
     std::int64_t choke_at_ = -1;
-    std::int64_t auto_release_ = -1;
     std::int64_t control_tick_ = 0;
     std::int64_t hold_samples_ = 0;
     bool half_damper_ = false;

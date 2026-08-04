@@ -130,7 +130,6 @@ int play(const std::string& dll,
         engine_options.reverb_type = options.reverb_type;
         engine_options.chorus_type = options.chorus_type;
         engine_options.delay_type = options.delay_type;
-        engine_options.drum_ring_seconds = options.drum_ring_seconds;
         engine_options.output_gain = options.output_gain;
         engine_options.polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
 
@@ -163,7 +162,6 @@ int play(const std::string& dll,
         engine.reverb = options.reverb;
         engine.chorus = options.chorus;
         engine.delay = options.delay;
-        engine.drum_ring_seconds = options.drum_ring_seconds;
         engine.channels = options.channels;
 
         auto streaming = std::make_unique<ts::player::StreamingSource>(

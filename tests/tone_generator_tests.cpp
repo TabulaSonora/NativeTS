@@ -604,6 +604,75 @@ TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
     CHECK(generator.part(9).drum_keys.group(40) == 4);
 }
 
+TEST_CASE("a drum key's receive switches govern its whole life", "[stream][sccore]")
+{
+    // No timer bounds a drum voice. The kit record says, per key, whether it answers note-off
+    // (bit 0 of the receive plane) and note-on (bit 4), drum-setup SysEx rewrites both live
+    // (`drum_setup_rx_noteoff` / `drum_setup_rx_noteon`, parameters 07 and 08), and everything
+    // else is the envelope's own business. Key 25 of the Standard kit is the snare roll -- the
+    // kit's one Rx Note Off key, a looping wave whose envelope sustains until the file lets go.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    std::vector<float> left(ToneGenerator::block_size);
+    std::vector<float> right(ToneGenerator::block_size);
+    const auto render_seconds = [&](double seconds, bool stop_when_silent = false) {
+        const auto blocks = static_cast<int>(seconds * ToneGenerator::sample_rate
+                                             / ToneGenerator::block_size);
+        for (int block = 0; block < blocks; ++block) {
+            generator.render(left, right);
+            if (stop_when_silent && generator.active_voices() == 0) {
+                break;
+            }
+        }
+    };
+
+    SECTION("the snare roll sustains while held and releases at note-off")
+    {
+        generator.send_channel(0x99, 25, 100);
+        // Three seconds in -- a second past where the old 1.8 s ring cut it -- still rolling.
+        render_seconds(3.0);
+        CHECK(generator.active_voices() > 0);
+
+        generator.send_channel(0x89, 25, 64);
+        render_seconds(4.0, /*stop_when_silent=*/true);
+        CHECK(generator.active_voices() == 0);
+    }
+
+    SECTION("held forever, it rolls forever, exactly like the module")
+    {
+        generator.send_channel(0x99, 25, 100);
+        render_seconds(6.0);
+        CHECK(generator.active_voices() > 0);
+    }
+
+    SECTION("drum setup can revoke Rx Note Off, and the note-off then bounces")
+    {
+        generator.send_sysex(dt1({0x41, 0x07, 25, 0x00}));
+        generator.send_channel(0x99, 25, 100);
+        render_seconds(1.0);
+        generator.send_channel(0x89, 25, 64);
+        render_seconds(3.0);
+        CHECK(generator.active_voices() > 0);
+    }
+
+    SECTION("drum setup can revoke Rx Note On, and the key falls silent")
+    {
+        generator.send_sysex(dt1({0x41, 0x08, 38, 0x00}));
+        generator.send_channel(0x99, 38, 100);
+        CHECK(generator.note_count() == 0);
+        CHECK(generator.active_voices() == 0);
+
+        // Switched back on, the key sounds again.
+        generator.send_sysex(dt1({0x41, 0x08, 38, 0x01}));
+        generator.send_channel(0x99, 38, 100);
+        CHECK(generator.note_count() == 1);
+        CHECK(generator.active_voices() > 0);
+    }
+}
+
 TEST_CASE("the NRPN-dropped crash still sounds on the SC-55 map", "[stream][sccore]")
 {
     // WATRWLD1.MID drops its crash (key 55) forty steps with the drum pitch NRPN. On the SC-55

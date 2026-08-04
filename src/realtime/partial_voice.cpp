@@ -24,7 +24,6 @@ void PartialVoice::start(VoiceSetup&& setup)
     note_off_ = -1;
     choke_at_ = -1;
     control_tick_ = 0;
-    auto_release_ = setup.auto_release_samples;
     hold_samples_ = setup.envelope_hold_samples;
     half_damper_ = setup.half_damper;
     glide_ = setup.glide_milli_semitones;
@@ -197,13 +196,13 @@ void PartialVoice::render(std::span<float> destination,
         ++sample_;
     }
 
-    if (auto_release_ >= 0 && sample_ >= auto_release_) {
-        // A drum rings for a fixed time and then takes its release. The tone's own envelope has
-        // usually done the decay long before; this only bounds the voice's life, since a drum never
-        // sees a note-off of its own.
-        release();
-    }
-
+    // No timer bounds a voice's life, because the module has none: it ends when its own
+    // amplitude envelope reaches silence, when a one-shot sample runs out, or when a choke
+    // finishes. A drum whose envelope sustains is by the kit data always either a one-shot --
+    // the sample ends it -- or a looping key marked Rx Note Off, which the file ends with a
+    // note-off, exactly like the snare rolls the old fixed ring was cutting at 1.8 s. A file
+    // that holds such a key forever gets a voice that sounds forever, which is what the
+    // hardware does too.
     if (reader_.finished() || !amplitude_ || amplitude_->is_finished(envelope_sample(sample_))
         || (choke_at_ >= 0 && sample_ - choke_at_ >= choke_hold + choke_fade)) {
         kill();

@@ -240,7 +240,6 @@ int render_command(const std::string& dll,
         engine_options.reverb_type = options.reverb_type;
         engine_options.chorus_type = options.chorus_type;
         engine_options.delay_type = options.delay_type;
-        engine_options.drum_ring_seconds = options.drum_ring_seconds;
         engine_options.output_gain = options.output_gain;
         engine_options.polyphony = polyphony;
         engine_options.channels = options.channels;

@@ -29,7 +29,17 @@ struct DrumKey {
     /// records say exactly which. In the SC-88 Standard kit **one** key sets it, key 25, the snare
     /// roll. The Orchestra kit adds key 88, Applause. The SFX kit sets it on 52 of its 128 keys.
     /// That is GS's documented behaviour read straight out of the ROM rather than assumed.
+    ///
+    /// Bit 0 of the kit record's receive plane. The engine copies that plane per part and lets
+    /// drum-setup SysEx rewrite it, so this is the *default*, not the last word.
     bool receives_note_off = false;
+
+    /// Whether this key responds to note-on — GS `Rx.Note On`, bit 4 of the same plane.
+    ///
+    /// The module's note-on dispatch refuses the key outright when this is off
+    /// (`note_on_dispatch` tests `0x480[key] & 0x10` before anything else), which is how a file
+    /// silences individual drum keys without emptying their track.
+    bool receives_note_on = true;
 };
 
 /// The drum kit records: for each of 128 keys, which tone sounds and how it is levelled, tuned,

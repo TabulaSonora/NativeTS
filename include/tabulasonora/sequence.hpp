@@ -89,6 +89,14 @@ public:
     void set_chorus(int note, int entry) noexcept;
     void set_delay(int note, int entry) noexcept;
 
+    /// Records the per-key receive switches, from drum-setup SysEx `41 m7 kk` / `41 m8 kk`.
+    ///
+    /// The module keeps both in one per-key flag byte (`0x480`, bits 0 and 4) that the kit
+    /// record seeds and these writes rewrite; there is no NRPN route -- `nrpn_apply` leaves
+    /// 0x19 and 0x1B empty.
+    void set_rx_note_off(int note, bool on) noexcept;
+    void set_rx_note_on(int note, bool on) noexcept;
+
     /// The coarse-pitch offset held for a key, in kit-plane steps.
     ///
     /// A step's worth in pitch is the tone's own key-follow: a semitone on a 100%-follow tone,
@@ -107,6 +115,10 @@ public:
 
     /// The assign-group override for a key, or nothing when it follows the kit.
     [[nodiscard]] std::optional<int> group(int note) const noexcept;
+
+    /// The receive-switch overrides for a key, or nothing when it follows the kit.
+    [[nodiscard]] std::optional<bool> rx_note_off(int note) const noexcept;
+    [[nodiscard]] std::optional<bool> rx_note_on(int note) const noexcept;
 
     /// Resolves the panpot for one strike, spreading a randomly-panned key.
     ///
@@ -137,6 +149,8 @@ private:
     std::array<int, DrumKitTable::key_count> reverb_{};
     std::array<int, DrumKitTable::key_count> chorus_{};
     std::array<int, DrumKitTable::key_count> delay_{};
+    std::array<int, DrumKitTable::key_count> rx_note_off_{};
+    std::array<int, DrumKitTable::key_count> rx_note_on_{};
     bool any_ = false;
 };
 

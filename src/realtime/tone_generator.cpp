@@ -1000,9 +1000,16 @@ void ToneGenerator::Impl::gs_drum_setup(int port,
                 part.drum_keys.set_chorus(note, value);
                 break;
             case 0x07:
+                // Rx note-off per key: bit 0 of the module's per-key flag byte, seeded by the
+                // kit record and rewritten here (`drum_setup_rx_noteoff`). Nonzero engages, as
+                // the module's own write does.
+                part.drum_keys.set_rx_note_off(note, value != 0);
+                break;
             case 0x08:
-                // Rx note-off / note-on per key. Placeholder: the drum path already ignores
-                // note-off, and gating note-on per key has no recovered law yet.
+                // Rx note-on per key: bit 4 of the same byte (`drum_setup_rx_noteon`). A key
+                // switched off here does not sound at all -- the module's note-on dispatch
+                // refuses it before velocity or mute groups are even considered.
+                part.drum_keys.set_rx_note_on(note, value != 0);
                 break;
             case 0x09:
                 part.drum_keys.set_delay(note, value);
@@ -1505,7 +1512,6 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             setup.pan_follows_part = true;
             setup.random_pan = random_pan;
             setup.level_gain = 1.0;
-            setup.auto_release_samples = -1;
 
             begin(channel, note, velocity, group, std::move(setup));
             sounded = true;
@@ -1541,6 +1547,20 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     if (const std::optional<int> group = part.drum_keys.group(note)) {
         kit_key.group = *group;
     }
+    if (const std::optional<bool> rx_off = part.drum_keys.rx_note_off(note)) {
+        kit_key.receives_note_off = *rx_off;
+    }
+    if (const std::optional<bool> rx_on = part.drum_keys.rx_note_on(note)) {
+        kit_key.receives_note_on = *rx_on;
+    }
+
+    // A key switched off simply does not sound. The module refuses it at the top of its note-on
+    // dispatch (`0x480[key] & 0x10`), before velocity, mute groups or anything else runs, so
+    // nothing below this line -- not even the choke -- happens for it. Every kit record ships
+    // with every sounding key receiving, so only an explicit drum-setup write can get here.
+    if (!kit_key.receives_note_on) {
+        return;
+    }
 
     const DrumKey key = DrumKeyOverrides::apply(kit_key,
                                                 part.drum_keys.pitch_offset(note),
@@ -1565,13 +1585,6 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     }
 
     const double level_gain = DrumKitTable::level_gain(key.level);
-
-    // The ring is a backstop now, not the model -- see `PartialVoice::Setup::auto_release_samples`.
-    // A drum voice ends when its own envelope reaches silence, which is what the module does; this
-    // only catches the envelope that never can, and is applied per voice below once the envelope
-    // built for it says which kind it is.
-    const auto ring = static_cast<std::int64_t>(options.drum_ring_seconds
-                                                * NoteRenderer::drum_ring_scale(key) * sample_rate);
     const int group = pool.begin_note_group();
     bool sounded = false;
 
@@ -1614,8 +1627,6 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.level_gain = level_gain;
         setup.mute_group = key.group;
         setup.drum_receives_note_off = key.receives_note_off;
-        setup.auto_release_samples =
-            setup.amplitude && setup.amplitude->targets().back() > 0.0 ? ring : -1;
 
         begin(channel, note, velocity, group, std::move(setup));
         sounded = true;

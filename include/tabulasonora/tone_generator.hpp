@@ -56,12 +56,6 @@ struct ToneGeneratorOptions {
     std::optional<int> chorus_type;
     std::optional<int> delay_type;
 
-    /// How long a drum hit rings before its release is spliced in.
-    ///
-    /// A drum ignores note-off, so this is not the note's length: the tone's own envelope does the
-    /// decay and this only bounds how long the voice occupies a slot.
-    double drum_ring_seconds = 1.8;
-
     /// Linear gain applied to the audio handed to the host.
     double output_gain = 1.0;
 
