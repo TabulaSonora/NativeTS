@@ -54,13 +54,20 @@ Driving a progress bar from the renderer would show the song finishing before it
 
 | | |
 |---|---|
-| [`/`](https://tabula-sonora.kddlb.cl/) | the **player**: load a Standard MIDI File, drive the transport, mix it while it runs, export it to WAV |
+| [`/`](https://tabula-sonora.kddlb.cl/) | the **player**: load a song, drive the transport, mix it while it runs, export it to WAV |
 | [`/live`](https://tabula-sonora.kddlb.cl/live) | the **instrument**: a controller or the on-screen keyboard, every sound the ROM holds, and the drum maps |
 
 The split is not cosmetic: loading a file and driving a transport has nothing in common with
 connecting a controller and playing, and each was burying the other's panels. Navigating changes
 which panels are on screen and nothing else — the engine lives in the worker, so the ROM stays
 loaded, a playing song keeps playing, and a held note keeps sounding.
+
+The player takes everything ts::formats::to_smf reads, not only SMF — RIFF-MIDI, DirectMusic
+`MIDS`, DOOM `MUS`, Miles `XMI`, `GMF`, both HMI containers, Mobile XMF and the LDS tracker — since
+the conversion happens under `smf::load`, which is what the session already calls. All but LDS are
+recognised by content, so the picker's extension list is a convenience and not the test; LDS has no
+magic and is recognised through the file name, which is why the name travels to the worker beside
+the bytes.
 
 **The one host requirement.** Two client-side routes and one file on disk: a reload on `/live`, or
 a link straight to it, asks the server for a path that was never published. Every static host needs

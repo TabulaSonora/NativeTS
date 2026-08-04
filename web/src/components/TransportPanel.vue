@@ -3,7 +3,13 @@
         <h2>Song</h2>
 
         <div class="row">
-            <input type="file" accept=".mid,.midi" @change="load" />
+            <!-- Everything ts::formats::to_smf converts, not only SMF. All but LDS are recognised
+                 by content, so the list is a file-picker convenience rather than the test; LDS has
+                 no magic at all and is recognised through the name, which is why the name is what
+                 gets handed to the worker beside the bytes. -->
+            <input type="file"
+                   accept=".mid,.midi,.smf,.rmi,.rmid,.mids,.mus,.xmi,.xmid,.gmf,.hmi,.hmp,.hmq,.xmf,.mxmf,.lds"
+                   @change="load" />
             <span v-if="store.song" class="technical">
                 {{ store.song.name }} — {{ format(store.lengthSamples) }}
             </span>

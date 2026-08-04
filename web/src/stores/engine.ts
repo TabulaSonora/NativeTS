@@ -103,7 +103,10 @@ export const useEngineStore = defineStore('engine', {
                 this.error = error;
             };
             engine.onExportDone = bytes => {
-                const name = (this.song?.name ?? 'render').replace(/\.midi?$/i, '');
+                // Strip whichever input extension the song came in as, so an .xmi does not export
+                // as song.xmi.wav. An unrecognised suffix is left alone rather than guessed at.
+                const name = (this.song?.name ?? 'render')
+                    .replace(/\.(midi?|smf|rmid?|mids|mus|xmid?|gmf|hm[ipq]|m?xmf|lds)$/i, '');
                 audio.download(`${name}.wav`, bytes);
             };
         },
