@@ -114,6 +114,18 @@ public:
     /// reads. A mixer that shows "kit 73" is showing an index nobody chose; the record has been
     /// carrying "Analog Kit" all along.
     ///
+    /// Three things not to assume about the result, all measured and written up in FINDINGS under
+    /// "Kit names, and three things not to assume about them":
+    ///
+    ///  * **The casing is the ROM's and is not normalised here.** Every GS and GM2 kit is upper
+    ///    case and every XG kit is lower, which makes an ALL-CAPS name on XG-flavoured material a
+    ///    free signal that the drum row is not following XG mode.
+    ///  * **A name is not an identifier.** Fifteen are shared by two to four records — `ROOM` is
+    ///    four, one per GS vintage — so anything keyed on the name collides across exactly the
+    ///    vintages a tone map exists to separate.
+    ///  * **A twelve-byte name may be abbreviated**, and not always at the end: `standrd kit2`
+    ///    drops the *a* of "standard", `GM2 ORCHSTRA` the *E* of "ORCHESTRA".
+    ///
     /// Empty for a kit index outside the table.
     [[nodiscard]] std::string kit_name(int kit) const;
 
