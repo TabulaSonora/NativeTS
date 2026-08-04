@@ -169,12 +169,18 @@ int PitchChain::base_pitch_milli_semitones(const PartialParameters& partial,
     const KeyFollow follow = key_follow_key(partial, note, key_center);
     const int key = std::clamp(follow.key, 0, 0x7F);
 
-    // Four rows, not eight: `g_kf_pitch` is 1024 bytes and `g_kf_pitchrate0` begins where a fifth
-    // row would. No partial in the ROM selects past row 3, so the wider clamp never fired, but it
-    // could only ever have read the neighbouring table.
-    const int row = std::clamp((raw[0x13] - 0x40) >> 2, 0, 3);
-    return (key * 1000) + follow.weight + key_follow_[static_cast<std::size_t>((row * 0x80) + key)]
-           + ((raw[0x11] - 0x40) * 10);
+    // Row 2, always — not `(block[0x13] − 0x40) >> 2`, which this port derived from nothing and
+    // which lands on rows 0, 1 and 3 for 760 of the 4,096 partial blocks.
+    //
+    // `partial_compute_pitch @ 18005fc20` picks the row as **2 when the voice's +0x169 is zero,
+    // otherwise the block's +0x17**, and skips the curve entirely when that byte is zero. +0x169 is
+    // copied from the part's +0x10, and that byte is zero here: +0x17 is zero on 3,900 of the 4,096
+    // blocks, so a non-zero +0x169 would leave almost every partial with no curve at all, and no
+    // curve measures 16 of 550 cases exact against row 2's 225 on the same cases.
+    //
+    // `g_kf_pitch` is four rows of 128, not eight — `g_kf_pitchrate0` begins where a fifth would.
+    return (key * 1000) + follow.weight
+           + key_follow_[static_cast<std::size_t>((2 * 0x80) + key)] + ((raw[0x11] - 0x40) * 10);
 }
 
 int PitchChain::drum_pitch_milli_semitones(const PartialParameters& partial,

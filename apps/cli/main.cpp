@@ -158,13 +158,33 @@ int render_note_command(const std::string& path,
     return 0;
 }
 
+/// The module's pitch ramp word for a pitch in milli-semitones.
+///
+/// `voice_pitch_block_init @ 180082e10` is the only place a pitch becomes a playback rate, and it
+/// spells the conversion out: `0x38000 + ((x & 0x7fffff) >> 22) + (x << 9) / 0x177 + ((x << 9) >>
+/// 31)`. The division is C truncation and the last term is the toward-zero correction, so the two
+/// have to be written separately rather than folded into one floor. `512 / 375` is `16384 / 12000`
+/// — one unit is a 16,384th of an octave.
+int pitch_ramp_word(int milli_semitones)
+{
+    const auto shifted = static_cast<std::int32_t>(
+        static_cast<std::uint32_t>(milli_semitones) << 9U);
+    return ((milli_semitones & 0x7FFFFF) >> 22) + 0x38000 + (shifted / 0x177)
+           + (shifted < 0 ? -1 : 0);
+}
+
 /// Prints the pitch chain for one note, term by term, without rendering anything.
 ///
 /// The instrument for comparing this engine's tuning against the module's *exactly*. Estimating a
 /// fundamental from rendered audio resolves a few cents at best — enough to have found a 320
-/// milli-semitone error, nowhere near enough to chase what is left. `scdec postrace` reads the
-/// module's sampler increment as an integer in 16.16, so the comparison that settles a tuning
-/// question is ratio against ratio, and this is the other half of it.
+/// milli-semitone error, nowhere near enough to chase what is left.
+///
+/// `pitch_word` is the half that closes it. `scdec postrace` with `TS_POSTRACE_BLOCK=32` dumps
+/// `g_voice_ramp_pitch` (@`181a1cbf0`, stride 0x18: +8 current, +0xc target, +0x14 the cached 16.16
+/// increment), and once a note has settled `cur == tgt` **is the module's pitch as an integer**.
+/// Printing ours in the same word makes the comparison integer against integer, with no audio, no
+/// fundamental estimate and no exponential in between: one unit is 375/512 of a milli-semitone.
+/// A voice under vibrato never settles, so only cases whose word holds still are comparable.
 ///
 /// The terms are printed separately because a disagreement is only useful once it is attributed:
 /// the module's own chain (`partial_compute_pitch` @ `18005fc20`) is `native = root×1000 − fine +
@@ -192,6 +212,10 @@ int pitch_command(const std::string& path, int program, int note, int velocity, 
 
         const int key_center = partial.key_center();
         const int base = pitch.base_pitch_milli_semitones(partial, note, key_center);
+        const ts::PitchChain::KeyFollow follow =
+            ts::PitchChain::key_follow_key(partial, note, key_center);
+        const int follow_key = std::clamp(follow.key, 0, 0x7F);
+        const auto curve = renderer.tables().kf_pitch();
 
         // The settled pitch envelope, which a traced increment carries and `base` does not. A
         // patch whose envelope sustains away from zero reads as a tuning error against the module
@@ -212,15 +236,30 @@ int pitch_command(const std::string& path, int program, int note, int velocity, 
                   << "    second_fine   " << descriptor.second_fine_tune << '\n'
                   << "    key_center    " << key_center << '\n'
                   << "    coarse tune   " << partial.coarse_tune_milli_semitones() << '\n'
-                  << "    kf byte 0x13  " << partial.pitch_key_follow() << " (row "
-                  << std::clamp((partial.pitch_key_follow() - 0x40) >> 2, 0, 7) << ")\n"
+                  << "    kf byte 0x13  " << partial.pitch_key_follow() << " (follow amount)\n"
+                  << "    kf byte 0x17  " << static_cast<int>(partial.raw()[0x17])
+                  << " (the row, when the part's +0x10 is not zero)\n"
+                  << "    follow key    " << follow_key << '\n'
+                  << "    follow weight " << follow.weight << '\n'
+                  // All four rows, though only row 2 is used: printing the alternatives is what
+                  // settled which one the module reads, and is what would settle it again.
+                  << "    curve row 0   " << curve[static_cast<std::size_t>(follow_key)] << '\n'
+                  << "    curve row 1   " << curve[static_cast<std::size_t>(0x80 + follow_key)]
+                  << '\n'
+                  << "    curve row 2   " << curve[static_cast<std::size_t>(0x100 + follow_key)]
+                  << "   <- the one applied\n"
+                  << "    curve row 3   " << curve[static_cast<std::size_t>(0x180 + follow_key)]
+                  << '\n'
                   << "    base_pitch    " << base << '\n'
                   << "    pitch_sustain " << sustain << '\n'
                   << "    base_settled  " << (base + sustain) << '\n'
                   << "    native        " << native << "   (voice+0x200, both fine tunes)\n"
                   << "    native_1fc    " << first_only << "   (voice+0x1fc, first fine only)\n"
                   << "    ratio         " << std::setprecision(10) << ratio << '\n'
-                  << "    ratio_1fc     " << ratio_first << std::setprecision(6) << '\n';
+                  << "    ratio_1fc     " << ratio_first << std::setprecision(6) << '\n'
+                  << "    pitch_word    "
+                  << pitch_ramp_word(static_cast<int>(base + sustain - native))
+                  << "   (g_voice_ramp_pitch cur/tgt; 1 unit = 375/512 mst)\n";
     }
     return 0;
 }

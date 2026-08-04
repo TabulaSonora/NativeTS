@@ -197,7 +197,11 @@ public:
     /// 512 floats. Index a phase as `phase * 4 + tap`. Every phase sums to 1.0.
     [[nodiscard]] std::span<const float> interp_coef() const noexcept { return interp_coef_; }
 
-    /// `g_kf_pitch` — 8 rows of 128; pitch key-follow, indexed `row * 0x80 + key`.
+    /// `g_kf_pitch` — pitch key-follow, indexed `row * 0x80 + key`.
+    ///
+    /// Four rows, though 2,048 bytes are cached: `g_kf_pitchrate0` begins at `0x1a00f20`, where a
+    /// fifth row would start, so the second half of this span is the neighbouring table. The engine
+    /// reads row 2 and nothing else — see `PitchChain::base_pitch_milli_semitones`.
     [[nodiscard]] std::span<const std::int16_t> kf_pitch() const noexcept { return kf_pitch_; }
 
     /// `g_kf_pitchrate0` — 128×128; pitch-envelope rate key-follow for the segments.

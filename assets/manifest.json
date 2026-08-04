@@ -257,13 +257,13 @@
       "symbol": "g_kf_pitch",
       "subsystem": "PITCH",
       "dtype": "s16",
-      "shape": "8x128 (row*0x80+key)",
+      "shape": "4x128 (row*0x80+key); the cached 2048 bytes run into g_kf_pitchrate0",
       "size": 2048,
       "file_offset": "0x1a00b20",
       "va": "0x181a01b20",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "pitch key-follow (row=(block[0x13]-0x40)>>2)"
+      "purpose": "pitch key-follow; partial_compute_pitch @18005fc20 reads row 2"
     },
     {
       "name": "kf_pitchrate0_01f20.bin",

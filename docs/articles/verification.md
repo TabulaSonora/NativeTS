@@ -658,11 +658,13 @@ voice+0x1fc = root*1000 - fine + 0x400                       // what this port i
 voice+0x200 = (voice+0x1fc) - *(ushort *)(desc + 0x0e) + 0x400
 ```
 
-**This section used to conclude that lead was dead**, on the grounds that `voice+0x200` is *written
+**This section twice concluded that lead was dead**, on the grounds that `voice+0x200` is *written
 and never read anywhere in the binary* while `voice+0x1fc` is what `voice_pitch_keyfollow`
-subtracts. The decompilation is right about that — `voice+0x200` is written once at
-`18005fc20` and read nowhere, three occurrences in the whole listing and two of them on unrelated
-pointers. **But the field is not inert, and where it is consumed is still unknown.**
+subtracts — three occurrences in the whole listing, two of them on unrelated pointers. Both times
+the search was sound and the conclusion was wrong: the consumer walks the voice array with its
+pointer four bytes into the struct, so it spells `voice+0x200` as displacement `0x1fc` and no search
+for the literal offset can find it. [Where it is read](#the-second-fine-tune-consumer) has the
+instruction pair.
 
 ### The second fine tune, measured {#the-second-fine-tune}
 
@@ -688,7 +690,7 @@ engine's worst error on that sweep fell from **+34.33 cents to +4.29** when `nat
 still sounded nearly right everywhere the note sweep happened to look, and why the median moved so
 little that no aggregate caught it.
 
-### The consumer was found, and there isn't one {#the-second-fine-tune-consumer}
+### Where it is read, and the instrument that can tell {#the-second-fine-tune-consumer}
 
 The exported decompilation left the descriptor fetch as `LAB_18005c390` — a location, never promoted
 to a function — so what `partial_compute_pitch` actually reads had never been seen. In Ghidra it is
@@ -700,62 +702,131 @@ two instructions:
 ```
 
 It ignores its argument and returns a fixed address, so the pitch chain does not read the ROM record
-at all: it reads a **staging buffer**. And `partial_load_params @ 18005ee30` fills that buffer with
-a verbatim 22-byte copy — `4+4+4+4+4+2` — of the record `voice+0x138` points at. The staged fields
-are the record's, unmodified.
+at all: it reads a **staging buffer**. `partial_load_params @ 18005ee30` fills that buffer with a
+verbatim 22-byte copy — `4+4+4+4+4+2` — of the record `voice+0x138` points at, so the staged fields
+are the record's, unmodified. The sibling fetches are the same shape: `181a749b8` returns a fixed
+`0x181a1e6f8`, `181a74920` returns `0x181a1e7b0`, and the wave descriptor sits at `0x181a1e81e`
+directly after the 0x6e partial block. Nothing in the chain is per-voice except what is staged into
+it.
 
-So the chain is closed end to end: `native` is `root×1000 − fine + 0x400`, both consumers
-(`voice_pitch_keyfollow` and `voice_pitch_block_update`) subtract `voice+0x1fc` to form the
-exponent, and `voice+0x200` is written once and read nowhere. **The second fine tune is decoded and
-not tuned with.** This engine applied it for four commits and no longer does; `native_pitch` asserts
-the neutral result on a record that carries one, so wiring it back in fails a test rather than a
-listening session.
+Twice this article said `voice+0x200` is written once and read nowhere, and twice that was wrong.
+`voices_control_update @ 1800849a0` walks the voices with its pointer at **`voice + 4`**, so the
+pair at `180084c13` reads as displacement `0x1fc`/`0x1f8` and no search for the literal offset could
+ever find it:
 
-Removing it is what the exact instrument already preferred — median 1.14 cents against 2.03, worst
-4.66 against 14.29 — and the single-note gate, which had failed since the term went in, passes
-again.
+```asm
+MOV EAX,dword ptr [RDI + 0x1fc]   ; voice+0x200
+MOV dword ptr [RDI + 0x1f8],EAX   ; voice+0x1fc
+```
 
-### What the term was standing in for {#the-second-fine-tune-was-standing-in}
+That is `voice+0x1fc = voice+0x200` — the second fine tune replacing the first-only native — and it
+is **not run every tick**. It sits inside `if (voice+0x16c == 1) if (voice+4 != 0) { voice+4 = 0; if
+(voice+0x1b0 != 0) { …retrigger…; continue; } … }`, so it fires once, when a per-voice flag is set,
+and is skipped entirely down the retrigger branch.
 
-Audio estimation cannot settle what is left, so `tabula-sonora pitch` prints the chain term by term
-and `scdec postrace` reads the module's own sampler increment as an integer in 16.16. Ratio against
-ratio resolves a thousandth of a cent where estimating a fundamental resolves a few. Measured that
-way, on cases whose traced increment is constant so that the two sides are the same quantity:
+### The pitch word, and why the increment was the wrong thing to measure {#the-pitch-word}
 
-| | median | mean | worst |
-|---|---|---|---|
-| `Alto Sax` across its zones, **with** the term | — | — | 5 of 6 non-neutral zones closer |
-| the 28-case corpus, **with** the term | 2.03 | 2.37 | 14.29 |
-| the 28-case corpus, **without** it | **1.14** | **1.74** | **4.66** |
+Every measurement in the two sections above was taken through the module's sampler increment, and
+that was a mistake worth naming.
 
-Both measurements are sound and they disagree — and since the binary says the term is never read,
-what the sax is really showing is **a different error that happens to track `desc[0x0e]` across that
-patch's zones**. Adding a term the module does not have cancelled it there and broke five other
-patches, which is what fitting a correction to one instrument's worth of evidence does. The zone
-staircase itself is real and still unexplained: it is per-wave, it reaches a third of a semitone,
-and it is the open case.
+`voice_pitch_block_init @ 180082e10` turns a pitch into the ramp word with
 
-\warning **A second effect, and this one is not per-wave.** At
-`Alto Sax` notes 48 and 50 — the same zone, the same wave, the same partial, and a neutral second
-fine tune on both — the engine is +4.69 and +0.78 cents off. Four cents of disagreement between two
-notes a tone apart cannot come from the native pitch, so a key-dependent term is wrong as well, and
-the key-follow curve and the `voice+0x16a` weight are where it must live.
+```c
+cur = 0x38000 + ((x & 0x7fffff) >> 22) + (x << 9) / 0x177 + ((x << 9) >> 31);
+```
+
+— `512/375` is `16384/12000`, so one unit is a 16,384th of an octave, or 375/512 of a
+milli-semitone, and `0x38000` is the whole of the constant when the master tune is neutral. That
+word is `g_voice_ramp_pitch @ 181a1cbf0` +8 (current) and +0xc (target); `scdec postrace` with
+`TS_POSTRACE_BLOCK=32` dumps both, and once a note settles `cur == tgt` **is the module's pitch as
+an integer**. `tabula-sonora pitch` now prints ours in the same word.
+
+The 16.16 increment at +0x14 is one step further on, and that step is a *table*. Solve
+`cur = C + 16384·log2(inc/65536)` on three notes of one flute wave and `C` comes out 229398, 229393
+and 229422 — it is not one constant, because the exponential is approximated. The error reaches
+tens of ramp units, and tens of ramp units is **about two cents**: the same size as the effects
+being argued over. Comparing `pow(2, x/12000)` against a traced increment therefore measures the
+pitch chain and the module's `exp2` at once and cannot separate them. Every "with the term / without
+the term" number in the table above was taken that way and none of them decides anything.
+
+Measured on the word instead — 550 settled single-partial melodic cases, programs 0 to 124 in steps
+of four, notes 24 to 108 in steps of three, both tone maps, dropping any voice whose word is still
+moving:
+
+| | |
+|---|---|
+| exact (within one unit, 0.73 mst) | **225 of 550 — 41%** |
+| median | **3 units = 2.2 mst = 0.22 cents** |
+| 90th percentile | 45 units = 33 mst |
+| worst | 222 units = 163 mst = 16.3 cents |
+
+The chain is five times closer than audio estimation made it look, and the second fine tune is
+plainly read: on the 254 cases whose record carries a non-neutral one, applying it gives 84 exact
+against 45 and a median of 3 units against 17.
+
+### The gate is per voice, not per patch {#the-second-fine-tune-is-per-voice}
+
+Which is where the contradiction dissolves. Classifying each of those 254 cases as *applied* (the
+word matches with the term), *ignored* (it matches without it) or *neither* gives 84 / 37 / 133 —
+and the split does not follow the wave. Wave 2883 applies the term on eight notes and ignores it on
+seven; waves 361, 362, 1774, 2512, 2514, 2515, 2778, 2779, 2784, 2785, 2787 and 3404 all split the
+same way. One wave, one descriptor, one partial block, two answers.
+
+So no static property can be the gate, and both previous attempts to find one were looking in the
+wrong place — including this article's own "Alto Sax and Piano 1 want the term; Vibraphone, Nylon
+Gt. and Trumpet do not". That was never a patch property. It is the runtime flag above: the copy
+runs when `voice+4` is set and `voice+0x1b0` is clear, and what sets `voice+4` is still unknown.
+
+Applying it unconditionally remains the best of the choices available — 84 exact against 45 — and
+that is what this engine does.
+
+\note A pitch envelope is sufficient but not necessary: 8 of the 9 cases whose block carries a
+non-zero depth at `+0x18` apply the term, but so do 76 of the 208 that do not. It is a clue about
+which voices get their ramp recomputed, not the rule.
+
+### What is left, and what it is not {#what-is-left-in-the-pitch-chain}
+
+The row selection is now the module's. `partial_compute_pitch` picks the `g_kf_pitch` row as *2 when
+the voice's `+0x169` is zero, otherwise the block's `+0x17`, skipping the curve entirely when that
+byte is zero* — and `+0x169` is a copy of the part's `+0x10`. That byte has to be zero here: `+0x17`
+is zero on 3,900 of the 4,096 partial blocks, so a non-zero `+0x169` would leave almost every
+partial with no curve at all, and no curve measures 16 of 550 exact against row 2's 225 on the same
+cases. The row is 2, always. This port used `clamp((block[0x13] − 0x40) >> 2, 0, 3)`, which lands on
+rows 0, 1 and 3 for 760 of the 4,096 blocks; every case the pitch word can reach carries
+`block[0x13] = 0x4a` and already resolved to 2, so the correction is a no-op on the corpus and on
+all three oracle gates, and it is made because the binary says so rather than because a measurement
+moved.
+
+What the pitch word says about the failing note-gate rows is worth having:
+
+| case | partial 0 | partial 1 |
+|---|---|---|
+| `prog 66 note 72 map 2` | 1 unit | exact |
+| `prog 38 note 72 map 4` | exact | 1 unit |
+| `prog 99 note 48 map 1` | **71 units** | exact |
+
+Two of the three notes the gate fails are tuned right to within three quarters of a milli-semitone,
+so their band and envelope failures are not a pitch problem and chasing tuning will not fix them.
+The third is wave 2778 missing its second fine tune of 52 — exactly the per-voice gate above.
 
 \note One candidate died here and is recorded so it is not rediscovered: the partial block's signed
 16-bit at `+0x16` reproduces `Alto Sax` at key 41 *exactly* — base 40928 against the module's
 implied 40928 — and makes 13 of 13 non-zero cases worse across the corpus. It was a term fitted to
 a single data point, which is what one data point is always able to do.
 
-Two further things worth following from that routine, neither of them the residual sharpness.
+Ruled out as sources of a per-wave offset, each by reading the routine rather than guessing: the
+multisample record's per-zone byte at `+0x6b`, which `multisample_select_wave` returns and which
+lands in `voice+0x140`, is a **level** — `g_level_curve` indexes on it — not a tuning;
+`g_wave_desc_table_b` and `_g_multisample_table_b` are aliased to the A tables at init, so the A/B
+selector picks between two pointers to the same memory; and the three part-level terms in
+`DAT_181a22830` — `−0x7e8`, `(part[0x448]·1000) >> 13` and the global ushort at `0x181a1e6f8` — are
+the same for every voice and sum to zero at neutral tune, which is why the fitted constant lands on
+`0x38000` exactly.
 
-It selects the key-follow row as *row 2 when the partial node's `+0x169` is zero, otherwise
-`+0x168`, skipping the curve entirely when that is zero* — which is not this port's
-`clamp((block[0x13] − 0x40) >> 2, 0, 7)` applied unconditionally.
-
-And it reads the pitch-jitter depth from **block +0x12**, immediately after the coarse tune at
-+0x11. This port reads +0x1a, on no authority anyone recorded, and the ROM agrees with the
-decompilation: +0x12 is non-zero on 223 of the 4,726 partial blocks with nineteen distinct depths,
-+0x1a on nineteen blocks with two.
+One more thing the routine reads differently: the pitch-jitter depth comes from **block +0x12**,
+immediately after the coarse tune at +0x11. This port reads +0x1a, on no authority anyone recorded,
+and the ROM agrees with the decompilation: +0x12 is non-zero on 223 of the 4,726 partial blocks with
+nineteen distinct depths, +0x1a on nineteen blocks with two.
 
 \warning **That correction is not applied, because it makes the song gate worse.** With +0x12,
 `robyn_show_me_love` goes from inside the default 0.01 peak bound to 0.036 outside it and `rainy`

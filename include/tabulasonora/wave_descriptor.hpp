@@ -44,9 +44,15 @@ struct WaveDescriptor {
     /// LEA RCX,[RDI + -0x4]              ; the voice itself, for voice_block_process
     /// ```
     ///
-    /// — is `voice+0x1fc = voice+0x200`, run every control tick for as long as `voice+0x16c` is 1,
-    /// which `voice_start` sets and only release or fade-out clears. The four-byte skew is why no
-    /// search for the literal offset ever found it.
+    /// — is `voice+0x1fc = voice+0x200`. The four-byte skew is why no search for the literal offset
+    /// ever found it.
+    ///
+    /// It is **not** run every tick: it sits inside `if (voice+0x16c == 1) if (voice+4 != 0) {
+    /// voice+4 = 0; if (voice+0x1b0 != 0) { …retrigger…; continue; } … }`, so it fires once when a
+    /// per-voice flag is set and is skipped down the retrigger branch. Measured against the
+    /// module's own pitch word, 84 of 254 non-neutral cases carry the term and 37 plainly do not —
+    /// *and the same wave does both on different notes*, so nothing in this record decides it.
+    /// Applying it unconditionally is the closest available: 84 exact against 45 without.
     int second_fine_tune = 1024;
     /// Raw flag byte. Bit 0 is bidirectional, bit 2 is reverse; bit 1 takes no part in the
     /// dispatch.
