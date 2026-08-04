@@ -27,6 +27,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -396,9 +397,10 @@ int run(const std::string& dll,
     ui.names = &names;
     ui.title = midi.filename().string();
 
-    static const char* const map_names[] = {"", "SC-55", "SC-88", "SC-88Pro", "SC-8820"};
-    const auto map_index = static_cast<std::size_t>(options.map);
-    ui.subtitle = std::string{map_index < 5 ? map_names[map_index] : "?"} + " · "
+    // Named through the shared table, which knows XG. Indexing a five-entry array by the map
+    // value printed "?" for it, the selector being 0x77.
+    const std::string_view map_label = ts::tone_map_name(options.map);
+    ui.subtitle = std::string{map_label.empty() ? "?" : map_label} + " · "
                   + playback.backend_name() + " · " + playback.device_name() + " · "
                   + std::to_string(playback.device_rate()) + " Hz · "
                   + std::to_string(device.period_frames) + " frames";
@@ -408,10 +410,18 @@ int run(const std::string& dll,
     ScreenInteractive screen = ScreenInteractive::Fullscreen();
 
     Component view = Renderer([&] {
+        // One read a frame, beside the two the panels already take. XG is a mode a file enters and
+        // leaves, so it has to be read live rather than from the options the run started with.
+        const bool xg = ui.playback->snapshot().xg_mode;
         return vbox({
                    hbox({
                        text(" " + ui.title) | bold | color(Color::Cyan),
                        text(" \u00b7 " + ui.subtitle) | dim,
+                       // Live, beside the configured map rather than inside it: XG is a mode a file
+                       // enters and leaves, and its absence is what a reader needs to see when a
+                       // file that looks like XG is not being treated as XG.
+                       xg ? text("  XG ") | bold | color(Color::Black) | bgcolor(Color::Yellow)
+                          : text(""),
                    }),
                    separator(),
                    transport_panel(ui),

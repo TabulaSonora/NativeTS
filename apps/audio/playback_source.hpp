@@ -59,6 +59,11 @@ struct EngineSnapshot {
     bool voices_grow = false;
     int note_count = 0;
     int drum_kit = 0;
+    /// Whether the engine is in XG mode right now.
+    ///
+    /// Live rather than configured: a file switches this mid-song, and without it a display
+    /// can only be read backwards -- from whether the kit names came out in capitals.
+    bool xg_mode = false;
     /// Parts the engine was created with; only the first this many of `parts` are meaningful.
     int part_count = 16;
     std::array<PartSnapshot, 64> parts{};

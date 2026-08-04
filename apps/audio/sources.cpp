@@ -50,6 +50,7 @@ void StreamingSource::capture(EngineSnapshot& into) const
     into.voices_grow = generator_.voices().grows();
     into.note_count = generator_.note_count();
     into.drum_kit = generator_.drum_kit();
+    into.xg_mode = generator_.xg_mode();
     into.part_count = generator_.parts();
 
     for (PartSnapshot& part : into.parts) {
