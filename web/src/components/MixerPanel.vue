@@ -1,8 +1,8 @@
 <template>
     <!--
         The parts, live, one row each. Channels are labelled the way a mixer labels them, 1–16 on
-        port A and 17 up on port B, not the way MIDI numbers them; every port's channel 10 is its
-        drum part, so those are marked.
+        port A and 17 up on port B, not the way MIDI numbers them. Which parts are drums comes from
+        the engine rather than from the channel number, because under XG any channel can be one.
 
         The module has more parts than most files use. The first sixteen are always here — they are
         what a keyboard plays into and what a General MIDI file addresses — and the rest appear only
@@ -109,9 +109,11 @@ function part(channel: number): Partial<ChannelSnapshot> {
     return store.channels[channel] ?? {};
 }
 
-// Every port has a drum part, not just the first.
+// Asked of the engine, which knows: GS reroutes a part to the drum path over SysEx and XG does it
+// from bank select alone, so the channel number answers neither direction under XG. The channel
+// test remains only as the answer for a part the engine has not reported yet.
 function isDrums(channel: number): boolean {
-    return channel % partsPerPort === drumChannel;
+    return part(channel).drums ?? channel % partsPerPort === drumChannel;
 }
 
 // Volume and pan are what a mixer is for; the two sends are here because on this module they are
@@ -189,10 +191,11 @@ function sounding(channel: number): string {
     if (strip.program === undefined) {
         return '';
     }
+    // `name` is the kit's own name on a drum part -- the engine reads it from the kit record -- so
+    // both cases are the same lookup. The index remains as a fallback for a kit whose record has no
+    // name, which none reachable does.
     if (isDrums(channel)) {
-        const kits = store.snapshot?.engine?.drumKits;
-        const kit = kits?.[Math.floor(channel / partsPerPort)] ?? -1;
-        return `kit #${kit}`;
+        return strip.name || (strip.kit !== undefined && strip.kit >= 0 ? `kit #${strip.kit}` : '—');
     }
     return strip.name ?? '—';
 }

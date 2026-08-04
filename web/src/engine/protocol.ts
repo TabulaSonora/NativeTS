@@ -19,6 +19,20 @@ export interface ChannelSnapshot {
     voices: number;
     muted: boolean;
     soloed: boolean;
+
+    /**
+     * Whether this part is sounding drums *now*.
+     *
+     * Not "is this channel 10". GS reroutes a part to the drum path over SysEx and XG does it from
+     * bank select alone, so under XG any channel can be drums and channel 10 can be melodic.
+     */
+    drums: boolean;
+
+    /** The kit sounding on a drum part, or -1. `name` already carries the kit's name. */
+    kit: number;
+
+    /** The tone map this part resolves against, which XG changes for every part at once. */
+    map: number;
 }
 
 export interface EngineSnapshot {
@@ -30,6 +44,9 @@ export interface EngineSnapshot {
     /** The kit loaded on each port's drum part, in port order. */
     drumKits: number[];
     effectiveDrumMapRow: number;
+
+    /** Whether the engine is in XG mode, which a file enters and leaves while it plays. */
+    xgMode: boolean;
     songComplete: boolean;
     channels: Partial<ChannelSnapshot>[];
 }
