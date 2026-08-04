@@ -175,6 +175,56 @@ The two kinds of control on a strip behave differently on purpose:
   for something the file also writes. So a running sequence overwrites a fader at its next
   controller event for that channel, exactly as it would on the module's own front panel.
 
+## The snapshot the UI reads
+
+Everything the interface shows about a running engine arrives as one JSON document from
+`ts_web_snapshot_json`, polled by the worker and posted to the main thread. It is parsed whole and
+passed through — nothing between the C++ and the Vue store copies fields one by one — so a field
+added on the engine side reaches the store as soon as `protocol.ts` declares its type, and a field
+that is *not* declared is silently discarded by nobody: it is simply never looked at. That is worth
+knowing because it has already gone wrong once, with a drum kit's name arriving for several days
+before anything displayed it.
+
+```json
+{
+  "position": 1234567, "activeVoices": 12, "noteCount": 340,
+  "drumKit": 73, "drumKits": [73, 0], "effectiveDrumMapRow": 4,
+  "xgMode": true, "songComplete": false,
+  "channels": [ /* one per part */ ]
+}
+```
+
+| field | meaning |
+|---|---|
+| `position` | render position in samples |
+| `activeVoices`, `noteCount` | what the pool and the sequence are doing |
+| `drumKit` | the kit on port A's rhythm part — `drumKits[0]` |
+| `drumKits` | the kit on each port's rhythm part, in port order |
+| `effectiveDrumMapRow` | the drum map row a program change resolves against |
+| `xgMode` | whether the engine is in XG mode **now**; a file turns this on and off while it plays |
+| `songComplete` | the loaded song has run out |
+
+Each entry of `channels` is one part, indexed by part number rather than by MIDI channel, so index
+16 is port B's channel 1. Before a ROM is loaded every entry is `{}` — the engine does not exist yet
+to be asked — which is why the TypeScript side reads them as `Partial<ChannelSnapshot>` and why a
+consumer has to tolerate every field being absent rather than only some:
+
+| field | meaning |
+|---|---|
+| `program`, `bank` | the last program change, and the bank select behind it |
+| `name` | what the part is sounding, already resolved — **the kit's own name on a drum part**, and the tone's otherwise. There is nothing further to look up |
+| `drums` | whether this part is sounding drums *now*. Not "is this channel 10": GS reroutes a part over SysEx and XG does it from bank select, so the channel number answers neither direction |
+| `kit` | the kit index on a drum part, or `-1`. `name` already carries its name; this is for a UI that wants the number as well |
+| `map` | the ts::ToneMap this part resolves against, as its integer value. Per part and per moment — XG System On moves every part at once, so one map for the whole mixer is wrong the moment a file switches |
+| `volume`, `pan`, `expression`, `reverbSend`, `chorusSend` | the faders' values |
+| `voices` | voices this part is sounding, including any fading after being stolen |
+| `muted`, `soloed` | the channel mask, which is the UI's own state rather than the file's |
+
+The engine also answers `ts_web_rom_info_json`, `ts_web_song_info_json`, `ts_web_drum_catalog_json`
+and `ts_web_vintage_catalog_json`; those are asked for once when something loads rather than polled.
+Every one of them returns `"null"` as a string when there is nothing to describe, which
+`protocol.ts` turns back into `null`.
+
 ## Audio out
 
 The engine renders at 32 kHz and the application asks the browser for an `AudioContext` at 32 kHz.
