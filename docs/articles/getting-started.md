@@ -89,7 +89,9 @@ tabula-sonora render song.mid out.wav --map 4
 | `--tail SEC`, `--end SEC` | release tail, and truncation |
 | `--volume G` | linear gain on the finished mix |
 | `--drum-map 0..5` | drum map row, when you want one the vintage would not pick |
-| `--no-reverb`, `--no-chorus`, `--no-delay` | effects are on by default, as the module has them |
+| `--no-reverb`, `--no-chorus`, `--no-delay`, `--no-efx` | effects are on by default, as the module has them |
+| `--loops N` | play-throughs of the loop body; `1` is the default, `-1` never stops |
+| `--fade SEC` | the fade that follows a finite loop count, so it ends rather than cutting |
 | `--stream` | limit polyphony to the hardware's 64 voices |
 | `--polyphony N` | voice limit outright; `0` grows the pool on demand, and is the default |
 | `--ports 1\|2\|4` | 16, 32 or 64 parts; two is the hardware |
@@ -102,6 +104,19 @@ ran out renders identically at any limit.
 
 `--ports 4` is past what the module can do and wants a voice limit raised to suit — sixty-four
 parts sharing sixty-four voices would steal without pause. See \ref architecture.
+
+**The input does not have to be a Standard MIDI File.** ts::formats::to_smf converts the formats
+game music actually shipped in — RIFF-MIDI, DirectMusic `MIDS`, DOOM `MUS`, Miles `XMI`, `GMF`,
+both HMI containers, Mobile XMF and the LDS tracker — into an in-memory SMF before the one reader
+sees it, so every front end gained them at once and nothing downstream knows the difference. A file
+that is already an SMF is passed through untouched.
+
+Loop points come out of the same parse: ts::smf::load scans the four marker dialects the corpus
+uses — Touhou's CC 2/4 pair, RPG Maker's CC 111, the XMI/EMIDI CC 116–119 set, and
+`loopStart`/`loopEnd` markers — and reports the surviving points in samples on ts::smf::Song. They
+sit unused until `--loops` asks for them. Tracks carrying an EMIDI designation (CC 110) for some
+other synthesizer are dropped whole during the parse, so a multi-synth score does not double its
+voices here.
 
 Two more subcommands exist for analysis: `render-note` writes a single note as raw interleaved
 float32, `dump-effect` writes a send effect's impulse response, and `bench` times the render path
@@ -138,7 +153,9 @@ actually addresses, with the tone each program resolved to, live volume, express
 per-channel voice count, and mute and solo that take effect on a note already sounding. It opens
 four ports rather than the hardware's two, and raises the voice limit to match — a player is handed
 whatever it is given, and a file whose parts the engine cannot reach is a silence a listener cannot
-diagnose.
+diagnose. `l` toggles looping while it plays and `--loop` starts with it on; the transport line
+shows the state beside the clock. While looping the source has no end — the position wraps at the
+file's loop points, or over the whole song when it declares none.
 
 Both build on Windows as well, and both drive the same `ts::audio` core, so the ring protocol and
 the transport exist once. The player takes every render option above, plus:

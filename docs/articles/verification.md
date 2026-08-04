@@ -235,8 +235,8 @@ collapsed into one number:
 3. **Constrained** — this engine at the hardware's 64 voices, which is the tier directly comparable
    to (2). The gap between them is the measurement that matters, and it answers a question worth
    asking precisely: *how much of the difference is missing features?* Every remaining gap in this
-   engine — insertion EFX above all — should show up here as a specific, attributable divergence
-   rather than as a vague dissatisfaction.
+   engine — the untranscribed insertion-EFX algorithms above all — should show up here as a
+   specific, attributable divergence rather than as a vague dissatisfaction.
 
 The unlimited and 256-voice digests sit alongside (3) as regression checks on this engine only.
 Nothing in the DLL can produce them, because the DLL has 64 voices.
@@ -269,7 +269,8 @@ render of the same file:
 | envelope, worst 1/64th | **1.72 dB** |
 
 The top octave is where the residual lives, which is what one would expect of an engine whose
-remaining gaps — insertion EFX above all — are bright. That is the number to watch as those close.
+remaining gaps — the untranscribed insertion-EFX algorithms above all — are bright. That is the
+number to watch as those close.
 
 \note The comparison is run at 64 voices deliberately. The DLL has that many and steals; a render
 with more of them is measuring a different instrument, however much better it may sound.
@@ -887,11 +888,19 @@ Stated plainly, because they are not covered by the numbers above:
   replaced without touching any DSP. The test that covers it says so in as many words.
 - **The LFO has no hardware trace.** It is verified against the reference, which the spec project
   separately reports as bit-exact against the live engine. That is one link removed from the DLL.
-- **Insertion EFX is out of scope**, as it is upstream. The 67-algorithm subsystem is not
-  implemented; the GS SysEx that selects it is parsed and dropped. The groundwork is in:
-  `tools/dump_efx_table.py` reads the DLL's own directory of all sixty-five effects by name and
-  points at the algorithm and parameter handler behind each. The names are Roland's, so they are
-  decoded from your own copy rather than committed here.
+- **Insertion EFX exists as a block, but only three of its algorithms do.** ts::InsertionEffect
+  transcribes the block machinery in full — the register file, the per-type preset fill, the two
+  decrementing delay lines, the `40 03` selection and parameter SysEx, and the `40 4x 22` part
+  routing — and decodes the directory, presets, defaults and parameter curves from the user's own
+  DLL, `tools/dump_efx_table.py` being where that reading was worked out. Of the 65 types, Thru,
+  Overdrive and Distortion have their processors transcribed and verified against the live engine
+  (a Thru-routed part is level-transparent in the DLL and within 1.5% here; Overdrive matches to
+  1.4% RMS and tracks the no-EFX baseline's per-band spread). The other 62 pass the signal through
+  unchanged, with routing and send levels still honoured, and report it via
+  ts::InsertionEffect::implemented — so a host can say which effect it is *not* rendering rather
+  than rendering it wrong. One number in the block is calibrated rather than traced: the ×4 between
+  the algorithm's halved output and the dry mix comes from those live renders, decomposed only as
+  far as the 2.0 ramp target the apply handlers write.
 - **Drum tones with the 4-partial layout are not reversed** upstream. A melodic tone here has two
   partial slots (ts::Tone::partial_slots), and asking for more throws rather than guessing. General
   MIDI kits resolve to ordinary melodic tones, so the common path works.

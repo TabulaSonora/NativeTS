@@ -92,16 +92,27 @@ flowchart TD
 
     PAN --> BUS["bus accumulator<br/><small>dry, plus three sends</small>"]
     BUS --> EQ["Equalizer<br/><small>two shelves, the parts that opt in</small>"]
+    BUS --> EFX["InsertionEffect<br/><small>the EFX parts, their own sends nulled</small>"]
     BUS --> FX["Reverb &bull; Chorus &bull; SystemDelay"]
     BUS --> OUT["stereo output"]
     EQ --> OUT
+    EFX --> FX
+    EFX --> OUT
     FX --> OUT
 ```
 
 Solid arrows are the audio path; dotted arrows are control-rate parameter flow. The classes are
 ts::PatchDirectory, ts::Sampler, ts::Interpolator, ts::StateVariableFilter, ts::TvaChain,
 ts::PanLaw, ts::ControlMatrix, ts::PartModifiers, ts::PitchChain, ts::PitchRamp, ts::LfoEngine,
-ts::TvfChain, ts::Equalizer, and the three ts::Effect implementations.
+ts::TvfChain, ts::Equalizer, ts::InsertionEffect, and the three ts::Effect implementations.
+
+The insertion block sits *ahead* of the send network rather than beside it. A part routed to it by
+`40 4x 22` has both of its own sends forced off and its dry signal detoured into the block, and it
+is the block's output that rejoins the dry mix and feeds the three send buses, at the common levels
+`40 03 17`–`19`. That is the mechanism behind the manual's note that system-effect levels become
+common to all EFX parts. Only a first tranche of the 65 types has its algorithm transcribed — a
+type outside it passes the signal through unchanged, with routing and sends still honoured, and
+says so through ts::InsertionEffect::implemented. See \ref signal-flow.
 
 Partials **sum**. Each is an independent voice dispatched into one accumulation buffer; there is no
 divide-by-count anywhere, and averaging would silently halve every two-partial patch.

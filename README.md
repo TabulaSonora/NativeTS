@@ -16,6 +16,10 @@ separate grant.
 the players and the browser build drive, comfortably faster than realtime on one core. A terminal
 player and a full-screen mixer are in as well.
 
+The reader takes more than SMF: RIFF-MIDI, DirectMusic `MIDS`, DOOM `MUS`, Miles `XMI`, `GMF`, both
+HMI containers, Mobile XMF and the LDS tracker convert to an in-memory SMF on the way in, and the
+four loop-marker dialects those files use come out of the same parse, so `--loops` can honour them.
+
 The oracle is `SCCore.dll` itself — its captured internal state and its rendered audio, driven
 through its own exported API. See
 [Verification](https://tabulasonora.github.io/NativeTS/verification.html) for what is proven and

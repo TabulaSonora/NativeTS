@@ -52,8 +52,8 @@ namespace `ts`.
 | Patches | Turns a program change into a tone, and a note into a wave | ts::PatchDirectory, ts::Tone, ts::DrumKitTable, ts::WaveDescriptor |
 | DSP | The per-voice signal path | ts::Sampler, ts::Interpolator, ts::StateVariableFilter, ts::PitchChain, ts::TvaChain, ts::TvfChain, ts::LfoEngine |
 | Modulation | What the stream can move while a note sounds | ts::ControlMatrix, ts::PartModifiers, ts::PitchRamp, ts::ControlDecode |
-| Effects | The three send effects, the part EQ, and their coefficient tables | ts::Reverb, ts::Chorus, ts::SystemDelay, ts::Equalizer, ts::EffectPresets, ts::EffectProgrammer |
-| MIDI | Reading a Standard MIDI File into something renderable | ts::MidiEvent, ts::Sequence |
+| Effects | The three send effects, the insertion EFX block, the part EQ, and their coefficient tables | ts::Reverb, ts::Chorus, ts::SystemDelay, ts::InsertionEffect, ts::Equalizer, ts::EffectPresets, ts::EffectProgrammer |
+| MIDI | Reading a music file into something renderable, whatever it was written as | ts::MidiEvent, ts::Sequence, ts::smf::Song, ts::smf::SongLoop, ts::formats::to_smf |
 | The engine | The block loop, 32 samples at a time, and the parts it drives | ts::ToneGenerator, ts::Part, ts::VoicePool, ts::FrameRing |
 | Render | Playing a file through it, live or into a buffer | ts::SequencePlayer, ts::RenderOptions, ts::NoteRenderer, ts::wav::write |
 
