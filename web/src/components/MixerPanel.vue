@@ -17,7 +17,8 @@
         exactly as it would on the module.
     -->
     <section class="panel enter-rise">
-        <h2>Mixer<span v-if="xgMode" class="mode-badge" title="XG System On, or --map xg">XG</span></h2>
+        <h2>Mixer<LSTooltip v-if="xgMode" text="XG System On, or --map xg"><span
+            class="mode-badge">XG</span></LSTooltip></h2>
 
         <div class="strips">
             <div v-for="channel in visible" :key="channel"
@@ -33,7 +34,9 @@
                           aria-hidden="true">{{ part(channel).voices || 0 }}</span>
                 </span>
 
-                <span class="sounding" :title="details(channel)">{{ sounding(channel) }}</span>
+                <LSTooltip :text="details(channel)">
+                    <span class="sounding">{{ sounding(channel) }}</span>
+                </LSTooltip>
 
                 <span class="buttons">
                     <button class="btn btn-secondary btn-tiny"
@@ -47,8 +50,9 @@
                 </span>
 
                 <span v-if="part(channel).program !== undefined" class="faders">
-                    <label v-for="fader in faders" :key="fader.controller" class="fader"
-                           :title="`${fader.name} — CC${fader.controller}`">
+                    <LSTooltip v-for="fader in faders" :key="fader.controller"
+                               :text="`${fader.name} — CC${fader.controller}`">
+                    <label class="fader">
                         <span class="technical">{{ fader.short }}</span>
                         <input type="range" min="0" max="127"
                                :value="value(channel, fader.controller)"
@@ -59,6 +63,7 @@
                                @change="release"
                                @input="move(channel, fader.controller, $event)" />
                     </label>
+                    </LSTooltip>
                 </span>
             </div>
         </div>
@@ -75,6 +80,7 @@ import { computed, ref } from 'vue';
 import { drumChannel, type ChannelSnapshot } from '../engine/protocol';
 import { engine } from '../services/engine-client';
 import { useEngineStore } from '../stores/engine';
+import LSTooltip from './losnoco/LSTooltip.vue';
 
 const store = useEngineStore();
 

@@ -8,7 +8,7 @@
         playing dynamics: near the pivot at the top is soft, at the front edge is as hard as the
         panel's ceiling allows.
     -->
-    <div class="keyboard" :style="width" @pointerleave="releaseAll">
+    <div ref="root" class="keyboard" :style="width" @pointerleave="releaseAll">
         <button
             v-for="key in keys"
             :key="key.note"
@@ -18,18 +18,18 @@
             @pointerup="up(key.note)"
             @pointerenter="enter(key.note, $event)"
             @pointerleave="up(key.note)"
-        >{{ key.note === 60 ? 'C4' : '' }}</button>
+        >{{ key.label }}</button>
     </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 
 const props = withDefaults(defineProps<{
     firstNote?: number;
     keyCount?: number;
     velocity?: number;
-}>(), { firstNote: 48, keyCount: 25, velocity: 127 });
+}>(), { firstNote: 0, keyCount: 0, velocity: 127 });
 
 const emit = defineEmits<{
     noteOn: [note: number, velocity: number];
@@ -42,21 +42,88 @@ const emit = defineEmits<{
 const whiteHeight = 128;
 const blackHeight = 80;
 
+// The white key the layout aims for. Not a floor and not a ceiling: it is what the octave count is
+// chosen against, and the keys then divide the panel exactly, so the real width lands within a few
+// pixels either side of it.
+const targetWhite = 34;
+
+/// Octaves, not keys: a keyboard that ends mid-octave reads as cut off rather than as sized.
+const minOctaves = 2;
+const maxOctaves = 7;
+
 function isBlack(note: number): boolean {
     return [1, 3, 6, 8, 10].includes(note % 12);
 }
+
+const root = ref<HTMLElement | null>(null);
+const available = ref(0);
+
+let observer: ResizeObserver | null = null;
+onMounted(() => {
+    if (!root.value) {
+        return;
+    }
+    available.value = root.value.clientWidth;
+    // The panel is resizable and the page is responsive, so the count cannot be decided once at
+    // mount. `contentRect` is the box the keys divide, which is the number this needs.
+    observer = new ResizeObserver(entries => {
+        const box = entries[0]?.contentRect;
+        if (box) {
+            available.value = box.width;
+        }
+    });
+    observer.observe(root.value);
+});
+onBeforeUnmount(() => {
+    observer?.disconnect();
+    observer = null;
+});
+
+/**
+ * How much keyboard fits, in whole octaves.
+ *
+ * Width buys *keys*, not bigger keys — a wider panel should let you play a wider range, which is
+ * what an instrument does with the space. Below two octaves there is not enough left to play, and
+ * above seven there is no more piano.
+ */
+const octaves = computed(() => {
+    const whites = Math.floor((available.value || targetWhite * 7 * 2) / targetWhite);
+    return Math.max(minOctaves, Math.min(maxOctaves, Math.floor(whites / 7)));
+});
+
+/**
+ * Where the range starts — always a C, and placed so middle C stays near the middle.
+ *
+ * An instrument that grew only upward would push middle C to the left edge as the panel widened,
+ * and the hand would have to move to find it. Growing around it means the note under the same
+ * place on screen stays roughly the same note.
+ */
+const firstNote = computed(() => {
+    if (props.firstNote > 0) {
+        return props.firstNote;
+    }
+    const below = Math.floor(octaves.value / 2);
+    return Math.max(12, Math.min(108 - octaves.value * 12, 60 - below * 12));
+});
+
+// One extra key so the range ends on the C it started on, which is how a keyboard is counted.
+const keyCount = computed(() => (props.keyCount > 0 ? props.keyCount : octaves.value * 12 + 1));
 
 // White keys are laid out in sequence and black keys float between them, so a black key's position
 // is the count of white keys below it rather than its semitone index.
 const keys = computed(() => {
     const list = [];
     let whites = 0;
-    for (let offset = 0; offset < props.keyCount; offset++) {
-        const note = props.firstNote + offset;
+    for (let offset = 0; offset < keyCount.value; offset++) {
+        const note = firstNote.value + offset;
         const black = isBlack(note);
         list.push({
             note,
             black,
+            // Every C, not only middle C. One label was orientation enough across two octaves; over
+            // seven it is a lone landmark in a field of identical keys, and counting to find G5 is
+            // not what an instrument should ask.
+            label: !black && note % 12 === 0 ? `C${note / 12 - 1}` : '',
             style: black
                 ? `left: calc(${whites} * var(--key-width) - var(--key-width) * 0.3);`
                 : `left: calc(${whites} * var(--key-width));`,
@@ -69,21 +136,18 @@ const keys = computed(() => {
 });
 
 /**
- * The keyboard fills the width it is given, by making one key a fraction of it.
+ * The chosen octaves then divide the panel exactly, so no strip is left over on the right.
  *
  * Every key is positioned off `--key-width` — the white keys' own width, the black keys' 0.6 of
- * it, and every `left` — so redefining that one property in percent is the whole of it: the
- * percentages resolve against `.keyboard`, which is the keys' containing block. Nothing here needs
- * a resize observer, and there is no layout pass in JavaScript to go stale.
+ * it, and every `left` — so redefining that one property in percent is the whole of the layout:
+ * the percentages resolve against `.keyboard`, which is the keys' containing block.
  *
- * Clamped at both ends. Below about 20px a white key is narrower than a fingertip, and past 56px
- * the octave stops reading as a keyboard and starts reading as a row of buttons; between them it
- * tracks the panel. Only the width scales — the heights stay the fixed pixel values `velocityAt`
- * divides by, so where a pointer lands still means the same thing at every size.
+ * Only the width follows the panel. The heights stay the fixed pixel values `velocityAt` divides
+ * by, so where a pointer lands down the key still means the same velocity at every size.
  */
 const width = computed(() => {
     const whites = keys.value.filter(key => !key.black).length;
-    return `--key-width: clamp(20px, calc(100% / ${Math.max(1, whites)}), 56px);`;
+    return `--key-width: calc(100% / ${Math.max(1, whites)});`;
 });
 
 const held = reactive(new Set<number>());

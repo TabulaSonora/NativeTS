@@ -30,12 +30,14 @@
                 <!-- The switch, not a per-song choice: it is remembered beside the DLL and holds
                      for every song until turned off. Wraps at the file's own loop points, or over
                      the whole song when it declares none. -->
-                <label class="loop-switch" :title="store.songHasLoop
-                           ? 'This file declares loop points; the song wraps at them'
-                           : 'No loop points in this file; the whole song wraps'">
-                    <input type="checkbox" :checked="store.looping" @change="toggleLoop" />
-                    Loop
-                </label>
+                <LSTooltip :text="store.songHasLoop
+                               ? 'This file declares loop points; the song wraps at them'
+                               : 'No loop points in this file; the whole song wraps'">
+                    <label class="loop-switch">
+                        <input type="checkbox" :checked="store.looping" @change="toggleLoop" />
+                        Loop
+                    </label>
+                </LSTooltip>
             </div>
 
             <input type="range" class="scrub"
@@ -61,6 +63,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useEngineStore } from '../stores/engine';
+import LSTooltip from './losnoco/LSTooltip.vue';
 
 const store = useEngineStore();
 const error = ref<string | null>(null);
