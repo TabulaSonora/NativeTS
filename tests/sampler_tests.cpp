@@ -108,16 +108,15 @@ TEST_CASE("a descriptor unpacks its 20-bit position fields", "[sampler]")
     // Fine tune 1024 is exactly the root key; the offset is (1024 - fineTune) / 1000.
     CHECK_THAT(descriptor.native_pitch(), WithinAbs(60.0, 1e-12));
 
-    // The second fine tune is decoded and deliberately not tuned with: the module computes it
-    // into `voice+0x200` and reads that nowhere, taking its exponent against `voice+0x1fc`. A
-    // descriptor carrying one must therefore sound at exactly the root, not 320 milli-semitones
-    // off it, and that is the assertion that would catch it being wired back in.
+    // The second fine tune tunes off that result, not off the root. The module computes it into
+    // `voice+0x200` and `voices_control_update` copies that over `voice+0x1fc` on every control
+    // tick of a sounding voice, so it is what the exponent ends up taken against.
     record[0x0E] = 0xC0;
     record[0x0F] = 0x02; // 704, the value the alto sax's top zone carries
     const WaveDescriptor detuned = WaveDescriptor::parse(record);
     CHECK(detuned.second_fine_tune == 704);
-    CHECK_THAT(detuned.native_milli_semitones(), WithinAbs(60000.0, 1e-9));
-    CHECK_THAT(detuned.native_pitch(), WithinAbs(60.0, 1e-12));
+    CHECK_THAT(detuned.native_milli_semitones(), WithinAbs(60320.0, 1e-9));
+    CHECK_THAT(detuned.native_pitch(), WithinAbs(60.320, 1e-12));
 }
 
 TEST_CASE("bit 1 of the flag byte takes no part in the dispatch", "[sampler]")

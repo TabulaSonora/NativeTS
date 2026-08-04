@@ -29,17 +29,24 @@ struct WaveDescriptor {
     int fine_tune = 0;
     /// Second fine-tune word, at descriptor `0x0E`, neutral at 1024 like the first.
     ///
-    /// **Real data the module does not tune with.** `partial_compute_pitch @ 18005fc20` computes
-    /// two native pitches — `voice+0x1fc = root*1000 - fine + 0x400` and
-    /// `voice+0x200 = voice+0x1fc - desc[0x0e] + 0x400` — and only the first is ever read: both
-    /// `voice_pitch_keyfollow` and `voice_pitch_block_update` subtract `voice+0x1fc` to form the
-    /// exponent, and `voice+0x200` is written once and read nowhere in the binary.
+    /// `partial_compute_pitch @ 18005fc20` computes two native pitches —
+    /// `voice+0x1fc = root*1000 - fine + 0x400`, then
+    /// `voice+0x200 = voice+0x1fc - desc[0x0e] + 0x400` — and the exponent is taken against
+    /// `voice+0x1fc`. That reads as though the second one goes nowhere, and every text search for
+    /// `voice+0x200` agrees, which is how it was written off twice.
     ///
-    /// The descriptor those two are computed from is not the ROM record directly but a staging
-    /// copy at `0x181a1e81e`, which `LAB_18005c390` returns and `partial_load_params` fills with a
-    /// verbatim 22-byte copy of the record — so the fields are the record's, unmodified, and this
-    /// one really does go nowhere. Kept because it is decoded, and because an engine that stopped
-    /// reading it would lose the ability to say so.
+    /// It is read. `voices_control_update @ 1800849a0` walks the voices with its pointer at
+    /// **`voice + 4`**, so the pair at `180084c13` —
+    ///
+    /// ```asm
+    /// MOV EAX,dword ptr [RDI + 0x1fc]   ; voice+0x200
+    /// MOV dword ptr [RDI + 0x1f8],EAX   ; voice+0x1fc
+    /// LEA RCX,[RDI + -0x4]              ; the voice itself, for voice_block_process
+    /// ```
+    ///
+    /// — is `voice+0x1fc = voice+0x200`, run every control tick for as long as `voice+0x16c` is 1,
+    /// which `voice_start` sets and only release or fade-out clears. The four-byte skew is why no
+    /// search for the literal offset ever found it.
     int second_fine_tune = 1024;
     /// Raw flag byte. Bit 0 is bidirectional, bit 2 is reverse; bit 1 takes no part in the
     /// dispatch.
@@ -62,12 +69,12 @@ struct WaveDescriptor {
 
     /// Native pitch in milli-semitones — what the sampler's ratio is taken against.
     ///
-    /// The module's `voice+0x1fc`, and only that: the root and the *first* fine tune. See
-    /// `second_fine_tune` for why the other one is not here. Every ratio in this engine divides by
-    /// this, so the sites must not drift apart.
+    /// The module's `voice+0x1fc` *after* the control tick overwrites it with `voice+0x200` — both
+    /// fine tunes, which is what a sounding note is tuned to. See `second_fine_tune`. Every ratio
+    /// in this engine divides by this, so the sites must not drift apart.
     [[nodiscard]] constexpr double native_milli_semitones() const noexcept
     {
-        return (root_key * 1000.0) + 1024.0 - fine_tune;
+        return (root_key * 1000.0) + 1024.0 - fine_tune - (second_fine_tune - 1024.0);
     }
 
     /// Parses a descriptor from its `stride` raw bytes.
