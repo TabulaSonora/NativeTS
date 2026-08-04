@@ -35,10 +35,12 @@ struct MidiEvent {
     /// A file addresses more than sixteen channels by splitting them across ports, and it says
     /// which port a track belongs to with a meta event: `FF 21` (MIDI Port) carries the number
     /// outright, while `FF 09` (Device Name) — or `FF 04` (Instrument Name) in files that predate
-    /// it — names an output instead. Names are assigned numbers in order of first appearance,
-    /// deduplicated by the string exactly as stored. Untagged files are all port 0, which is what
-    /// they have always been. The engine masks this to the ports it was created with, so a file
-    /// asking for port 3 on a two-port engine folds onto port 1 rather than being dropped.
+    /// it — names an output instead. One scheme applies per file, preferred in that order: any
+    /// `FF 21` anywhere means the numbers rule and the names are ignored, else `FF 09` names,
+    /// else `FF 04` names. Names are assigned numbers in order of first appearance, deduplicated
+    /// by the string exactly as stored. Untagged files are all port 0, which is what they have
+    /// always been. The engine masks this to the ports it was created with, so a file asking for
+    /// port 3 on a two-port engine folds onto port 1 rather than being dropped.
     int port = 0;
 
     /// The channel a channel message addresses.

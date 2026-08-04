@@ -4,12 +4,14 @@
 #include "test_data.hpp"
 
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <ranges>
+#include <utility>
 #include <vector>
 
 using namespace ts;
@@ -477,44 +479,103 @@ TEST_CASE("two tracks sharing a port and channel still address one part", "[port
     CHECK(events[0].channel() == events[1].channel());
 }
 
+namespace {
+
+/// One track: any number of (meta type, name) tags, then a program change carrying `program`.
+[[nodiscard]] std::vector<std::uint8_t>
+named_track(std::initializer_list<std::pair<std::uint8_t, const char*>> tags, std::uint8_t program)
+{
+    std::vector<std::uint8_t> data;
+    for (const auto& [meta, name] : tags) {
+        data.insert(data.end(), {0x00, 0xFF, meta, static_cast<std::uint8_t>(std::strlen(name))});
+        data.insert(data.end(), name, name + std::strlen(name));
+    }
+    data.insert(data.end(), {0x00, 0xC0, program, 0x00, 0xFF, 0x2F, 0x00});
+    const auto length = static_cast<std::uint32_t>(data.size());
+    std::vector<std::uint8_t> out{'M', 'T', 'r', 'k',
+                                  static_cast<std::uint8_t>(length >> 24),
+                                  static_cast<std::uint8_t>(length >> 16),
+                                  static_cast<std::uint8_t>(length >> 8),
+                                  static_cast<std::uint8_t>(length)};
+    out.insert(out.end(), data.begin(), data.end());
+    return out;
+}
+
+/// A format-1 file from whole tracks.
+[[nodiscard]] std::vector<std::uint8_t>
+file_of(std::initializer_list<std::vector<std::uint8_t>> tracks)
+{
+    std::vector<std::uint8_t> file{'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 0, 0x01, 0xE0};
+    file[11] = static_cast<std::uint8_t>(tracks.size());
+    for (const auto& bytes : tracks) {
+        file.insert(file.end(), bytes.begin(), bytes.end());
+    }
+    return file;
+}
+
+} // namespace
+
 TEST_CASE("device names are assigned ports in order of first appearance", "[port][smf]")
 {
     // A file with no FF 21 at all can still be multi-port: it names its outputs instead, with
     // FF 09 (Device Name) or -- in files older than that meta -- FF 04 (Instrument Name). The
     // names are opaque ("Modem" and "Printer" in the files this covers, the Mac serial ports), so
     // there is nothing to recognise; the reader stores each string as it occurs, deduplicated,
-    // and the first distinct name is port 0, the second port 1, and so on. Both metas share the
-    // one table, so a name is the same port no matter which meta carried it.
-    const auto track = [](std::uint8_t meta, const char* name, std::uint8_t program) {
-        std::vector<std::uint8_t> data{0x00, 0xFF, meta,
-                                       static_cast<std::uint8_t>(std::strlen(name))};
-        data.insert(data.end(), name, name + std::strlen(name));
-        data.insert(data.end(), {0x00, 0xC0, program, 0x00, 0xFF, 0x2F, 0x00});
-        const auto length = static_cast<std::uint32_t>(data.size());
-        std::vector<std::uint8_t> out{'M', 'T', 'r', 'k',
-                                      static_cast<std::uint8_t>(length >> 24),
-                                      static_cast<std::uint8_t>(length >> 16),
-                                      static_cast<std::uint8_t>(length >> 8),
-                                      static_cast<std::uint8_t>(length)};
-        out.insert(out.end(), data.begin(), data.end());
-        return out;
-    };
+    // and the first distinct name is port 0, the second port 1, and so on.
+    const std::uint8_t meta = GENERATE(std::uint8_t{0x09}, std::uint8_t{0x04});
+    INFO("meta 0x" << std::hex << int(meta));
 
-    std::vector<std::uint8_t> file{'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 4, 0x01, 0xE0};
-    for (const auto& bytes : {track(0x04, "Modem", 40),    // first name seen: port 0
-                              track(0x04, "Printer", 41),  // second: port 1
-                              track(0x04, "Modem", 42),    // seen before: port 0 again
-                              track(0x09, "Printer", 43)}) // same name, other meta: still port 1
-    {
-        file.insert(file.end(), bytes.begin(), bytes.end());
-    }
+    const std::vector<MidiEvent> events =
+        smf::parse(file_of({named_track({{meta, "Modem"}}, 40),    // first name seen: port 0
+                            named_track({{meta, "Printer"}}, 41),  // second: port 1
+                            named_track({{meta, "Modem"}}, 42)}),  // seen before: port 0 again
+                   32000);
 
-    const std::vector<MidiEvent> events = smf::parse(file, 32000);
-    REQUIRE(events.size() == 4);
+    REQUIRE(events.size() == 3);
     CHECK(events[0].port == 0);
     CHECK(events[1].port == 1);
     CHECK(events[2].port == 0);
-    CHECK(events[3].port == 1);
+}
+
+TEST_CASE("one port scheme rules a file: FF 21, else FF 09, else FF 04", "[port][smf]")
+{
+    // The schemes do not mix. FF 21 carries actual numbers, so its presence anywhere in the file
+    // wins outright; FF 09 is the meta defined for naming outputs, so it outranks FF 04, which is
+    // only a device name by the convention of files older than FF 09 -- in anything newer it is
+    // an actual instrument name, and letting it assign ports would scatter a single-port file.
+
+    SECTION("FF 09 anywhere means FF 04 names are ignored")
+    {
+        const std::vector<MidiEvent> events =
+            smf::parse(file_of({named_track({{0x04, "Alpha"}}, 40),
+                                named_track({{0x04, "Beta"}, {0x09, "OutA"}}, 41),
+                                named_track({{0x09, "OutB"}}, 42)}),
+                       32000);
+
+        REQUIRE(events.size() == 3);
+        // Under FF 04 the file would be Alpha 0, Beta 1; under FF 09 the first track is untagged.
+        CHECK(events[0].port == 0);
+        CHECK(events[1].port == 0); // OutA, the first FF 09 name
+        CHECK(events[2].port == 1); // OutB, the second
+    }
+
+    SECTION("FF 21 anywhere means every name is ignored")
+    {
+        auto tagged = named_track({{0x09, "OutA"}, {0x04, "Alpha"}}, 40);
+        // Splice an FF 21 for port 2 in front of the name metas of the first track.
+        const std::array<std::uint8_t, 5> port_meta{0x00, 0xFF, 0x21, 0x01, 0x02};
+        tagged.insert(tagged.begin() + 8, port_meta.begin(), port_meta.end());
+        tagged[7] += port_meta.size();
+
+        const std::vector<MidiEvent> events =
+            smf::parse(file_of({std::move(tagged),
+                                named_track({{0x09, "OutB"}, {0x04, "Beta"}}, 41)}),
+                       32000);
+
+        REQUIRE(events.size() == 2);
+        CHECK(events[0].port == 2); // the FF 21 number, not a name assignment
+        CHECK(events[1].port == 0); // no FF 21 in this track, and names do not apply
+    }
 }
 
 TEST_CASE("lont32.mid splits onto two ports by instrument-name metas", "[port][smf][sccore]")

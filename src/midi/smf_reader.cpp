@@ -22,7 +22,12 @@ struct RawEvent {
     int status = 0;
     int data1 = 0;
     int data2 = 0;
-    int port = 0;
+    /// The port each tagging scheme would give this event. Which one actually applies is not
+    /// known until the whole file has been read -- see the selection after the parse loop -- so
+    /// all three are carried.
+    int port_by_number = 0;
+    int port_by_device = 0;
+    int port_by_instrument = 0;
     std::vector<std::uint8_t> bytes;
 };
 
@@ -103,10 +108,19 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
     std::size_t position = 14;
     std::vector<RawEvent> merged;
 
-    // Device names to port numbers, assigned in order of first appearance and shared across
-    // tracks: two tracks naming the same output belong to the same port, which is the whole point
-    // of naming it.
+    // Name-to-port tables, assigned in order of first appearance and shared across tracks: two
+    // tracks naming the same output belong to the same port, which is the whole point of naming
+    // it. FF 09 (Device Name) and FF 04 (Instrument Name) each get their own table because only
+    // one scheme ends up applying -- see the selection after the parse loop -- and a file using
+    // both must not have its FF 09 numbering shifted by FF 04 strings that will be ignored.
     std::map<std::string, int> device_ports;
+    std::map<std::string, int> instrument_ports;
+
+    // Which tagging schemes the file uses at all, decided over the whole file: FF 21 (MIDI Port)
+    // outranks FF 09, which outranks FF 04.
+    bool saw_port_number = false;
+    bool saw_device_name = false;
+
     int order = 0;
 
     for (int track = 0; track < track_count; ++track) {
@@ -122,10 +136,13 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
         std::int64_t tick = 0;
         int status = 0;
 
-        // The port a track is tagged for, and it is a *prefix*: it applies to the events that
-        // follow it in the track, so a track that switches ports partway is honoured rather than
-        // being forced to one. Tracks start on port 0, which is every untagged file.
-        int track_port = 0;
+        // The port a track is tagged for under each scheme, and each is a *prefix*: it applies to
+        // the events that follow it in the track, so a track that switches ports partway is
+        // honoured rather than being forced to one. Tracks start on port 0, which is every
+        // untagged file.
+        int track_port_by_number = 0;
+        int track_port_by_device = 0;
+        int track_port_by_instrument = 0;
 
         while (position < end) {
             int delta = 0;
@@ -174,31 +191,37 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                     // FF 21: MIDI Port. The number is taken as given -- clamping to the engine's
                     // width belongs to the engine, which masks, and doing it here would lose the
                     // file's intent for a wider one.
-                    track_port = data[position];
+                    track_port_by_number = data[position];
+                    saw_port_number = true;
                 } else if ((meta_type == 0x09 || meta_type == 0x04) && meta_length >= 1) {
-                    // FF 09: Device Name, and FF 04: Instrument Name serving as one -- files that
+                    // FF 09: Device Name, or FF 04: Instrument Name serving as one -- files that
                     // predate FF 09 name their output there instead ("Modem" and "Printer", the
                     // Mac serial ports, in the ones that prompted this). There is no number in
-                    // either, so names are assigned ports in order of first appearance, which is
-                    // deterministic and matches what a sequencer means by listing outputs. Both
-                    // metas share one table, keyed by the string exactly as stored. An explicit
-                    // FF 21 later in the track still overrides it.
+                    // either, so names are assigned ports in order of first appearance,
+                    // deduplicated by the string exactly as stored, which is deterministic and
+                    // matches what a sequencer means by listing outputs.
                     const std::string name(
                         reinterpret_cast<const char*>(data.data() + position),
                         static_cast<std::size_t>(meta_length));
-                    const auto found = device_ports.find(name);
-                    if (found != device_ports.end()) {
+                    auto& table = meta_type == 0x09 ? device_ports : instrument_ports;
+                    auto& track_port = meta_type == 0x09 ? track_port_by_device
+                                                         : track_port_by_instrument;
+                    const auto found = table.find(name);
+                    if (found != table.end()) {
                         track_port = found->second;
                     } else {
-                        const auto assigned = static_cast<int>(device_ports.size());
-                        device_ports.emplace(name, assigned);
+                        const auto assigned = static_cast<int>(table.size());
+                        table.emplace(name, assigned);
                         track_port = assigned;
+                    }
+                    if (meta_type == 0x09) {
+                        saw_device_name = true;
                     }
                 } else if (meta_type == 0x51 && meta_length >= 3) {
                     const int tempo =
                         (data[position] << 16) | (data[position + 1] << 8) | data[position + 2];
                     merged.push_back(
-                        RawEvent{tick, order++, RawEvent::Kind::tempo, tempo, 0, 0, 0, {}});
+                        RawEvent{tick, order++, RawEvent::Kind::tempo, tempo, 0, 0, 0, 0, 0, {}});
                 }
 
                 position += static_cast<std::size_t>(meta_length);
@@ -215,8 +238,16 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                  data.begin() + static_cast<std::ptrdiff_t>(position),
                                  data.begin() + static_cast<std::ptrdiff_t>(position)
                                      + sysex_length);
-                    merged.push_back(
-                        RawEvent{tick, order++, RawEvent::Kind::sysex, 0, 0, 0, track_port, std::move(bytes)});
+                    merged.push_back(RawEvent{tick,
+                                              order++,
+                                              RawEvent::Kind::sysex,
+                                              0,
+                                              0,
+                                              0,
+                                              track_port_by_number,
+                                              track_port_by_device,
+                                              track_port_by_instrument,
+                                              std::move(bytes)});
                 }
 
                 position += static_cast<std::size_t>(sysex_length);
@@ -229,7 +260,9 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                               message,
                                               data[position],
                                               0,
-                                              track_port,
+                                              track_port_by_number,
+                                              track_port_by_device,
+                                              track_port_by_instrument,
                                               {}});
                     position += 1;
                 } else {
@@ -239,7 +272,9 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                               message,
                                               data[position],
                                               data[position + 1],
-                                              track_port,
+                                              track_port_by_number,
+                                              track_port_by_device,
+                                              track_port_by_instrument,
                                               {}});
                     position += 2;
                 }
@@ -257,6 +292,17 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
 
     std::vector<MidiEvent> events;
     events.reserve(merged.size());
+
+    // One tagging scheme applies to the whole file, and it is only decidable now that all of it
+    // has been read: FF 21 carries actual numbers, so its presence anywhere wins; FF 09 is the
+    // meta defined for naming outputs, so it outranks FF 04, which only ever means a device in
+    // files older than FF 09. A file using none of them is all port 0, as it always was.
+    const auto port_of = [&](const RawEvent& entry) {
+        if (saw_port_number) {
+            return entry.port_by_number;
+        }
+        return saw_device_name ? entry.port_by_device : entry.port_by_instrument;
+    };
 
     int tempo_now = default_tempo;
     std::int64_t last_tick = 0;
@@ -279,7 +325,7 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                        0,
                                        0,
                                        std::move(entry.bytes),
-                                       entry.port});
+                                       port_of(entry)});
             break;
 
         case RawEvent::Kind::channel:
@@ -289,7 +335,7 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                        entry.data1,
                                        entry.data2,
                                        {},
-                                       entry.port});
+                                       port_of(entry)});
             break;
         }
     }
