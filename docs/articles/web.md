@@ -244,6 +244,19 @@ queue depth, the realtime factor and the starved-frame count beside it, because 
 actually is depends on the machine, the browser and how many voices are sounding. Anything above
 zero starved frames means the device ran out and invented some.
 
+**A picked song starts playing.** Web Audio's autoplay gate is *sticky* activation, not transient:
+one click anywhere in the document grants it and it lasts the session. The click that opened the
+file picker is that click, so by the time `change` fires the page may already start sound — the
+`change` event is not itself an activation-triggering event, and does not have to be. The case with
+no click behind it is a file *dropped* onto the input by a returning visitor whose DLL came back
+from IndexedDB unattended; there the context stays suspended and the song is left loaded and
+paused, because a transport that says "playing" into a device that is not running is worse than one
+that waits for the Play button.
+
+The resume is therefore bounded rather than awaited outright. A `resume()` the policy will not
+allow is **not rejected** in Chrome — the promise is left pending, to settle if activation ever
+arrives — so what gets believed is the context's own `state` after a short race, never the promise.
+
 ## What the browser remembers
 
 Three preferences, all in `localStorage`, none derived from anything of Roland's: the colour theme

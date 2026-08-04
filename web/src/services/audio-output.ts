@@ -60,11 +60,36 @@ export function isStarted(): boolean {
     return context !== null;
 }
 
-/** Browsers start a context suspended until a gesture. Every transport control calls this first. */
-export async function resume(): Promise<void> {
-    if (context && context.state !== 'running') {
-        await context.resume();
+/**
+ * Browsers start a context suspended until a gesture. Every transport control calls this first.
+ *
+ * Returns whether the device actually reached `running`, and the context's own state is what
+ * decides that — never the promise. A `resume()` the autoplay policy will not allow is not
+ * rejected in Chrome: it is left *pending*, to settle if the page is ever granted activation,
+ * which may be never. Awaiting it unguarded would hang a caller that has no gesture behind it, so
+ * the wait is bounded. The bound is generous because a permitted resume takes a few milliseconds;
+ * it is a deadlock guard, not a deadline.
+ */
+export async function resume(timeoutMs = 1500): Promise<boolean> {
+    if (!context) {
+        return false;
     }
+    if (context.state === 'running') {
+        return true;
+    }
+
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+        context.resume().catch(() => undefined),
+        new Promise<void>(settle => {
+            timer = setTimeout(settle, timeoutMs);
+        }),
+    ]);
+    clearTimeout(timer);
+
+    // Through status(), not `context.state` directly: the check above narrowed the state away for
+    // the rest of this function, and the whole point is that the await may have changed it.
+    return status().state === 'running';
 }
 
 export function status(): AudioStatus {

@@ -80,6 +80,10 @@ async function load(event: Event) {
     try {
         await store.stop();
         await store.loadSong(await file.arrayBuffer(), file.name);
+        // Picking a file is the gesture; see the store's autoplaySong. A false return is the
+        // browser declining, not a failure, and needs no message — the song is loaded and Play is
+        // right there.
+        await store.autoplaySong();
     } catch (e) {
         error.value = e instanceof Error ? e.message : String(e);
     }

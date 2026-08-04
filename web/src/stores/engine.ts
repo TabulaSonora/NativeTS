@@ -111,14 +111,20 @@ export const useEngineStore = defineStore('engine', {
             };
         },
 
-        /** Opens the device inside the calling gesture and hands its port to the worker. */
-        async ensureAudio() {
+        /**
+         * Opens the device inside the calling gesture and hands its port to the worker.
+         *
+         * Returns whether sound can actually leave: false means the browser held the context
+         * suspended, which only a caller with no gesture behind it has to think about.
+         */
+        async ensureAudio(): Promise<boolean> {
             const port = await audio.start();
             if (port) {
                 engine.post({ type: 'bindAudio', port }, [port]);
             }
-            await audio.resume();
+            const running = await audio.resume();
             this.audio = audio.status();
+            return running;
         },
 
         async loadRom(bytes: ArrayBuffer, name: string, expectedSha256: string | null) {
@@ -138,6 +144,27 @@ export const useEngineStore = defineStore('engine', {
         async playSong() {
             await this.ensureAudio();
             await engine.call({ type: 'play', mode: 'song' });
+        },
+
+        /**
+         * Starts a song the moment it is picked, when the browser will let sound out.
+         *
+         * Web Audio gates on **sticky** activation, and the click that opened the file picker
+         * granted it — the picker's own `change` event is not an activation-triggering event and
+         * does not need to be, because sticky activation lasts the session. So a picked file plays
+         * where a page's first autoplay attempt would not.
+         *
+         * What has no click behind it is a file *dropped* onto the input by a visitor whose DLL
+         * came back from IndexedDB without their touching anything. There the context stays
+         * suspended, and the song is left loaded and paused rather than pretending to play into a
+         * device that is not running — Play is one button away and carries a gesture of its own.
+         */
+        async autoplaySong(): Promise<boolean> {
+            if (!(await this.ensureAudio())) {
+                return false;
+            }
+            await engine.call({ type: 'play', mode: 'song' });
+            return true;
         },
 
         /** Opens the device for live playing, without starting any loaded song. */
