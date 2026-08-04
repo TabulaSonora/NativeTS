@@ -504,8 +504,8 @@ void ToneGenerator::Impl::apply_channel(
         break;
 
     case 0xD0:
-        // Channel pressure is likewise a matrix source (`channel_pressure_apply`); the value is
-        // kept so a later matrix has it, but nothing consumes it yet.
+        // Channel pressure is likewise a matrix source (`channel_pressure_apply`); the part's
+        // matrix sums it per control tick alongside the other five sources.
         if (part.rx.channel_pressure) {
             part.channel_pressure = data1;
         }
