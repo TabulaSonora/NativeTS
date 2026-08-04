@@ -48,6 +48,14 @@ SONGS = [
     ("test_poly_bend.mid", 1),
     ("panwet.mid", 1),
     ("th07_19_user_gm.mid", 1),
+
+    # The XG case. `th07_19_user_gm.mid` cannot serve as one: the harness has to filter its
+    # out-of-range Multi Part writes to stop the reference faulting, so its oracle render is of a
+    # file with some of its XG removed and it cannot tell a correct XG reading from no reading.
+    # MAKORO.MID trips neither unchecked index, so the reference renders it whole -- System On, the
+    # effect-type translation, a variation bank, the SFX voice bank on channel 6 and a drum kit
+    # chosen by bank MSB 127 on channel 10.
+    ("MAKORO.MID", 1),
     ("onestop.mid", 4),
 
     # Chosen by coverage rather than by taste: a scan of a 128,000-file archive found 288 files
