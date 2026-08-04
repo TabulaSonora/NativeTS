@@ -4,6 +4,7 @@ add_executable(ts_tests
     effect_programmer_tests.cpp
     effects_tests.cpp
     fixed_tests.cpp
+    format_tests.cpp
     frame_ring_tests.cpp
     interpolator_tests.cpp
     modulation_tests.cpp

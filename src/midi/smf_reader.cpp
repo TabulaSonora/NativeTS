@@ -1,8 +1,11 @@
 #include "tabulasonora/smf_reader.hpp"
 
+#include "tabulasonora/midi_formats.hpp"
+
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cctype>
 #include <cfenv>
 #include <cmath>
 #include <cstring>
@@ -31,6 +34,26 @@ struct RawEvent {
     int port_by_device = 0;
     int port_by_instrument = 0;
     std::vector<std::uint8_t> bytes;
+};
+
+/// A loop marker seen during the parse, in ticks; resolved to samples once the tempo map exists.
+///
+/// Collected per track and only committed when the track survives EMIDI filtering: the reference
+/// port rescans loops after dropping non-GM tracks, so a loop declared only in a dropped track
+/// must not survive it here either.
+struct LoopSignal {
+    enum class Kind {
+        touhou_start,
+        touhou_end,
+        /// A CC 2 or CC 4 with a non-zero value, which voids the whole Touhou scan.
+        touhou_error,
+        rpg_start,
+        xmi_start,
+        xmi_end,
+        marker_start,
+        marker_end,
+    } kind = Kind::marker_start;
+    std::int64_t tick = 0;
 };
 
 [[nodiscard]] std::uint16_t read_u16be(std::span<const std::uint8_t> data, std::size_t at)
@@ -72,6 +95,25 @@ read_variable_length(std::span<const std::uint8_t> data, std::size_t position, i
     }
 }
 
+/// Lower-cases a marker payload and trims surrounding whitespace, for comparing loop markers.
+[[nodiscard]] std::string lower_trim(std::span<const std::uint8_t> text)
+{
+    std::size_t begin = 0;
+    std::size_t end = text.size();
+    while (begin < end && std::isspace(static_cast<int>(text[begin])) != 0) {
+        ++begin;
+    }
+    while (end > begin && std::isspace(static_cast<int>(text[end - 1])) != 0) {
+        --end;
+    }
+    std::string lowered;
+    lowered.reserve(end - begin);
+    for (std::size_t i = begin; i < end; ++i) {
+        lowered.push_back(static_cast<char>(std::tolower(static_cast<int>(text[i]))));
+    }
+    return lowered;
+}
+
 } // namespace
 
 std::int64_t quantise(double samples) noexcept
@@ -83,7 +125,7 @@ std::int64_t quantise(double samples) noexcept
     return static_cast<std::int64_t>(std::nearbyint(samples)) / block_grid * block_grid;
 }
 
-std::vector<MidiEvent> read(const std::filesystem::path& path, int sample_rate)
+Song load(const std::filesystem::path& path, int sample_rate)
 {
     std::ifstream stream{path, std::ios::binary};
     if (!stream) {
@@ -91,15 +133,34 @@ std::vector<MidiEvent> read(const std::filesystem::path& path, int sample_rate)
     }
     const std::vector<std::uint8_t> data{std::istreambuf_iterator<char>{stream},
                                          std::istreambuf_iterator<char>{}};
-    return parse(data, sample_rate);
+    return load(data, sample_rate, path.filename().string());
+}
+
+std::vector<MidiEvent> read(const std::filesystem::path& path, int sample_rate)
+{
+    return load(path, sample_rate).events;
 }
 
 std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate)
 {
+    return load(data, sample_rate).events;
+}
+
+Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view name)
+{
+    // A foreign format -- MUS, XMI, an RMID or MIDS wrapper, and the rest -- is converted to an
+    // in-memory Standard MIDI File first, so everything below stays one reader.
+    std::vector<std::uint8_t> converted;
+    if (auto foreign = formats::to_smf(data, name)) {
+        converted = std::move(*foreign);
+        data = converted;
+    }
+
     if (data.size() < 14 || !starts_with(data, 0, "MThd")) {
         throw std::runtime_error("Not a Standard MIDI File: missing MThd.");
     }
 
+    const std::uint16_t format = read_u16be(data, 8);
     const std::uint16_t track_count = read_u16be(data, 10);
     const std::uint16_t division = read_u16be(data, 12);
     if ((division & 0x8000) != 0) {
@@ -149,15 +210,22 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                   bool& collide,
                                   int channel,
                                   std::span<const int> names) {
-        for (const int name : names) {
+        for (const int name_id : names) {
             int& slot = claims[static_cast<std::size_t>(channel)];
             if (slot < 0) {
-                slot = name;
-            } else if (slot != name) {
+                slot = name_id;
+            } else if (slot != name_id) {
                 collide = true;
             }
         }
     };
+
+    // What the loop scanners and the EMIDI filter need from the whole file: the committed loop
+    // signals, whether any track carries an EMIDI designation, and the tick of the last voice
+    // event (or final End of Track) across the tracks that survive.
+    std::vector<LoopSignal> loop_signals;
+    bool any_emidi = false;
+    std::int64_t last_voice_event_tick = 0;
 
     int order = 0;
 
@@ -191,6 +259,19 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
         std::uint16_t channels_used = 0;
         std::vector<int> device_names_used;
         std::vector<int> instrument_names_used;
+
+        // The track's own loop signals and EMIDI verdict, also held back until the track ends: a
+        // track designated for a non-GM synthesizer is dropped whole, and nothing it declared --
+        // events or loop points -- may leak into the result. CC 110 is the EMIDI Track
+        // Designation: values 0, 1 and 127 mean the track plays on a General MIDI receiver, any
+        // other value targets a specific device (MT-32, SCC-1, ...). A song authored for several
+        // synthesizers duplicates its content across tracks, so playing all of them as GM doubles
+        // every voice.
+        std::vector<LoopSignal> track_signals;
+        bool track_emidi_any = false;
+        bool track_emidi_other = false;
+        std::int64_t track_last_voice_tick = 0;
+        const std::size_t merged_before = merged.size();
 
         while (position < end) {
             int delta = 0;
@@ -248,7 +329,7 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                     // either, so names are assigned ports in order of first appearance,
                     // deduplicated by the string exactly as stored, which is deterministic and
                     // matches what a sequencer means by listing outputs.
-                    const std::string name(
+                    const std::string name_text(
                         reinterpret_cast<const char*>(data.data() + position),
                         static_cast<std::size_t>(meta_length));
                     auto& table = meta_type == 0x09 ? device_ports : instrument_ports;
@@ -256,12 +337,12 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                                          : track_port_by_instrument;
                     auto& track_name =
                         meta_type == 0x09 ? track_device_name : track_instrument_name;
-                    const auto found = table.find(name);
+                    const auto found = table.find(name_text);
                     if (found != table.end()) {
                         track_port = found->second;
                     } else {
                         const auto assigned = static_cast<int>(table.size());
-                        table.emplace(name, assigned);
+                        table.emplace(name_text, assigned);
                         track_port = assigned;
                     }
                     track_name = track_port;
@@ -273,6 +354,20 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                         (data[position] << 16) | (data[position + 1] << 8) | data[position + 2];
                     merged.push_back(
                         RawEvent{tick, order++, RawEvent::Kind::tempo, tempo, 0, 0, 0, 0, 0, {}});
+                } else if (meta_type == 0x06 && meta_length >= 1) {
+                    // FF 06: Marker. Only the loop markers matter, and "start" is accepted as a
+                    // loop-start alias.
+                    const std::string marker = lower_trim(
+                        data.subspan(position, static_cast<std::size_t>(meta_length)));
+                    if (marker == "loopstart" || marker == "start") {
+                        track_signals.push_back(LoopSignal{LoopSignal::Kind::marker_start, tick});
+                    } else if (marker == "loopend") {
+                        track_signals.push_back(LoopSignal{LoopSignal::Kind::marker_end, tick});
+                    }
+                } else if (meta_type == 0x2F) {
+                    // FF 2F: End of Track. Its tick is the end of the longest track, which is
+                    // what a start-only loop runs to.
+                    track_last_voice_tick = std::max(track_last_voice_tick, tick);
                 }
 
                 position += static_cast<std::size_t>(meta_length);
@@ -321,6 +416,8 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                     instrument_names_used.push_back(track_instrument_name);
                 }
 
+                track_last_voice_tick = std::max(track_last_voice_tick, tick);
+
                 const int type = message & 0xF0;
                 if (type == 0xC0 || type == 0xD0) {
                     merged.push_back(RawEvent{tick,
@@ -335,6 +432,49 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
                                               {}});
                     position += 1;
                 } else {
+                    if (type == 0xB0) {
+                        // The controllers the loop scanners and the EMIDI filter live on.
+                        const int controller = data[position];
+                        const int value = data[position + 1];
+                        switch (controller) {
+                        case 2: // Touhou loop start; a non-zero value voids the whole scan
+                            track_signals.push_back(LoopSignal{
+                                value == 0 ? LoopSignal::Kind::touhou_start
+                                           : LoopSignal::Kind::touhou_error,
+                                tick});
+                            break;
+                        case 4: // Touhou loop end
+                            track_signals.push_back(LoopSignal{
+                                value == 0 ? LoopSignal::Kind::touhou_end
+                                           : LoopSignal::Kind::touhou_error,
+                                tick});
+                            break;
+                        case 110: // EMIDI Track Designation
+                            track_emidi_any = true;
+                            if (value != 0 && value != 1 && value != 127) {
+                                track_emidi_other = true;
+                            }
+                            break;
+                        case 111: // RPG Maker loop start
+                            if (value == 0) {
+                                track_signals.push_back(
+                                    LoopSignal{LoopSignal::Kind::rpg_start, tick});
+                            }
+                            break;
+                        case 116: // XMI / EMIDI loop starts and ends
+                        case 118:
+                            track_signals.push_back(
+                                LoopSignal{LoopSignal::Kind::xmi_start, tick});
+                            break;
+                        case 117:
+                        case 119:
+                            track_signals.push_back(LoopSignal{LoopSignal::Kind::xmi_end, tick});
+                            break;
+                        default:
+                            break;
+                        }
+                    }
+
                     merged.push_back(RawEvent{tick,
                                               order++,
                                               RawEvent::Kind::channel,
@@ -350,15 +490,25 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
             }
         }
 
-        // The track's vote: only a single-channel track can claim its channel for a name. Two
-        // names from one such track still collide -- a prefix switch mid-track is a device
-        // switch on that channel, and it needs the ports just as much as two tracks do.
-        if (std::has_single_bit(channels_used)) {
-            const int channel = std::countr_zero(channels_used);
-            claim_channel(device_name_on_channel, device_names_collide, channel,
-                          device_names_used);
-            claim_channel(instrument_name_on_channel, instrument_names_collide, channel,
-                          instrument_names_used);
+        if (track_emidi_other) {
+            // The whole track was authored for some other synthesizer: drop everything it pushed,
+            // and none of its votes or loop points count.
+            merged.resize(merged_before);
+        } else {
+            any_emidi = any_emidi || track_emidi_any;
+            last_voice_event_tick = std::max(last_voice_event_tick, track_last_voice_tick);
+            loop_signals.insert(loop_signals.end(), track_signals.begin(), track_signals.end());
+
+            // The track's vote: only a single-channel track can claim its channel for a name. Two
+            // names from one such track still collide -- a prefix switch mid-track is a device
+            // switch on that channel, and it needs the ports just as much as two tracks do.
+            if (std::has_single_bit(channels_used)) {
+                const int channel = std::countr_zero(channels_used);
+                claim_channel(device_name_on_channel, device_names_collide, channel,
+                              device_names_used);
+                claim_channel(instrument_name_on_channel, instrument_names_collide, channel,
+                              instrument_names_used);
+            }
         }
 
         position = end;
@@ -434,7 +584,132 @@ std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate
         return a.position < b.position;
     });
 
-    return events;
+    // ── The loop scanners ─────────────────────────────────────────────────────────────────────
+    //
+    // Four independent dialects; the outermost surviving start and end win. Ported from
+    // spessasynth_core_c's scan_loops, which ports midi_processing's scan_for_loops.
+    constexpr std::int64_t unset = -1;
+    std::int64_t loop_start = unset;
+    std::int64_t loop_end = unset;
+    bool soft = false;
+
+    // Scan 1 -- Touhou (format 0 only): CC 2 is the start and CC 4 the end, both with value
+    // zero; a non-zero value on either voids the entire result.
+    if (format == 0) {
+        bool errored = false;
+        std::int64_t touhou_start = unset;
+        std::int64_t touhou_end = unset;
+        for (const LoopSignal& signal : loop_signals) {
+            if (signal.kind == LoopSignal::Kind::touhou_error) {
+                errored = true;
+                break;
+            }
+            if (signal.kind == LoopSignal::Kind::touhou_start
+                && (touhou_start == unset || signal.tick < touhou_start)) {
+                touhou_start = signal.tick;
+            } else if (signal.kind == LoopSignal::Kind::touhou_end) {
+                if (touhou_end == unset || signal.tick > touhou_end) {
+                    touhou_end = signal.tick;
+                }
+            }
+        }
+        if (!errored) {
+            loop_start = touhou_start;
+            loop_end = touhou_end;
+            soft = touhou_end != unset;
+        }
+    }
+
+    // Scan 2 -- RPG Maker: CC 111 is a loop start. Disabled when EMIDI is present anywhere,
+    // because EMIDI gives CC 111 another meaning.
+    if (!any_emidi) {
+        for (const LoopSignal& signal : loop_signals) {
+            if (signal.kind == LoopSignal::Kind::rpg_start
+                && (loop_start == unset || signal.tick < loop_start)) {
+                loop_start = signal.tick;
+            }
+        }
+    }
+
+    // Scan 3 -- XMI / EMIDI: CC 116/118 start, CC 117/119 end.
+    for (const LoopSignal& signal : loop_signals) {
+        if (signal.kind == LoopSignal::Kind::xmi_start
+            && (loop_start == unset || signal.tick < loop_start)) {
+            loop_start = signal.tick;
+        } else if (signal.kind == LoopSignal::Kind::xmi_end) {
+            if (loop_end == unset || signal.tick > loop_end) {
+                loop_end = signal.tick;
+            }
+            soft = true;
+        }
+    }
+
+    // Scan 4 -- Marker meta events: "loopStart" / "loopEnd", with "start" as a start alias.
+    for (const LoopSignal& signal : loop_signals) {
+        if (signal.kind == LoopSignal::Kind::marker_start
+            && (loop_start == unset || signal.tick < loop_start)) {
+            loop_start = signal.tick;
+        } else if (signal.kind == LoopSignal::Kind::marker_end
+                   && (loop_end == unset || signal.tick > loop_end)) {
+            loop_end = signal.tick;
+        }
+    }
+
+    // Sanity: degenerate loops -- an empty range, or a start sitting on the song's final tick --
+    // are dropped entirely; a start with no end runs to the last voice event.
+    if (loop_start != unset
+        && (loop_start == loop_end || loop_start == last_voice_event_tick)) {
+        loop_start = unset;
+        loop_end = unset;
+    }
+    if (loop_start != unset && loop_end == unset) {
+        loop_end = last_voice_event_tick;
+    }
+    if (loop_end != unset && loop_start == unset) {
+        // An end alone loops back to the top of the file, which the zero initial value of the
+        // reference's loop struct expressed implicitly.
+        loop_start = 0;
+    }
+
+    Song song;
+    song.events = std::move(events);
+
+    if (loop_end != unset && loop_end > loop_start) {
+        // Ticks to samples through the tempo map the merge already ordered, so the loop points
+        // land on the same grid as the events they sit between.
+        std::vector<std::pair<std::int64_t, int>> tempo_changes;
+        for (const RawEvent& entry : merged) {
+            if (entry.kind == RawEvent::Kind::tempo) {
+                tempo_changes.emplace_back(entry.tick, entry.status);
+            }
+        }
+        const auto tick_to_samples = [&](std::int64_t tick) {
+            int tempo = default_tempo;
+            std::int64_t from = 0;
+            double elapsed = 0.0;
+            for (const auto& [change_tick, change_tempo] : tempo_changes) {
+                if (change_tick >= tick) {
+                    break;
+                }
+                elapsed += static_cast<double>(change_tick - from)
+                           * (tempo / 1e6 / ticks_per_quarter);
+                from = change_tick;
+                tempo = change_tempo;
+            }
+            elapsed += static_cast<double>(tick - from) * (tempo / 1e6 / ticks_per_quarter);
+            return quantise(elapsed * sample_rate);
+        };
+
+        SongLoop loop;
+        loop.start = tick_to_samples(loop_start);
+        loop.end = tick_to_samples(loop_end);
+        loop.soft = soft;
+        if (loop.end > loop.start) {
+            song.loop = loop;
+        }
+    }
+
+    return song;
 }
 
 } // namespace ts::smf

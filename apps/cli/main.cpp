@@ -211,7 +211,9 @@ int render_command(const std::string& dll,
                    const ts::RenderOptions& base,
                    bool hardware_polyphony,
                    int polyphony,
-                   int ports)
+                   int ports,
+                   int loops,
+                   double fade_seconds)
 {
     const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
     ts::NoteRenderer notes{rom};
@@ -250,6 +252,12 @@ int render_command(const std::string& dll,
         generator.set_drum_map_row(options.drum_map_row);
 
         ts::SequencePlayer player = ts::SequencePlayer::from_file(generator, midi);
+        if (loops >= 2 && player.loop()) {
+            player.set_loop_count(loops);
+            player.set_fade_seconds(fade_seconds);
+        } else if (loops >= 2) {
+            std::cout << "no loop points in this file; rendering it once\n";
+        }
         result = player.render_to_end(options.tail_seconds, options.end_seconds);
         stole = generator.stolen_voices();
         peak_voices = generator.voice_slots();
@@ -520,6 +528,13 @@ int main(int argc, char** argv)
         "Silence these channels, as a mixer labels them (1-64; 17+ need --ports)");
     render->add_option("--solo", soloed, "Hear only these channels");
 
+    int loops = 1;
+    double fade_seconds = 7.0;
+    render->add_option("--loops", loops,
+                       "Play the file's loop body this many times, then fade out (needs loop "
+                       "points: markers, CC 111, or the XMI/Touhou controller pairs)");
+    render->add_option("--fade", fade_seconds, "The post-loop fade length in seconds");
+
     std::string effect_kind;
     int effect_type = 0;
     int effect_samples = 32000;
@@ -571,8 +586,8 @@ int main(int argc, char** argv)
                 render_options.channels = &mask;
             }
 
-            return render_command(
-                dll, midi_path, output_file, map, render_options, stream, polyphony, ports);
+            return render_command(dll, midi_path, output_file, map, render_options, stream,
+                                  polyphony, ports, loops, fade_seconds);
         }
         if (bench->parsed()) {
             return bench_command(dll, midi_path, iterations);

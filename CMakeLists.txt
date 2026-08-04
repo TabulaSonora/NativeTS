@@ -128,6 +128,13 @@ if(TS_BUILD_WEB AND EMSCRIPTEN)
     FetchContent_MakeAvailable(nlohmann_json)
 endif()
 
+# Optional: only the XMF converter wants it, and only for files whose content nodes are
+# deflate-packed. Without it those files fail with a message that says so; everything else is
+# unaffected. Found here rather than in src/ because the installed package config needs to know --
+# a static archive built against zlib hands its `uncompress` references to the consumer, so the
+# config template substitutes ZLIB_FOUND, and that substitution happens in this scope.
+find_package(ZLIB)
+
 add_subdirectory(src)
 
 if(TS_BUILD_CLI)

@@ -9,6 +9,13 @@
 # whose IEEE operation sequence is a correctness requirement, so a consumer compiling those headers
 # has to compile them with FMA contraction off, exactly as this project does.
 
+# zlib is optional -- only deflate-packed XMF content wants it -- but when the archive was built
+# against it, the static library carries `uncompress` references a consumer has to resolve.
+if("@ZLIB_FOUND@")
+    include(CMakeFindDependencyMacro)
+    find_dependency(ZLIB)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/TabulaSonoraTargets.cmake")
 
 check_required_components(TabulaSonora)

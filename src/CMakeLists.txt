@@ -19,6 +19,7 @@ add_library(tabulasonora
     effects/equalizer.cpp
     effects/send_effects.cpp
     midi/control_decode.cpp
+    midi/midi_formats.cpp
     midi/sequence.cpp
     midi/smf_reader.cpp
     patches/drum_kit_table.cpp
@@ -79,6 +80,11 @@ target_link_libraries(tabulasonora
     PRIVATE
         $<BUILD_INTERFACE:ts::warnings>
         $<BUILD_INTERFACE:nlohmann_json::nlohmann_json>)
+
+if(ZLIB_FOUND)
+    target_compile_definitions(tabulasonora PRIVATE TS_HAVE_ZLIB)
+    target_link_libraries(tabulasonora PRIVATE ZLIB::ZLIB)
+endif()
 
 # The generated asset source is machine-written; holding them to the project's warning level
 # would fail the build on formatting nobody controls.

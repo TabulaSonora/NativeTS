@@ -2,7 +2,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace ts {
@@ -62,7 +64,8 @@ struct MidiEvent {
 /// the render-block grid — the granularity at which the engine actually applies events. Quantising
 /// here is what lets an offline render line up sample-for-sample with the real engine's own output.
 ///
-/// Meta events other than tempo are dropped; nothing downstream consumes them.
+/// Meta events other than tempo are consumed here or dropped: port tags pick the port scheme,
+/// markers feed the loop scanners, and none of them reach the event list.
 namespace smf {
 
 /// Samples per render block — the grid events are applied on.
@@ -71,11 +74,56 @@ inline constexpr int block_grid = 32;
 /// Default tempo when a file sets none: 120 bpm, in microseconds per quarter note.
 inline constexpr int default_tempo = 500'000;
 
-/// Reads a Standard MIDI File, ordered by position.
+/// Loop points a file declared, in samples on the render-block grid.
+///
+/// Four marker dialects are scanned, ported from spessasynth_core_c (itself from
+/// midi_processing's `scan_for_loops`): Touhou's CC 2/CC 4 pair in format-0 files, RPG Maker's
+/// CC 111 (ignored when the file carries EMIDI track designations, which give CC 111 another
+/// meaning), the XMI/EMIDI CC 116–119 set, and `loopStart`/`loopEnd` marker meta events. The
+/// outermost surviving start and end win. A start with no end runs to the last voice event; a
+/// degenerate loop — empty, or starting on the song's final tick — is dropped entirely.
+struct SongLoop {
+    /// First sample of the loop body.
+    std::int64_t start = 0;
+    /// Sample the jump back happens at.
+    std::int64_t end = 0;
+    /// Whether the file marked the loop end explicitly (a *soft* loop). A soft jump rewinds
+    /// without replaying state — anything that must change at the jump is inside the loop body
+    /// and re-fires on its own — where a hard loop's end is inferred and the jump replays
+    /// controllers the way a seek does.
+    bool soft = false;
+};
+
+/// A parsed file: the event list plus what the container knew beyond the events.
+struct Song {
+    /// Every event, ordered by position.
+    std::vector<MidiEvent> events;
+    /// Loop points, when the file declares any.
+    std::optional<SongLoop> loop;
+};
+
+/// Reads a music file, with its loop points.
+///
+/// Not only Standard MIDI Files: the formats `formats::to_smf` recognises — RMID, MIDS, MUS,
+/// XMI, GMF, HMP, HMI, XMF, and (by file name) LDS — are converted first, so every caller
+/// understands them. Files carrying EMIDI track designations (CC 110) are filtered for a
+/// General MIDI receiver: tracks authored exclusively for some other synthesizer are dropped,
+/// as playing them doubles every voice.
+[[nodiscard]] Song load(const std::filesystem::path& path, int sample_rate = 32000);
+
+/// Parses a music file held in memory, with its loop points.
+///
+/// `name` is the file name the data came from, when the caller knows it; only LDS detection
+/// uses it. Throws `std::runtime_error` if the file is malformed or uses SMPTE timing.
+[[nodiscard]] Song load(std::span<const std::uint8_t> data,
+                        int sample_rate = 32000,
+                        std::string_view name = {});
+
+/// Reads a music file, ordered by position — `load` without the loop points.
 [[nodiscard]] std::vector<MidiEvent> read(const std::filesystem::path& path,
                                           int sample_rate = 32000);
 
-/// Parses a Standard MIDI File held in memory, ordered by position.
+/// Parses a music file held in memory, ordered by position — `load` without the loop points.
 ///
 /// Throws `std::runtime_error` if the file is malformed or uses SMPTE timing.
 [[nodiscard]] std::vector<MidiEvent> parse(std::span<const std::uint8_t> data,
