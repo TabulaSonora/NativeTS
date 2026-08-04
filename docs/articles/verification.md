@@ -688,7 +688,34 @@ engine's worst error on that sweep fell from **+34.33 cents to +4.29** when `nat
 still sounded nearly right everywhere the note sweep happened to look, and why the median moved so
 little that no aggregate caught it.
 
-### The term is conditional, and the condition is the open question {#the-second-fine-tune-is-conditional}
+### The consumer was found, and there isn't one {#the-second-fine-tune-consumer}
+
+The exported decompilation left the descriptor fetch as `LAB_18005c390` — a location, never promoted
+to a function — so what `partial_compute_pitch` actually reads had never been seen. In Ghidra it is
+two instructions:
+
+```asm
+18005c390  LEA RAX,[0x181a1e81e]
+18005c397  RET
+```
+
+It ignores its argument and returns a fixed address, so the pitch chain does not read the ROM record
+at all: it reads a **staging buffer**. And `partial_load_params @ 18005ee30` fills that buffer with
+a verbatim 22-byte copy — `4+4+4+4+4+2` — of the record `voice+0x138` points at. The staged fields
+are the record's, unmodified.
+
+So the chain is closed end to end: `native` is `root×1000 − fine + 0x400`, both consumers
+(`voice_pitch_keyfollow` and `voice_pitch_block_update`) subtract `voice+0x1fc` to form the
+exponent, and `voice+0x200` is written once and read nowhere. **The second fine tune is decoded and
+not tuned with.** This engine applied it for four commits and no longer does; `native_pitch` asserts
+the neutral result on a record that carries one, so wiring it back in fails a test rather than a
+listening session.
+
+Removing it is what the exact instrument already preferred — median 1.14 cents against 2.03, worst
+4.66 against 14.29 — and the single-note gate, which had failed since the term went in, passes
+again.
+
+### What the term was standing in for {#the-second-fine-tune-was-standing-in}
 
 Audio estimation cannot settle what is left, so `tabula-sonora pitch` prints the chain term by term
 and `scdec postrace` reads the module's own sampler increment as an integer in 16.16. Ratio against
@@ -701,13 +728,14 @@ way, on cases whose traced increment is constant so that the two sides are the s
 | the 28-case corpus, **with** the term | 2.03 | 2.37 | 14.29 |
 | the 28-case corpus, **without** it | **1.14** | **1.74** | **4.66** |
 
-Both measurements are sound and they disagree, which is itself the finding: **the module applies
-this term for some patches and not others.** `Alto Sax` and `Piano 1` want it; `Vibraphone`,
-`Nylon Gt.` and `Trumpet` are further from the module with it than without. Applied
-unconditionally — which is what this engine currently does — it is right where a listener first
-noticed it wrong and wrong elsewhere, and the corpus median prefers it off.
+Both measurements are sound and they disagree — and since the binary says the term is never read,
+what the sax is really showing is **a different error that happens to track `desc[0x0e]` across that
+patch's zones**. Adding a term the module does not have cancelled it there and broke five other
+patches, which is what fitting a correction to one instrument's worth of evidence does. The zone
+staircase itself is real and still unexplained: it is per-wave, it reaches a third of a semitone,
+and it is the open case.
 
-\warning **What gates it is not known.** Nor is a second effect the same instrument turned up: at
+\warning **A second effect, and this one is not per-wave.** At
 `Alto Sax` notes 48 and 50 — the same zone, the same wave, the same partial, and a neutral second
 fine tune on both — the engine is +4.69 and +0.78 cents off. Four cents of disagreement between two
 notes a tone apart cannot come from the native pitch, so a key-dependent term is wrong as well, and

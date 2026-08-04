@@ -29,10 +29,17 @@ struct WaveDescriptor {
     int fine_tune = 0;
     /// Second fine-tune word, at descriptor `0x0E`, neutral at 1024 like the first.
     ///
-    /// `partial_compute_pitch @ 18005fc20` computes two native pitches, the second being
-    /// `voice+0x200 = voice+0x1fc - desc[0x0e] + 0x400`, and it is the second the sampler tunes
-    /// to. It is neutral on most records — which is why an engine ignoring it still sounds nearly
-    /// right — and reaches 320 milli-semitones on the ones where it is not.
+    /// **Real data the module does not tune with.** `partial_compute_pitch @ 18005fc20` computes
+    /// two native pitches — `voice+0x1fc = root*1000 - fine + 0x400` and
+    /// `voice+0x200 = voice+0x1fc - desc[0x0e] + 0x400` — and only the first is ever read: both
+    /// `voice_pitch_keyfollow` and `voice_pitch_block_update` subtract `voice+0x1fc` to form the
+    /// exponent, and `voice+0x200` is written once and read nowhere in the binary.
+    ///
+    /// The descriptor those two are computed from is not the ROM record directly but a staging
+    /// copy at `0x181a1e81e`, which `LAB_18005c390` returns and `partial_load_params` fills with a
+    /// verbatim 22-byte copy of the record — so the fields are the record's, unmodified, and this
+    /// one really does go nowhere. Kept because it is decoded, and because an engine that stopped
+    /// reading it would lose the ability to say so.
     int second_fine_tune = 1024;
     /// Raw flag byte. Bit 0 is bidirectional, bit 2 is reverse; bit 1 takes no part in the
     /// dispatch.
@@ -55,11 +62,12 @@ struct WaveDescriptor {
 
     /// Native pitch in milli-semitones — what the sampler's ratio is taken against.
     ///
-    /// This is the module's `voice+0x200`: the first fine tune off the root, then the second one
-    /// off that. Every ratio in this engine divides by this, so the two must not drift apart.
+    /// The module's `voice+0x1fc`, and only that: the root and the *first* fine tune. See
+    /// `second_fine_tune` for why the other one is not here. Every ratio in this engine divides by
+    /// this, so the sites must not drift apart.
     [[nodiscard]] constexpr double native_milli_semitones() const noexcept
     {
-        return (root_key * 1000.0) + 1024.0 - fine_tune - (second_fine_tune - 1024.0);
+        return (root_key * 1000.0) + 1024.0 - fine_tune;
     }
 
     /// Parses a descriptor from its `stride` raw bytes.
