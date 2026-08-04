@@ -1,4 +1,4 @@
-// Remembers the vintage and the three effect toggles across visits, in localStorage.
+// Remembers the vintage and the four effect toggles across visits, in localStorage.
 //
 // Two habits are taken from the theme script deliberately. Storage access throws where the browser
 // has disabled it, and a preference is not worth failing the page over, so both directions swallow
@@ -78,14 +78,16 @@ export function writeGain(gain: number): void {
     }
 }
 
-/** Power-on state: SC-8820, with all three effects running as the module has them. */
-export const defaultSettings: EngineSettings = { map: 4, reverb: true, chorus: true, delay: true };
+/** Power-on state: SC-8820, with all four effects running as the module has them. */
+export const defaultSettings: EngineSettings =
+    { map: 4, reverb: true, chorus: true, delay: true, efx: true };
 
 export function isDefault(settings: EngineSettings): boolean {
     return settings.map === defaultSettings.map
         && settings.reverb === defaultSettings.reverb
         && settings.chorus === defaultSettings.chorus
-        && settings.delay === defaultSettings.delay;
+        && settings.delay === defaultSettings.delay
+        && settings.efx === defaultSettings.efx;
 }
 
 export function read(): EngineSettings {
@@ -114,10 +116,11 @@ export function write(settings: EngineSettings): void {
     }
 }
 
-/** Formats settings as `map,reverb,chorus,delay` — for instance `3,1,1,0`. */
+/** Formats settings as `map,reverb,chorus,delay,efx` — for instance `3,1,1,0,1`. */
 function format(settings: EngineSettings): string {
     const bit = (on: boolean) => (on ? '1' : '0');
-    return `${settings.map},${bit(settings.reverb)},${bit(settings.chorus)},${bit(settings.delay)}`;
+    return `${settings.map},${bit(settings.reverb)},${bit(settings.chorus)},${bit(settings.delay)}`
+        + `,${bit(settings.efx)}`;
 }
 
 /**
@@ -131,7 +134,10 @@ function parse(stored: string | null): EngineSettings | null {
     }
 
     const fields = stored.split(',');
-    if (fields.length !== 4) {
+
+    // Four fields is the entry the previous deployment wrote, before the EFX toggle existed;
+    // discarding it would throw away a choice the user did make. It reads as EFX on, the default.
+    if (fields.length !== 4 && fields.length !== 5) {
         return null;
     }
 
@@ -144,10 +150,11 @@ function parse(stored: string | null): EngineSettings | null {
     const reverb = flag(fields[1]!);
     const chorus = flag(fields[2]!);
     const delay = flag(fields[3]!);
+    const efx = fields.length === 5 ? flag(fields[4]!) : true;
 
-    if (reverb === null || chorus === null || delay === null) {
+    if (reverb === null || chorus === null || delay === null || efx === null) {
         return null;
     }
 
-    return { map, reverb, chorus, delay };
+    return { map, reverb, chorus, delay, efx };
 }

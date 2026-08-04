@@ -19,12 +19,13 @@
 namespace ts::web {
 
 /// The engine settings the page remembers between visits: exactly the values a rebuild depends on,
-/// held as one unit so restoring a remembered set costs one rebuild rather than four.
+/// held as one unit so restoring a remembered set costs one rebuild rather than five.
 struct EngineSettings {
     ToneMap map = ToneMap::sc8820;
     bool reverb = true;
     bool chorus = true;
     bool delay = true;
+    bool efx = true;
 };
 
 /// One running engine and everything the page can do to it — the worker-side counterpart of the
@@ -74,7 +75,7 @@ public:
     [[nodiscard]] bool has_rom() const noexcept { return engine_.has_value(); }
     [[nodiscard]] bool has_song() const noexcept { return !song_name_.empty(); }
 
-    /// All four engine settings at once: one rebuild, with part state carried across it.
+    /// All five engine settings at once: one rebuild, with part state carried across it.
     void set_settings(const EngineSettings& settings);
     [[nodiscard]] const EngineSettings& settings() const noexcept { return settings_; }
 

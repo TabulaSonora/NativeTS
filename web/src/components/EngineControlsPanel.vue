@@ -34,6 +34,11 @@
                        @change="toggle('delay', $event)" />
                 Delay
             </label>
+            <label>
+                <input type="checkbox" :checked="store.settings.efx"
+                       @change="toggle('efx', $event)" />
+                EFX
+            </label>
         </div>
 
         <div class="row">
@@ -65,7 +70,7 @@ function mapChanged(event: Event) {
     store.applySettings({ ...store.settings, map });
 }
 
-function toggle(key: 'reverb' | 'chorus' | 'delay', event: Event) {
+function toggle(key: 'reverb' | 'chorus' | 'delay' | 'efx', event: Event) {
     const on = (event.target as HTMLInputElement).checked;
     store.applySettings({ ...store.settings, [key]: on });
 }

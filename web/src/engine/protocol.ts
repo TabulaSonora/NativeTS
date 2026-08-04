@@ -86,6 +86,7 @@ export interface EngineSettings {
     reverb: boolean;
     chorus: boolean;
     delay: boolean;
+    efx: boolean;
 }
 
 export interface CatalogEntry {

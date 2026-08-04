@@ -124,11 +124,11 @@ EMSCRIPTEN_KEEPALIVE const char* ts_web_song_info_json()
     return guarded_text("song_info", [&] { return session().song_info_json(); });
 }
 
-EMSCRIPTEN_KEEPALIVE int ts_web_set_settings(int map, int reverb, int chorus, int delay)
+EMSCRIPTEN_KEEPALIVE int ts_web_set_settings(int map, int reverb, int chorus, int delay, int efx)
 {
     return guarded("set_settings", [&] {
         session().set_settings({static_cast<ts::ToneMap>(map), reverb != 0, chorus != 0,
-                                delay != 0});
+                                delay != 0, efx != 0});
     });
 }
 

@@ -28,7 +28,7 @@ export const useEngineStore = defineStore('engine', {
         leadFrames: defaultLeadFrames,
         outputGain: 1.0,
         error: null as string | null,
-        settings: { map: 4, reverb: true, chorus: true, delay: true } as EngineSettings,
+        settings: { map: 4, reverb: true, chorus: true, delay: true, efx: true } as EngineSettings,
 
         /** The loop switch, mirrored here for the UI; the worker's session holds the truth. */
         looping: false,

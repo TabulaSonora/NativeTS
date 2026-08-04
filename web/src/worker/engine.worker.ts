@@ -58,7 +58,7 @@ const api = {
     loadSong: number('ts_web_load_song', ['number', 'number', 'string']),
     unloadSong: action('ts_web_unload_song'),
     songInfo: text('ts_web_song_info_json'),
-    setSettings: number('ts_web_set_settings', ['number', 'number', 'number', 'number']),
+    setSettings: number('ts_web_set_settings', ['number', 'number', 'number', 'number', 'number']),
     setOutputGain: action('ts_web_set_output_gain', ['number']),
     setDrumMapRow: action('ts_web_set_drum_map_row', ['number']),
     setLooping: action('ts_web_set_looping', ['number']),
@@ -348,7 +348,7 @@ function handle(request: WorkerRequest) {
         case 'setSettings': {
             const s = request.settings;
             const ok = api.setSettings(s.map, s.reverb ? 1 : 0, s.chorus ? 1 : 0,
-                                       s.delay ? 1 : 0) === 0;
+                                       s.delay ? 1 : 0, s.efx ? 1 : 0) === 0;
             reply(request.id, ok, ok ? undefined : api.lastError());
             publish();
             return;

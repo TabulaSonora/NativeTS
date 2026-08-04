@@ -240,10 +240,12 @@ zero starved frames means the device ran out and invented some.
 ## What the browser remembers
 
 Three preferences, all in `localStorage`, none derived from anything of Roland's: the colour theme
-under `tabula-sonora.theme`, the engine's vintage and three effect toggles under
+under `tabula-sonora.theme`, the engine's vintage and four effect toggles under
 `tabula-sonora.engine`, and the output trim under `tabula-sonora.gain`. The trim has its own key
-because the engine entry's format is shared with the previous deployment of this page, and a fifth
-field would have invalidated every preference already stored there.
+because the engine entry's format is shared with the previous deployment of this page, and a field
+that deployment never wrote would have invalidated every preference already stored there. The EFX
+toggle *is* such a field — the entry's fifth — so the parser accepts the four-field form too,
+reading it as EFX on.
 
 **The default is the absence of an entry.** No key exists until the user chooses something other
 than the default, and a value that stops parsing falls back rather than failing. So a visitor who

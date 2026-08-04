@@ -683,6 +683,7 @@ ToneGeneratorOptions WebSession::options() const
     options.reverb = settings_.reverb;
     options.chorus = settings_.chorus;
     options.delay = settings_.delay;
+    options.efx = settings_.efx;
     options.output_gain = output_gain_;
     options.channels = &channels_;
     return options;
