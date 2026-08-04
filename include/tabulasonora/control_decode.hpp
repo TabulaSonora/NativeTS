@@ -85,4 +85,57 @@ decode_control_change(int channel, int controller, int value) noexcept;
 /// for itself.
 [[nodiscard]] bool gs_checksum_ok(std::span<const std::uint8_t> bytes) noexcept;
 
+/// What an XG message is, for a caller deciding whether it has the machinery to act.
+///
+/// XG is a second SysEx dialect, not an extension of GS: the module keeps a mode flag and swaps its
+/// whole parameter parser when XG System On arrives. These are the blocks that reach anything.
+enum class XgMessage {
+    /// Not XG, or an XG address this engine does nothing with.
+    none,
+    /// `00 00 7E` — switch every part onto the XG map and reset.
+    system_on,
+    /// `00 00 7F` — All Parameter Reset.
+    all_parameter_reset,
+    /// `00 00 00`-`03` master tune, `04` master volume, `06` transpose.
+    system_parameter,
+    /// `02 01 pp` — reverb and chorus type, time and return.
+    effect1,
+    /// `08 nn pp` — a Multi Part parameter.
+    multi_part,
+    /// `3n rr pp` — a Drum Setup parameter.
+    drum_setup,
+};
+
+/// An XG message split into the parts a front end needs to act on it.
+struct XgAddress {
+    XgMessage kind = XgMessage::none;
+    /// Address bytes, as sent.
+    int high = 0;
+    int mid = 0;
+    int low = 0;
+    /// First data byte, or 0 for a message that carries none.
+    int value = 0;
+    /// For `multi_part`, the part the message addresses, already remapped from XG's part numbering
+    /// to this engine's. -1 for every other kind.
+    int part = -1;
+};
+
+/// Classifies an XG message and remaps its part number, without deciding what to do about it.
+///
+/// Takes the whole message including `F0` and `F7`. XG carries no checksum — the length and the
+/// terminator are the whole of its validity — so this checks the frame and nothing else.
+///
+/// `part` may exceed any given configuration's part count — XG addresses `nn` up to 0x3F, and the
+/// caller range-checks it against the parts it actually has. Out of range must be *ignored*: the
+/// module wraps it into a heap overflow, and folding it onto a part that does exist would be
+/// audible and wrong.
+[[nodiscard]] XgAddress decode_xg_sysex(std::span<const std::uint8_t> bytes) noexcept;
+
+/// Which parameter an XG Multi Part message writes, if it writes one this vocabulary covers.
+///
+/// Only the parameters whose whole effect is "store this number against this part" appear. Bank and
+/// program, part mode, receive channel, note shift, detune, the receive switches and the scale
+/// tuning all *do* something, and stay with the front end that can do it.
+[[nodiscard]] std::optional<ControlUpdate> decode_xg_multi_part(const XgAddress& address) noexcept;
+
 } // namespace ts

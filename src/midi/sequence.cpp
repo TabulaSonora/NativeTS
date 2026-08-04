@@ -308,7 +308,16 @@ void record(const ControlUpdate& update, std::int64_t position, State& state)
         return;
     }
 
-    const auto slot = static_cast<std::size_t>(update.channel % Sequence::channel_count);
+    // Out of range means out of reach, not somewhere else. A GS `50`/`51` block or an XG Multi Part
+    // above `nn` 0x0F names a part this path does not have -- it carries one sixteen-channel stream
+    // -- and wrapping it would apply the second port's settings to the first port's parts, which is
+    // audible and wrong. Dropping it leaves those parts at their defaults, which is what a module
+    // without them does.
+    if (update.channel < 0 || update.channel >= Sequence::channel_count) {
+        return;
+    }
+
+    const auto slot = static_cast<std::size_t>(update.channel);
     PartTimelines& part = state.sequence.parts[slot];
     const int value = update.value;
 
@@ -504,6 +513,21 @@ void apply_sysex(const MidiEvent& event, State& state)
     // Universal master volume: F0 7F 7F 04 01 ll mm F7.
     if (b.size() >= 8 && b[0] == 0xF0 && b[1] == 0x7F && b[3] == 0x04 && b[4] == 0x01) {
         state.sequence.master_volume.add(event.position, b[6]);
+        return;
+    }
+
+    // Yamaha XG: F0 43 1n 4C <3-byte address> <data...> F7.
+    //
+    // Only the Multi Part parameters that are plain per-part values are taken. This builder has no
+    // XG mode of its own -- no tone-map switch, no inverted bank pair, no drum routing from bank
+    // select -- because it is no longer a render path: `render` drives `ToneGenerator` for both its
+    // modes, and this survives for `bench` and its own tests. Anything needing that state belongs
+    // in the engine, which has it.
+    if (b.size() >= 8 && b[0] == 0xF0 && b[1] == 0x43) {
+        const XgAddress address = decode_xg_sysex(b);
+        if (const std::optional<ControlUpdate> update = decode_xg_multi_part(address)) {
+            record(*update, event.position, state);
+        }
         return;
     }
 

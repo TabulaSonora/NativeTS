@@ -48,6 +48,8 @@ std::optional<int> DrumKitTable::row_for_map(ToneMap map) noexcept
         return 1;
     case ToneMap::sc8820:
         return 0;
+    case ToneMap::xg:
+        return 4;
     }
     return std::nullopt;
 }

@@ -127,6 +127,14 @@ public:
     int cc1 = 0;
     int cc2 = 0;
 
+    /// Bank select MSB while the engine is in XG mode, where it means something else entirely.
+    ///
+    /// XG inverts the pair: the *LSB* carries the variation and lands in `bank`, while the MSB
+    /// chooses between melodic (below 0x7E), the SFX voice bank (0x40), the SFX kits (0x7E) and the
+    /// drum kits (0x7F). It needs its own field because it decides melodic-versus-drum for the part
+    /// and so has to survive until the next program change, which is when that decision is taken.
+    int xg_bank_msb = 0;
+
     /// Polyphonic aftertouch, per key.
     ///
     /// One byte a note rather than one a part, which is the whole of what makes it polyphonic: the

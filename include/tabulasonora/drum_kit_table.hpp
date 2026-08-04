@@ -92,7 +92,10 @@ public:
     /// tone map in turn and reading back the tone it resolves for program 0 on the drum part:
     /// SC-55 selects row 3 (kit 59), SC-88 row 2 (kit 47), SC-88Pro row 1 and SC-8820 row 0.
     ///
-    /// Rows 4 and 5 exist and no vintage selects them; a host that wants them sets the row itself.
+    /// Rows 4 and 5 are not vintages: row 4 is the XG kit set — Standard 1/2, Room, Rock, Electro,
+    /// Analog, Jazz, Brush, Classic on programs 0/1/8/16/24/25/32/40/48, plus SFX 1 and 2 on 120
+    /// and 121 — and row 5 is GM2's. `ToneMap::xg` selects row 4; a host that wants row 5 sets it
+    /// itself.
     [[nodiscard]] static std::optional<int> row_for_map(ToneMap map) noexcept;
 
     /// Maps an internal bank code to a drum map row; standard GM/GS drum parts use 0x04.

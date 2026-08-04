@@ -12,11 +12,17 @@
 namespace ts {
 
 /// Which vintage's tone map a program change resolves against.
+///
+/// The value is the module's own map selector, so these index the first lookup level directly and a
+/// new map needs no code beyond its name. `xg` is not a vintage: XG System On switches every part
+/// onto it, and it selects a separate melodic layout — 45 bank-LSB variations over 534 presets,
+/// where the bank *LSB* picks the variation rather than the MSB.
 enum class ToneMap {
     sc55 = 1,
     sc88 = 2,
     sc88pro = 3,
     sc8820 = 4,
+    xg = 0x77,
 };
 
 /// One key zone of a tone, expressed in MIDI note numbers.

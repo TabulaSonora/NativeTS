@@ -15,6 +15,56 @@
 #include <vector>
 
 namespace ts {
+namespace {
+
+/// One row of an XG effect-type translation: the XG type pair, and the macro this engine runs.
+struct XgEffectMacro {
+    int msb;
+    int lsb;
+    int macro;
+};
+
+/// XG reverb types the module can express, and nothing else.
+///
+/// Read out of its translation table rather than chosen. What is *absent* is the informative part:
+/// ROOM3, STAGE1, STAGE2 and PLATE have no row, so a file asking for them keeps whatever reverb was
+/// already running. Approximating them would be a plausible-sounding departure from the module.
+constexpr std::array<XgEffectMacro, 12> xg_reverb_macros{{
+    {1, 0, 3},  {1, 1, 4},  {2, 0, 0},  {2, 1, 1},  {2, 2, 2},   {3, 0, 3},
+    {3, 1, 3},  {4, 0, 5},  {16, 0, 0}, {17, 0, 5}, {18, 0, 0},  {19, 0, 0},
+}};
+
+/// XG chorus types, same shape. CELESTE 1-3 and the flangers are likewise absent.
+constexpr std::array<XgEffectMacro, 14> xg_chorus_macros{{
+    {65, 0, 0}, {65, 1, 0}, {65, 2, 2}, {65, 8, 0}, {66, 0, 0}, {66, 1, 0}, {66, 2, 2},
+    {66, 8, 0}, {67, 0, 5}, {67, 1, 5}, {67, 8, 5}, {68, 0, 0}, {72, 0, 0}, {87, 0, 0},
+}};
+
+[[nodiscard]] std::optional<int> xg_macro_lookup(std::span<const XgEffectMacro> table, int msb,
+                                                 int lsb) noexcept
+{
+    for (const XgEffectMacro& row : table) {
+        if (row.msb == msb && row.lsb == lsb) {
+            return row.macro;
+        }
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<int> xg_reverb_macro(int msb, int lsb) noexcept
+{
+    return xg_macro_lookup(xg_reverb_macros, msb, lsb);
+}
+
+[[nodiscard]] std::optional<int> xg_chorus_macro(int msb, int lsb) noexcept
+{
+    return xg_macro_lookup(xg_chorus_macros, msb, lsb);
+}
+
+} // namespace
+
+/// Defined below, beside the GS path that was its only caller until XG arrived.
+[[nodiscard]] bool apply_control_update(Part& part, const ControlUpdate& update);
 
 struct ToneGenerator::Impl {
     Impl(NoteRenderer& renderer, const ToneGeneratorOptions& opts) : notes(&renderer), options(opts)
@@ -211,8 +261,15 @@ struct ToneGenerator::Impl {
 
     // Which vintage's tone map the part resolves against: bank select LSB 1-4 names one, anything
     // else keeps the configured default.
+    //
+    // XG overrides both. System On puts every part on the XG map, and there is no per-part escape
+    // from it while the mode holds -- the bank LSB has become the variation index and no longer
+    // names a map at all.
     [[nodiscard]] ToneMap tone_map_for(const Part& part) const noexcept
     {
+        if (xg_mode) {
+            return ToneMap::xg;
+        }
         if (part.bank_lsb >= 1 && part.bank_lsb <= 4) {
             return static_cast<ToneMap>(part.bank_lsb);
         }
@@ -222,6 +279,12 @@ struct ToneGenerator::Impl {
     // The drum map row a program change on a drum part resolves against.
     [[nodiscard]] int drum_row_for(const Part& part) const noexcept
     {
+        if (xg_mode) {
+            const std::optional<int> row = DrumKitTable::row_for_map(ToneMap::xg);
+            if (row) {
+                return *row;
+            }
+        }
         if (part.bank_lsb >= 1 && part.bank_lsb <= 4) {
             const std::optional<int> row =
                 DrumKitTable::row_for_map(static_cast<ToneMap>(part.bank_lsb));
@@ -232,6 +295,32 @@ struct ToneGenerator::Impl {
         return effective_drum_map_row();
     }
 
+    // The bank the melodic lookup is given for a part.
+    //
+    // GS puts the variation in `bank` and that is the whole story. XG puts it in the LSB, which
+    // lands in the same field -- except for bank MSB 64, the SFX voice bank, which is a *column* of
+    // the XG map rather than a variation of one. The module reaches it by substituting 0x7D for the
+    // bank at resolution time, which is bank LSB 125: the column where program 90 is Submarine
+    // rather than the Polysynth it is at LSB 0.
+    [[nodiscard]] int lookup_bank_for(const Part& part) const noexcept
+    {
+        if (xg_mode && part.xg_bank_msb == 0x40) {
+            return 0x7D;
+        }
+        return part.bank;
+    }
+
+    // Whether an XG address names a part this engine actually has.
+    //
+    // XG addresses up to sixty-four parts and this engine can be configured for sixteen, thirty-two
+    // or all sixty-four. A part above the count is *ignored*: the module indexes its part array
+    // without a bounds check and writes off the end of it, and the alternative of wrapping would
+    // quietly apply one part's settings to another.
+    [[nodiscard]] bool xg_part_in_range(int part) const noexcept
+    {
+        return part >= 0 && part < static_cast<int>(parts.size());
+    }
+
     void apply_channel(int part_index, Part& part, int status, int data1, int data2);
     void program_change(int part_index, Part& part, int program);
     void control_change(int channel, Part& part, int controller, int value);
@@ -239,6 +328,27 @@ struct ToneGenerator::Impl {
     void commit_data_entry_lsb(Part& part, int value);
     void
     gs_part_parameter(int part_index, Part& part, int address, std::span<const std::uint8_t> data);
+
+    /// Whether XG System On has been seen and not since revoked.
+    ///
+    /// XG is a whole second parameter dialect rather than a set of extra messages, and the module
+    /// swaps its SysEx parser wholesale when this changes. It leaves on any Roland message and on
+    /// the GM resets, which means a file that mixes dialects flips the instrument between them
+    /// rather than layering them.
+    bool xg_mode = false;
+
+    /// The type MSB of each effect, held until its LSB arrives.
+    ///
+    /// XG sends the pair as two addresses and the translation needs both, so the MSB is buffered
+    /// the way the module buffers it.
+    int xg_reverb_type_msb = 0;
+    int xg_chorus_type_msb = 0;
+
+    void xg_sysex(std::span<const std::uint8_t> bytes);
+    void xg_multi_part(int part_index, Part& part, int parameter, int value);
+    void xg_program_change(int part_index, Part& part, int program);
+    void xg_effect1(int parameter, std::span<const std::uint8_t> data);
+    void leave_xg_mode();
     void gs_drum_setup(int port, int map, int parameter, int key,
                        std::span<const std::uint8_t> data);
     void release_sustained(int channel, Part& part);
@@ -520,7 +630,13 @@ void ToneGenerator::Impl::apply_channel(
 
     case 0xC0:
         if (part.rx.program_change) {
-            program_change(part_index, part, data1);
+            // In XG the bank MSB decides melodic against drums, so the program change has to go
+            // through that decision rather than straight to the melodic lookup.
+            if (xg_mode) {
+                xg_program_change(part_index, part, data1);
+            } else {
+                program_change(part_index, part, data1);
+            }
         }
         break;
 
@@ -556,6 +672,199 @@ void ToneGenerator::Impl::program_change(int part_index, Part& part, int program
     }
 }
 
+void ToneGenerator::Impl::leave_xg_mode()
+{
+    if (!xg_mode) {
+        return;
+    }
+    xg_mode = false;
+    stream_reset();
+}
+
+// XG bank select, which is not GS bank select with different numbers.
+//
+// The MSB chooses the *kind* of sound and the LSB the variation within it, the opposite way round
+// from GS. Drums are reachable from bank select alone, on any part: MSB 0x7F selects a drum kit by
+// program and MSB 0x7E the SFX kits, whose two programs sit at 120 and 121 in the same row, which
+// is what the module's `+0x78` program offset is reaching. Under GS that is impossible without the
+// use-for-rhythm SysEx.
+void ToneGenerator::Impl::xg_program_change(int part_index, Part& part, int program)
+{
+    const int msb = part.xg_bank_msb;
+    const bool drum = msb >= 0x7E;
+
+    // The routing decision is the part's, not the channel's, for as long as XG mode holds.
+    part.rhythm = drum ? 1 : 0;
+
+    if (!drum) {
+        program_change(part_index, part, program);
+        return;
+    }
+
+    int kit_program = program;
+    if (msb == 0x7E) {
+        kit_program += 0x78;
+    } else if (kit_program > 0x77) {
+        kit_program = 0;
+    }
+
+    part.program = program;
+    const std::optional<int> kit =
+        notes->drums().kit_for_program(kit_program, drum_row_for(part));
+    if (kit) {
+        drum_kit[kit_slot(part_index)] = *kit;
+    }
+}
+
+// One XG Multi Part parameter that this path can hold and the shared decoder does not cover.
+void ToneGenerator::Impl::xg_multi_part(int part_index, Part& part, int parameter, int value)
+{
+    switch (parameter) {
+    // Bank MSB, bank LSB, program. The MSB is remembered and the LSB *is* the lookup bank, which
+    // is why it lands in the same field a GS variation does.
+    case 0x01:
+        part.xg_bank_msb = value;
+        return;
+    case 0x02:
+        part.bank = value;
+        return;
+    case 0x03:
+        xg_program_change(part_index, part, value);
+        return;
+
+    // Rcv Channel. 0x7F is "off", which this engine spells as channel 16.
+    case 0x04:
+        part.rx_channel = value > 0x0F ? Sequence::channel_count : value;
+        return;
+
+    // Part Mode: 0 normal, 1 drum, 3/4/5 the numbered drum setups. Anything drum-shaped routes the
+    // part to the drum path and re-resolves its program there.
+    case 0x07:
+        part.rhythm = value == 0 ? 0 : 1;
+        xg_program_change(part_index, part, part.program);
+        return;
+
+    // Note Shift, same 0x28-0x58 clamp the GS part key shift uses.
+    case 0x08:
+        part.key_shift = std::clamp(value, 0x28, 0x58);
+        return;
+
+    // Detune, two nibbles high-first. The low nibble arrives as parameter 0x0A and this engine
+    // keeps the pair in the GS fine-tune field, which is the same 14-bit quantity.
+    case 0x09:
+        part.fine_tune = (part.fine_tune & 0x00FF) | ((value & 0x0F) << 8);
+        return;
+    case 0x0A:
+        part.fine_tune = (part.fine_tune & 0x3F00) | ((value & 0x0F) << 4);
+        return;
+
+    // Note Limit Low and High.
+    case 0x0F:
+        part.key_low = value;
+        return;
+    case 0x10:
+        part.key_high = value;
+        return;
+
+    default:
+        break;
+    }
+
+    // Scale Tuning, one entry a pitch class, in the same 0x40-centred units GS uses.
+    if (parameter >= 0x41 && parameter <= 0x4C) {
+        part.scale_tuning[static_cast<std::size_t>(parameter - 0x41)] = value;
+    }
+}
+
+// XG Effect1: reverb and chorus type, as an MSB/LSB pair.
+//
+// The module translates the pair through a small table and *drops* anything it does not find --
+// ROOM3, STAGE1/2, PLATE, the CELESTEs and the flangers have no entry at all, and the effect simply
+// keeps its previous setting. That silence is reproduced here rather than approximated, because
+// guessing a nearest GS macro would put an effect on the part that the module would not have.
+void ToneGenerator::Impl::xg_effect1(int parameter, std::span<const std::uint8_t> data)
+{
+    if (data.empty()) {
+        return;
+    }
+
+    // `00` is the type MSB with the LSB as its second data byte; `01` is the LSB alone.
+    if (parameter == 0x00 || parameter == 0x01) {
+        const int msb = parameter == 0x00 ? data[0] : xg_reverb_type_msb;
+        const int lsb = parameter == 0x00 ? (data.size() > 1 ? data[1] : 0) : data[0];
+        xg_reverb_type_msb = msb;
+        if (const std::optional<int> macro = xg_reverb_macro(msb, lsb)) {
+            reverb_type = *macro;
+        }
+        return;
+    }
+
+    if (parameter == 0x20 || parameter == 0x21) {
+        const int msb = parameter == 0x20 ? data[0] : xg_chorus_type_msb;
+        const int lsb = parameter == 0x20 ? (data.size() > 1 ? data[1] : 0) : data[0];
+        xg_chorus_type_msb = msb;
+        if (const std::optional<int> macro = xg_chorus_macro(msb, lsb)) {
+            chorus_type = *macro;
+        }
+    }
+}
+
+void ToneGenerator::Impl::xg_sysex(std::span<const std::uint8_t> bytes)
+{
+    const XgAddress address = decode_xg_sysex(bytes);
+
+    switch (address.kind) {
+    case XgMessage::system_on:
+        // Entering is a reset *and* a re-map: every part moves to the XG tone and drum maps, which
+        // is why this is not the same as a GM reset with a flag set beside it.
+        xg_mode = true;
+        stream_reset();
+        return;
+
+    case XgMessage::all_parameter_reset:
+        stream_reset();
+        return;
+
+    case XgMessage::system_parameter:
+        if (address.low <= 0x03) {
+            // Master tune, four nibbles, same 0x400 centre the GS form uses.
+            master_tune = std::clamp(master_tune, 0, 0x7FF);
+        } else if (address.low == 0x04) {
+            for (Part& part : parts) {
+                part.set_master(address.value);
+            }
+        } else if (address.low == 0x06) {
+            master_key_shift = std::clamp(address.value, 0x28, 0x58);
+        }
+        return;
+
+    case XgMessage::effect1:
+        xg_effect1(address.low, bytes.subspan(7, bytes.size() - 8));
+        return;
+
+    case XgMessage::multi_part: {
+        if (!xg_part_in_range(address.part)) {
+            return;
+        }
+        Part& part = parts[static_cast<std::size_t>(address.part)];
+        if (const std::optional<ControlUpdate> update = decode_xg_multi_part(address)) {
+            if (apply_control_update(part, *update)) {
+                return;
+            }
+        }
+        xg_multi_part(address.part, part, address.low, address.value);
+        return;
+    }
+
+    // Drum Setup writes per-key overrides, which this engine has machinery for but reaches only
+    // through NRPN today. Recognised so it is visibly unhandled rather than silently mistaken for
+    // something else.
+    case XgMessage::drum_setup:
+    case XgMessage::none:
+        return;
+    }
+}
+
 void ToneGenerator::send_sysex(std::span<const std::uint8_t> bytes)
 {
     send_sysex(0, bytes);
@@ -578,8 +887,22 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
     // `ToneGeneratorOptions::map` instead.
     if (bytes.size() >= 6 && bytes[0] == 0xF0 && bytes[1] == 0x7E && bytes[3] == 0x09) {
         if (bytes[4] == 0x01 || bytes[4] == 0x03) {
-            impl_->stream_reset();
+            // A GM reset leaves XG mode as well as resetting, and `leave_xg_mode` already resets,
+            // so the two must not both run.
+            if (impl_->xg_mode) {
+                impl_->leave_xg_mode();
+            } else {
+                impl_->stream_reset();
+            }
+        } else if (bytes[4] == 0x02) {
+            impl_->leave_xg_mode();
         }
+        return;
+    }
+
+    // Yamaha XG: F0 43 1n 4C <3-byte address> <data...> F7.
+    if (bytes.size() >= 8 && bytes[0] == 0xF0 && bytes[1] == 0x43) {
+        impl_->xg_sysex(bytes);
         return;
     }
 
@@ -587,6 +910,11 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
     if (bytes.size() < 11 || bytes[0] != 0xF0 || bytes[1] != 0x41 || bytes[3] != 0x42) {
         return;
     }
+
+    // Any Roland message ends XG mode, before it is itself acted on. The module does this without
+    // inspecting the message at all, so a file that interleaves the two dialects does not layer
+    // them -- it flips the instrument back and forth, resetting every part each time.
+    impl_->leave_xg_mode();
 
     // RQ1 asks for a dump, and the engine has no MIDI output to answer on.
     if (bytes[4] != 0x12) {
@@ -1455,7 +1783,7 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     velocity = part.effective_velocity(velocity);
 
     const std::vector<int> tones =
-        notes->directory().program_tones(part.program, tone_map_for(part), part.bank);
+        notes->directory().program_tones(part.program, tone_map_for(part), lookup_bank_for(part));
     if (tones.empty()) {
         return;
     }
@@ -1813,6 +2141,20 @@ void ToneGenerator::Impl::control_change(int channel, Part& part, int controller
     }
     if (controller == part.cc2_number) {
         part.cc2 = value;
+    }
+
+    // XG swaps what the bank pair means, so it is taken before the shared decoder rather than
+    // after: the MSB chooses melodic against drums and the LSB carries the variation, which is the
+    // GS reading with the two exchanged. Everything else on an XG part is an ordinary controller.
+    if (xg_mode && (controller == 0 || controller == 32)) {
+        if (controller == 0) {
+            if (part.rx.bank_msb) {
+                part.xg_bank_msb = value;
+            }
+        } else if (part.rx.bank_lsb) {
+            part.bank = value;
+        }
+        return;
     }
 
     // What the controller means is decided once, in the decoder both front ends share; what it

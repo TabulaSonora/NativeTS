@@ -18,6 +18,7 @@ add_executable(ts_tests
     wave_codec_tests.cpp
     rom_image_tests.cpp
     sequence_tests.cpp
+    xg_tests.cpp
     sha256_tests.cpp
     table_manifest_tests.cpp
     tone_generator_tests.cpp

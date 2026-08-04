@@ -18,6 +18,7 @@ void Part::reset()
     cc2_number = 17;
     cc1 = 0;
     cc2 = 0;
+    xg_bank_msb = 0;
     reverb_send = sequence_builder::default_reverb_send;
     chorus_send = sequence_builder::default_chorus_send;
     delay_send = 0;
