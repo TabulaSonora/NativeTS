@@ -130,7 +130,9 @@ void WebSession::unload_rom()
 
 void WebSession::load_song(std::span<const std::uint8_t> midi, std::string name)
 {
-    auto events = smf::parse(midi, sample_rate);
+    // The name rides along for format detection: LDS has no magic and is recognised by it.
+    smf::Song parsed = smf::load(midi, sample_rate, name);
+    auto events = std::move(parsed.events);
 
     // Which parts the file touches at all, so the mixer can show those and no others. A sixteen-part
     // file has no business drawing sixty-four strips, and the ones it would draw are parts nothing
@@ -161,6 +163,7 @@ void WebSession::load_song(std::span<const std::uint8_t> midi, std::string name)
     song_length_ = events.empty() ? 0 : events.back().position;
     song_name_ = std::move(name);
     song_events_ = std::move(events);
+    song_loop_ = parsed.loop;
 
     // Commit the export planes now, while nothing is playing. Touching 64 MB of fresh pages takes
     // long enough to starve the pump's lead, and the first export used to do it mid-song; here the
@@ -173,7 +176,7 @@ void WebSession::load_song(std::span<const std::uint8_t> midi, std::string name)
 
     if (engine_) {
         engine_->reset();
-        player_.emplace(*engine_, song_events_);
+        arm_player();
     }
 }
 
@@ -186,6 +189,7 @@ void WebSession::unload_song()
     song_events_.clear();
     song_name_.clear();
     song_length_ = 0;
+    song_loop_.reset();
     used_parts_.clear();
     player_.reset();
     if (engine_) {
@@ -248,6 +252,12 @@ std::int64_t WebSession::position() const noexcept
 
 bool WebSession::song_complete() const noexcept
 {
+    // A looping song has no completion: the position wraps instead of passing the end — and
+    // saying so here is also what lets Play restart a song that finished before the switch was
+    // turned on, since the pump stops asking for blocks the moment this is true.
+    if (looping_) {
+        return false;
+    }
     return player_ && has_song()
            && player_->position()
                   >= song_length_ + static_cast<std::int64_t>(tail_seconds * sample_rate);
@@ -408,6 +418,7 @@ std::string WebSession::snapshot_json() const
                         {"drumKits", drum_kits_json(engine_ ? &*engine_ : nullptr)},
                         {"effectiveDrumMapRow", effective_drum_map_row()},
                         {"songComplete", song_complete()},
+                        {"looping", looping_},
                         {"channels", channels}};
 
     return snapshot.dump();
@@ -434,7 +445,12 @@ std::string WebSession::song_info_json() const
 
     return json{{"name", song_name_},
                 {"lengthSamples", song_length_},
-                {"usedParts", used_parts_}}
+                {"usedParts", used_parts_},
+                // Whether the file declares loop points, and where. Looping works without them --
+                // the whole song wraps -- so this is information, not a gate.
+                {"hasLoop", song_loop_.has_value()},
+                {"loopStartSamples", song_loop_ ? song_loop_->start : 0},
+                {"loopEndSamples", song_loop_ ? song_loop_->end : 0}}
         .dump();
 }
 
@@ -698,7 +714,7 @@ void WebSession::rebuild()
     }
 
     if (has_song()) {
-        player_.emplace(*engine_, song_events_);
+        arm_player();
 
         // Put the new generator back where the old one was, so changing vintage mid-song resumes
         // rather than restarting. Seek replays the controllers, which is what makes that sound
@@ -706,6 +722,22 @@ void WebSession::rebuild()
         if (position > 0) {
             player_->seek(position);
         }
+    }
+}
+
+/// Builds the player over the current engine, carrying the song's loop points and the loop
+/// switch — the two things a bare event list cannot.
+void WebSession::arm_player()
+{
+    player_.emplace(*engine_, smf::Song{song_events_, song_loop_});
+    player_->set_loop_count(looping_ ? -1 : 1);
+}
+
+void WebSession::set_looping(bool looping)
+{
+    looping_ = looping;
+    if (player_) {
+        player_->set_loop_count(looping ? -1 : 1);
     }
 }
 

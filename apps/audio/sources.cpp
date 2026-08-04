@@ -104,8 +104,20 @@ void StreamingSource::set_position(std::int64_t frame)
 
 std::size_t StreamingSource::read(std::span<float> interleaved, float gain)
 {
+    // The loop switch crosses threads as an atomic and reaches the player here, because this is
+    // the thread that owns it. Off is a count of one — play straight through — and on is the
+    // reference sequencer's infinite count, which jumps at the file's loop points or, for a file
+    // without any, rewinds the whole song.
+    const bool looping = loop_requested_.load(std::memory_order_relaxed);
+    if (looping != loop_applied_) {
+        loop_applied_ = looping;
+        player_.set_loop_count(looping ? -1 : 1);
+    }
+
     const auto frames = static_cast<std::int64_t>(interleaved.size() / 2);
-    const std::int64_t available = std::clamp(length_ - position(), std::int64_t{0}, frames);
+    // While looping there is no end to run out against; the position wraps instead.
+    const std::int64_t available =
+        looping ? frames : std::clamp(length_ - position(), std::int64_t{0}, frames);
     const auto count = static_cast<std::size_t>(available);
 
     if (left_.size() < count) {

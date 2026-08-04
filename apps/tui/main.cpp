@@ -222,6 +222,9 @@ struct Ui {
             gauge(fraction) | flex,
             text("  " + clock_time(at, playback.sample_rate()) + " / "
                  + clock_time(length, playback.sample_rate())),
+            // The loop switch's state, next to the clock it changes the meaning of: while
+            // looping, the song wraps at its own loop points and the clock shows the pass.
+            playback.looping() ? text("  ⟳ loop") | color(Color::Cyan) : text(""),
         }),
         hbox({
             text(" L ") | dim,
@@ -348,12 +351,12 @@ struct Ui {
 ///
 /// An `hbox` of many texts shrinks each one when the terminal is narrow, which eats the spaces
 /// between words and turns this into gibberish; a single text truncates from the right instead.
-/// It is sized to fit eighty columns, which is why `+`/`-` for gain is left to `--help` -- the
-/// trim is already visible in the transport line.
+/// It is sized to fit eighty columns, which is why `+`/`-` for gain and `home` are left to
+/// `--help` -- the trim is already visible in the transport line.
 [[nodiscard]] Element help_bar()
 {
-    return text(" space pause  \u2190\u2192 5s  ,. 30s  home  \u2191\u2193 ch  m mute  "
-                "s solo  r reset  q quit")
+    return text(" space pause  \u2190\u2192 5s  ,. 30s  \u2191\u2193 ch  m mute  "
+                "s solo  l loop  r reset  q quit")
            | dim;
 }
 
@@ -361,7 +364,8 @@ int run(const std::string& dll,
         const fs::path& midi,
         const ts::RenderOptions& options,
         const ts::player::DeviceOptions& device,
-        ts::ChannelMask& channels)
+        ts::ChannelMask& channels,
+        bool loop)
 {
     const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
     ts::NoteRenderer notes{rom};
@@ -389,6 +393,8 @@ int run(const std::string& dll,
         std::make_unique<ts::player::StreamingSource>(notes, engine, midi, options.tail_seconds);
 
     ts::player::Playback playback{std::move(streaming), device};
+    // Before start(), so even the first pass through the ring is filled under the loop's rules.
+    playback.set_looping(loop);
     ProgramNames names{notes.directory(), notes.drums()};
 
     Ui ui;
@@ -483,6 +489,10 @@ int run(const std::string& dll,
                    channels.set_soloed(ui.selected, !channels.is_soloed(ui.selected));
                    return true;
                }
+               if (event == Event::Character('l')) {
+                   playback.set_looping(!playback.looping());
+                   return true;
+               }
                if (event == Event::Character('r')) {
                    channels.reset();
                    return true;
@@ -545,8 +555,10 @@ int main(int argc, char** argv)
 {
     CLI::App app{"A full-screen mixer over the Sound Canvas engine.", "tabula-sonora-tui"};
     app.footer("Keys: space pause, arrows seek 5s, , / . seek 30s, home restart, up/down\n"
-               "select a channel, m mute, s solo, r reset the mixer, + / - trim the gain,\n"
-               "q quit.\n\n"
+               "select a channel, m mute, s solo, l loop the song, r reset the mixer,\n"
+               "+ / - trim the gain, q quit.\n\n"
+               "Looping wraps at the file's own loop points (markers, CC 111, the XMI pairs)\n"
+               "and over the whole song when it has none.\n\n"
                "The ROM is found from --dll, then $TS_SCCORE_DLL, then ./SCCore.dll.");
 
     bool devices = false;
@@ -583,6 +595,11 @@ int main(int argc, char** argv)
                    "Start with these channels silenced (1-64; 17+ are ports B-D)");
     app.add_option("--solo", soloed, "Start with only these channels audible");
 
+    bool loop = false;
+    app.add_flag("--loop", loop,
+                 "Start with looping on: the song wraps at its own loop points, or whole when it "
+                 "has none (toggle with l)");
+
     CLI11_PARSE(app, argc, argv);
 
     try {
@@ -616,7 +633,7 @@ int main(int argc, char** argv)
         apply_channels(channels, muted, /*mute=*/true);
         apply_channels(channels, soloed, /*mute=*/false);
 
-        return run(rom.path.string(), midi_path, options, device, channels);
+        return run(rom.path.string(), midi_path, options, device, channels, loop);
     } catch (const ts::RomIdentityError& error) {
         std::cerr << "tabula-sonora-tui: " << error.what() << '\n';
         return 2;

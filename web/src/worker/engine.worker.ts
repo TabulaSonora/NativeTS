@@ -61,6 +61,7 @@ const api = {
     setSettings: number('ts_web_set_settings', ['number', 'number', 'number', 'number']),
     setOutputGain: action('ts_web_set_output_gain', ['number']),
     setDrumMapRow: action('ts_web_set_drum_map_row', ['number']),
+    setLooping: action('ts_web_set_looping', ['number']),
     seek: action('ts_web_seek', ['number']),
     panic: action('ts_web_panic'),
     songComplete: number('ts_web_song_complete'),
@@ -416,6 +417,11 @@ function handle(request: WorkerRequest) {
 
         case 'setDrumMapRow':
             api.setDrumMapRow(request.row ?? -1);
+            publish();
+            return;
+
+        case 'setLooping':
+            api.setLooping(request.on ? 1 : 0);
             publish();
             return;
 

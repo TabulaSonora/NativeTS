@@ -7,6 +7,7 @@
 #include "tabulasonora/render_options.hpp"
 #include "tabulasonora/tone_generator.hpp"
 
+#include <atomic>
 #include <filesystem>
 #include <vector>
 
@@ -70,6 +71,25 @@ public:
 
     void set_position(std::int64_t frame) override;
 
+    /// Not the end while looping: the player wraps instead, at the file's own loop points when it
+    /// declares them and over the whole song when it does not.
+    [[nodiscard]] bool at_end() const noexcept override
+    {
+        return !looping() && position() >= length();
+    }
+
+    /// An atomic hand-off: stored here from any thread, applied to the player at the next block
+    /// on the render thread, which is the thread that owns it.
+    void set_looping(bool looping) noexcept override
+    {
+        loop_requested_.store(looping, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] bool looping() const noexcept override
+    {
+        return loop_requested_.load(std::memory_order_relaxed);
+    }
+
     std::size_t read(std::span<float> interleaved, float gain) override;
 
     void capture(EngineSnapshot& into) const override;
@@ -83,6 +103,9 @@ private:
     ToneGenerator generator_;
     SequencePlayer player_;
     std::int64_t length_ = 0;
+    std::atomic<bool> loop_requested_{false};
+    /// What the player was last told, touched only on the render thread.
+    bool loop_applied_ = false;
     std::vector<float> left_;
     std::vector<float> right_;
     const ChannelMask* channels_ = nullptr;

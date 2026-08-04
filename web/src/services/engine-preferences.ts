@@ -7,9 +7,35 @@
 // reaches them.
 
 import type { EngineSettings } from '../engine/protocol';
+import * as assets from './asset-store';
 
 /** Storage key, in the same namespace as the theme's tabula-sonora.theme. */
 const KEY = 'tabula-sonora.engine';
+
+/**
+ * The loop switch's key — in the asset database rather than localStorage, deliberately: the DLL
+ * lives there, and this setting is asked to live exactly as long as the instrument does. Async
+ * where the others are not, because IndexedDB is.
+ */
+const LOOP_KEY = 'setting.loop';
+
+/** Off unless remembered on; a storage failure reads as the default, never as an error. */
+export async function readLoop(): Promise<boolean> {
+    try {
+        return (await assets.readValue(LOOP_KEY)) === '1';
+    } catch {
+        return false;
+    }
+}
+
+/** Writes the loop switch, or removes the entry when off — absence is the default here too. */
+export async function writeLoop(on: boolean): Promise<void> {
+    try {
+        await assets.writeValue(LOOP_KEY, on ? '1' : null);
+    } catch {
+        // The switch still holds for this page view; it just will not be remembered.
+    }
+}
 
 /**
  * The output trim's own key. Separate from the engine entry: that format is shared with the

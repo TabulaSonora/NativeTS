@@ -86,6 +86,14 @@ public:
     void set_drum_map_row(std::optional<int> row);
     [[nodiscard]] int effective_drum_map_row() const;
 
+    /// Whether the loaded song repeats instead of ending.
+    ///
+    /// On is the sequencer's infinite loop: the song wraps at its own loop points — markers,
+    /// CC 111, the XMI controller pairs — and over the whole file when it declares none. The
+    /// choice outlives the song and the engine both, so a rebuild or the next file keeps it.
+    void set_looping(bool looping);
+    [[nodiscard]] bool looping() const noexcept { return looping_; }
+
     /// Jumps the song to a position, replaying the controllers up to it.
     void seek(std::int64_t sample);
 
@@ -153,6 +161,7 @@ private:
 
     [[nodiscard]] ToneGeneratorOptions options() const;
     void send_control(int port, int channel, int controller, int value);
+    void arm_player();
     void rebuild();
     void restore_parts(const std::vector<std::array<int, 7>>& previous);
 
@@ -169,6 +178,9 @@ private:
     std::vector<MidiEvent> song_events_;
     std::string song_name_;
     std::int64_t song_length_ = 0;
+    /// The loaded song's loop points, when it declared any.
+    std::optional<smf::SongLoop> song_loop_;
+    bool looping_ = false;
 
     /// Which parts the loaded song addresses, as `port * 16 + channel`, ascending.
     ///

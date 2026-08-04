@@ -142,6 +142,11 @@ EMSCRIPTEN_KEEPALIVE void ts_web_set_drum_map_row(int row)
     session().set_drum_map_row(row < 0 ? std::nullopt : std::optional<int>{row});
 }
 
+EMSCRIPTEN_KEEPALIVE void ts_web_set_looping(int looping)
+{
+    session().set_looping(looping != 0);
+}
+
 EMSCRIPTEN_KEEPALIVE int ts_web_effective_drum_map_row()
 {
     return session().effective_drum_map_row();

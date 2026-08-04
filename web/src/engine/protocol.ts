@@ -48,6 +48,9 @@ export interface EngineSnapshot {
     /** Whether the engine is in XG mode, which a file enters and leaves while it plays. */
     xgMode: boolean;
     songComplete: boolean;
+
+    /** Whether the song repeats instead of ending — the loop switch, as the session holds it. */
+    looping: boolean;
     channels: Partial<ChannelSnapshot>[];
 }
 
@@ -67,6 +70,15 @@ export interface SongInfo {
      * onto the ones the engine has, so this is what will sound rather than what the file asked for.
      */
     usedParts: number[];
+
+    /**
+     * Whether the file declares loop points — markers, RPG Maker's CC 111, the XMI controller
+     * pairs — and where, in samples. Looping works without them (the whole song wraps), so this
+     * is a badge, not a gate.
+     */
+    hasLoop: boolean;
+    loopStartSamples: number;
+    loopEndSamples: number;
 }
 
 export interface EngineSettings {
@@ -136,6 +148,7 @@ export type WorkerRequest =
     | { type: 'setLead'; frames: number }
     | { type: 'setOutputGain'; gain: number }
     | { type: 'setDrumMapRow'; row: number | null }
+    | { type: 'setLooping'; on: boolean }
     | { type: 'sendChannel'; status: number; data1: number; data2: number }
     | { type: 'sendControl'; channel: number; controller: number; value: number }
     | { type: 'setMuted'; channel: number; muted: boolean }

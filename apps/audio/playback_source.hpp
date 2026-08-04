@@ -101,6 +101,17 @@ public:
     /// Whether playback has reached the end.
     [[nodiscard]] virtual bool at_end() const noexcept { return position() >= length(); }
 
+    /// Asks the material to repeat instead of ending.
+    ///
+    /// Unlike everything else here, this may be called from the controlling thread while the
+    /// render thread reads: an implementation honours that with an atomic it applies at its next
+    /// block, or ignores the request entirely — the default, and the honest answer for a finished
+    /// render that has no player to loop.
+    virtual void set_looping(bool looping) noexcept { (void)looping; }
+
+    /// Whether the material is set to repeat.
+    [[nodiscard]] virtual bool looping() const noexcept { return false; }
+
     /// Fills an interleaved stereo block from the current position and advances.
     ///
     /// Anything past the end is zero-filled rather than left short, so the device is always handed

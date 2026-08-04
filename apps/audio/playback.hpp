@@ -74,6 +74,10 @@ public:
     [[nodiscard]] bool paused() const noexcept;
     void set_paused(bool paused);
 
+    /// Whether the source repeats instead of ending. Applied by the source at its next block.
+    [[nodiscard]] bool looping() const noexcept;
+    void set_looping(bool looping) noexcept;
+
     /// Queues a seek, in frames from the start.
     void seek(std::int64_t frame);
 

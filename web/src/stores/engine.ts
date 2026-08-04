@@ -29,6 +29,9 @@ export const useEngineStore = defineStore('engine', {
         outputGain: 1.0,
         error: null as string | null,
         settings: { map: 4, reverb: true, chorus: true, delay: true } as EngineSettings,
+
+        /** The loop switch, mirrored here for the UI; the worker's session holds the truth. */
+        looping: false,
     }),
 
     getters: {
@@ -59,6 +62,9 @@ export const useEngineStore = defineStore('engine', {
             return state.snapshot?.song?.lengthSamples ?? 0;
         },
 
+        /** Whether the loaded song declares its own loop points; looping wraps whole without. */
+        songHasLoop: state => state.snapshot?.song?.hasLoop ?? false,
+
         sampleRate: () => engineSampleRate,
     },
 
@@ -77,6 +83,16 @@ export const useEngineStore = defineStore('engine', {
             if (this.outputGain !== preferences.defaultGain) {
                 engine.post({ type: 'setOutputGain', gain: this.outputGain });
             }
+
+            // The loop switch lives in the asset database beside the DLL, so reading it is
+            // asynchronous where the other preferences are not. Off needs no message: it is the
+            // session's own starting state.
+            preferences.readLoop().then(on => {
+                if (on) {
+                    this.looping = true;
+                    engine.post({ type: 'setLooping', on: true });
+                }
+            });
 
             engine.onSnapshot = snapshot => {
                 this.ready = true;
@@ -167,6 +183,14 @@ export const useEngineStore = defineStore('engine', {
             this.outputGain = gain;
             preferences.writeGain(gain);
             engine.post({ type: 'setOutputGain', gain });
+        },
+
+        setLooping(on: boolean) {
+            this.looping = on;
+            // Fire-and-forget on both sides: the switch takes effect at the next rendered block,
+            // and the remembered copy is best-effort the way every preference here is.
+            void preferences.writeLoop(on);
+            engine.post({ type: 'setLooping', on });
         },
 
         resetStarved() {

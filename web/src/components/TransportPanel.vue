@@ -21,6 +21,15 @@
                 <button class="btn btn-ghost" @click="store.seek(0)">Rewind</button>
                 <button class="btn btn-ghost" @click="nudge(-10)">&minus;10s</button>
                 <button class="btn btn-ghost" @click="nudge(10)">+10s</button>
+                <!-- The switch, not a per-song choice: it is remembered beside the DLL and holds
+                     for every song until turned off. Wraps at the file's own loop points, or over
+                     the whole song when it declares none. -->
+                <label class="loop-switch" :title="store.songHasLoop
+                           ? 'This file declares loop points; the song wraps at them'
+                           : 'No loop points in this file; the whole song wraps'">
+                    <input type="checkbox" :checked="store.looping" @change="toggleLoop" />
+                    Loop
+                </label>
             </div>
 
             <input type="range" class="scrub"
@@ -34,6 +43,8 @@
                 </span>
                 <span class="tag tag-muted">{{ store.activeVoices }} of 64 voices</span>
                 <span class="tag tag-muted">{{ store.noteCount }} notes</span>
+                <span v-if="store.songHasLoop" class="tag tag-muted"
+                      title="The file declares its own loop points">loop points</span>
             </div>
         </template>
 
@@ -83,5 +94,9 @@ function nudge(seconds: number) {
 
 function scrub(event: Event) {
     store.seek(Number((event.target as HTMLInputElement).value));
+}
+
+function toggleLoop(event: Event) {
+    store.setLooping((event.target as HTMLInputElement).checked);
 }
 </script>

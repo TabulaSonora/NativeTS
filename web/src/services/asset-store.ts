@@ -116,6 +116,35 @@ export async function remove(key: string): Promise<void> {
 }
 
 /**
+ * A small setting stored beside the DLL, in the same database and object store. What earns a
+ * setting a slot here rather than in localStorage is wanting the DLL's lifetime: the loop switch
+ * rides with the instrument, survives a localStorage clear that spares site data, and leaves with
+ * the database if the user clears that.
+ *
+ * The value is a plain string under its own key; absence is the default, as everywhere else.
+ */
+export async function readValue(key: string): Promise<string | null> {
+    const db = await open();
+    try {
+        const value = await transact<unknown>(db, 'readonly', store => store.get(key));
+        return typeof value === 'string' ? value : null;
+    } finally {
+        db.close();
+    }
+}
+
+/** Writes a small setting, or removes it when `value` is null — absence is the default. */
+export async function writeValue(key: string, value: string | null): Promise<void> {
+    const db = await open();
+    try {
+        await transact(db, 'readwrite',
+                       store => (value === null ? store.delete(key) : store.put(value, key)));
+    } finally {
+        db.close();
+    }
+}
+
+/**
  * Reads the stored bytes back. The structured clone IndexedDB hands out is this caller's own, so
  * it can be transferred to the worker without touching the stored copy.
  */

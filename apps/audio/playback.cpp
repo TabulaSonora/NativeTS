@@ -348,6 +348,18 @@ void Playback::set_paused(bool paused)
     }
 }
 
+bool Playback::looping() const noexcept
+{
+    return impl_->source->looping();
+}
+
+void Playback::set_looping(bool looping) noexcept
+{
+    // Safe from this thread by the source's own contract: the request is an atomic the render
+    // thread applies at its next block.
+    impl_->source->set_looping(looping);
+}
+
 void Playback::seek(std::int64_t frame)
 {
     const std::lock_guard<std::mutex> guard{impl_->commands};
