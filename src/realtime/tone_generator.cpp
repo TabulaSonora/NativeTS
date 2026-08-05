@@ -2108,6 +2108,14 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     }
 
     const double level_gain = DrumKitTable::level_gain(key.level);
+
+    // A part panpot of zero is GS RND on a drum part too, and it wins over the kit plane outright:
+    // the engine draws and returns before it ever folds the offset in, so eight identical hits
+    // land at eight unrelated positions. Only the SysEx panpot reaches it -- CC#10 clamps zero to
+    // one -- and the draw is once per note, shared by every partial of it.
+    const std::optional<int> random_pan =
+        part.pan == 0 ? std::optional{notes->noise().next_pan()} : std::nullopt;
+
     const int group = pool.begin_note_group();
     bool sounded = false;
 
@@ -2144,8 +2152,14 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.is_drum = true;
         setup.drum_base_ratio = std::pow(
             2.0, (PitchChain::drum_pitch_milli_semitones(partial, key.pitch) - native) / 12000.0);
+        // The kit's pan plane is an OFFSET from centre, not an absolute position: the engine bases
+        // a drum voice on the part panpot exactly as it does a melodic one and folds the plane in
+        // on top (`pan = clamp(part[0x3dd] + (kit[0x280 + key] - 0x40))`, the pan setup at
+        // 180060620). CC#10 therefore sweeps a drum part -- SOMDesert-SC8850.mid pans a lone hand
+        // clap across the field with nothing else, and treating the plane as absolute pinned it.
         setup.pan = key.pan;
-        setup.pan_follows_part = false;
+        setup.pan_follows_part = true;
+        setup.random_pan = random_pan;
         setup.level_gain = level_gain;
         setup.mute_group = key.group;
         setup.drum_receives_note_off = key.receives_note_off;
