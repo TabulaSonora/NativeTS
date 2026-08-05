@@ -593,19 +593,25 @@ TEST_CASE("the part modify offsets reach the chains that consume them", "[dsp][s
     std::copy(source.raw().begin(), source.raw().end(), block.begin());
     const PartialParameters partial{block.data()};
 
-    SECTION("the cutoff offset shifts the base by 0x100 a step")
+    SECTION("the cutoff offset is not in the base, because the live path adds it")
     {
+        // `base_cutoff` is a property of the tone. The part's cutoff offset reaches the filter from
+        // `PartialVoice::control`, which adds it to the per-block sum, and it must not also be
+        // latched here -- doing both applied CC#74 twice and moved the cutoff 0x200 a controller
+        // step where the module moves 0x100.
         const int neutral = fixture.tvf().create_envelope(partial, 100, 60).base_cutoff;
 
         PartModifiers up;
         up.tvf_cutoff = 0x44;
-        CHECK(fixture.tvf().create_envelope(partial, 100, 60, 32000, up).base_cutoff
-              == neutral + (4 * 0x100));
+        CHECK(fixture.tvf().create_envelope(partial, 100, 60, 32000, up).base_cutoff == neutral);
 
         PartModifiers down;
         down.tvf_cutoff = 0x3C;
-        CHECK(fixture.tvf().create_envelope(partial, 100, 60, 32000, down).base_cutoff
-              == neutral - (4 * 0x100));
+        CHECK(fixture.tvf().create_envelope(partial, 100, 60, 32000, down).base_cutoff == neutral);
+
+        // And the offset itself is still a whole 0x100 a step, which is what the live path adds.
+        CHECK(up.cutoff_offset() == 4 * 0x100);
+        CHECK(down.cutoff_offset() == -4 * 0x100);
     }
 
     SECTION("the filter envelope opts in to the envelope offsets and the amplitude one does not")

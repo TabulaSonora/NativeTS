@@ -268,15 +268,21 @@ TvfChain::Envelope TvfChain::create_envelope(const PartialParameters& partial,
         /*control_tick_samples=*/sample_rate / TvaChain::control_tick_hz,
     };
 
-    // Stage B: the part's cutoff offset joins the base and the envelope peak. A controller step is
-    // a whole 0x100 of the 15-bit sum, so CC#74 walks the cutoff in coarse strides.
+    // Stage B: the base and the envelope peak, and *not* the part's cutoff offset.
     //
-    // The low clamp lives downstream, where the per-tick sum of base, envelope and LFO is clamped
-    // to [0, 0x7fff] exactly as the engine clamps it -- so a cutoff offset that drives this
-    // negative is right to stay negative here. The high clamp is kept where it was.
-    return Envelope{
-        std::move(envelope),
-        std::min(0x7FFF, (raw[0x2F] * 0x100) + offsets.peak + modifiers.cutoff_offset())};
+    // The offset belongs to the live path, which adds it per block -- `PartialVoice::control` sums
+    // base, offset, envelope and both LFOs and clamps once. Adding it here as well applied CC#74
+    // twice: the cutoff walked 0x200 of the 15-bit sum per controller step where the module walks
+    // 0x100, so a part asking for CC#74 35 got the filter the module gives at about 6, eleven
+    // decibels down. Measured against the engine's own cutoff word at voice+0xcc.
+    //
+    // Latching it here was also wrong for a second reason. A file that sweeps CC#74 during a note
+    // -- and one commercial file does it 268 times in five minutes -- must reach voices already
+    // sounding, which only the per-block path does.
+    //
+    // The low clamp lives downstream, where the per-tick sum is clamped to [0, 0x7fff] exactly as
+    // the engine clamps it. The high clamp is kept where it was.
+    return Envelope{std::move(envelope), std::min(0x7FFF, (raw[0x2F] * 0x100) + offsets.peak)};
 }
 
 std::vector<double> TvfChain::envelope(const PartialParameters& partial,

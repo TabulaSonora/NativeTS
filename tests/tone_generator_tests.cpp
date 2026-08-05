@@ -1325,3 +1325,50 @@ TEST_CASE("a send level slews rather than switching", "[stream][sccore]")
     // And it does arrive, inside the second second.
     CHECK(*std::max_element(growth.begin() + 30, growth.end()) > settled * 0.9);
 }
+
+TEST_CASE("CC#74 moves the cutoff once, not twice", "[stream][sccore]")
+{
+    // The part's cutoff offset is applied by the live per-block path. It used to *also* be latched
+    // into the envelope's base at note-on, so a controller step moved the cutoff 0x200 of the
+    // 15-bit sum where the module moves 0x100. Nothing caught it, because both halves were
+    // individually reasonable and the doubling only shows once CC#74 leaves the neutral 0x40.
+    //
+    // Measured against the engine's own cutoff word at voice+0xcc, for this note and tone: it walks
+    // 244540 -> 205888 between CC#74 64 and 35. Ours walked twice that far, which cost eleven
+    // decibels of level on a part that asks for 35 -- one channel of the Cave Story XG set does.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    const auto energy_at = [&](int cc74) {
+        ToneGenerator generator{notes};
+        generator.send_channel(0xB0, 7, 127);
+        generator.send_channel(0xB0, 91, 0);
+        generator.send_channel(0xB0, 93, 0);
+        generator.send_channel(0xB0, 74, cc74);
+        generator.send_channel(0xC0, 38, 0);
+        generator.send_channel(0x90, 48, 127);
+
+        std::vector<float> left(32000);
+        std::vector<float> right(32000);
+        generator.render(left, right);
+
+        double sum = 0.0;
+        for (const float sample : left) {
+            sum += static_cast<double>(sample) * sample;
+        }
+        return std::sqrt(sum / static_cast<double>(left.size()));
+    };
+
+    const double neutral = energy_at(0x40);
+    REQUIRE(neutral > 0.0);
+
+    // Closing the filter to 35 costs the module about a decibel on this tone. Doubling the step
+    // costs more than ten, so the two are nowhere near each other: anything above half the neutral
+    // energy is the single application, anything near a fifth is the double.
+    CHECK(energy_at(35) / neutral > 0.5);
+
+    // And the control still does something -- a test that only guarded the doubling would pass on
+    // an engine that ignored CC#74 entirely.
+    CHECK(energy_at(0) / neutral < 0.9);
+}
