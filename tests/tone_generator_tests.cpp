@@ -1254,10 +1254,10 @@ TEST_CASE("a pan change sweeps rather than snapping", "[stream][sccore]")
 
 TEST_CASE("a send level slews rather than switching", "[stream][sccore]")
 {
-    // `voice_pan_smooth` @`180083be0` is the sends' equivalent of the pan slew: it steps the send's
-    // gain word by 8 of 1024 a control tick, so a full-scale change takes 40 ticks -- 400 ms.
-    // Measured on the reverb send with `scdec sendramp`: CC#91 0 -> 127 is 40 steps of 8/1024, one
-    // every 320 samples, 390 ms end to end.
+    // `voice_send_slew` @`180083be0` steps the send's gain word by 8 of 1024 a control tick, and
+    // full scale is 1016/1024 -- so crossing the whole range takes 127 ticks, **1.27 s**, the
+    // slowest smoother in the engine by a wide margin. Measured on the reverb send with
+    // `scdec sendramp`: CC#91 0 -> 127 is 127 steps of 8/1024, one every 320 samples, 1260 ms.
     //
     // The wet is isolated by differencing against a generator with the reverb switched off. Nothing
     // else differs between the two, so what is left is exactly the reverb's contribution -- the dry
@@ -1305,19 +1305,23 @@ TEST_CASE("a send level slews rather than switching", "[stream][sccore]")
     wet.send_channel(0xB0, 91, 127);
     dry.send_channel(0xB0, 91, 127);
 
-    std::vector<double> growth;
-    for (int i = 0; i < 20; ++i) {
+    std::vector<double> growth; // 40 windows of 50 ms: 2 s, comfortably past the 1.27 s crossing
+    for (int i = 0; i < 40; ++i) {
         growth.push_back(wet_rms());
     }
 
-    // The reverb's own build-up is in here too, so this does not pin the slew on its own -- what it
-    // pins is that the send is not a switch. A send applied instantly puts the bus at full level
-    // within one block, and the wet would be at its settled value inside the first window or two.
+    // The reverb's own build-up is in here too, so this does not pin the rate on its own -- what it
+    // pins is the shape. A send applied instantly puts the bus at full level within one block and
+    // the wet would be at its settled value inside the first window or two.
     const double settled = *std::max_element(growth.begin(), growth.end());
     REQUIRE(settled > 0.0);
     CHECK(growth[0] < settled * 0.35);
     CHECK(growth[1] < settled * 0.6);
 
-    // And it does arrive: by 500 ms, comfortably past the 400 ms the slew needs, it is there.
-    CHECK(*std::max_element(growth.begin() + 10, growth.end()) > settled * 0.9);
+    // Still visibly climbing at half a second, which is what separates the measured 1.27 s from the
+    // 400 ms an earlier reading of this had: a 400 ms slew is finished well before here.
+    CHECK(growth[10] < settled * 0.9);
+
+    // And it does arrive, inside the second second.
+    CHECK(*std::max_element(growth.begin() + 30, growth.end()) > settled * 0.9);
 }

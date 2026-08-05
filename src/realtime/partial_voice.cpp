@@ -14,9 +14,12 @@ constexpr int control_block = NoteRenderer::control_block;
 /// Pan units the position may move in one control tick.
 constexpr int pan_slew_per_tick = 2;
 
-/// Control ticks a full-scale send change takes: the engine steps the gain word by 8 of 1024.
-constexpr double send_slew_ticks = 40.0;
-constexpr double send_slew_per_tick = 127.0 / send_slew_ticks;
+/// Controller units a send may move in one control tick.
+///
+/// The engine steps the send's gain word by 8 of 1024 a tick and full scale is 1016/1024, so it
+/// takes 127 ticks -- one unit of CC#91 each -- and 1.27 s to cross. Measured directly: `scdec
+/// sendramp` on CC#91 0 -> 127 is 127 steps of 8/1024, one every 320 samples, 1260 ms.
+constexpr double send_slew_per_tick = 1.0;
 
 } // namespace
 

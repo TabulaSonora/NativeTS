@@ -271,11 +271,17 @@ private:
     /// linear in the controller and the engine's step is a fixed distance -- so one rate covers
     /// them whatever each effect's full-scale gain happens to be.
     ///
-    /// Measured for the *reverb* send: `scdec sendramp` puts CC#91 0 -> 127 at 40 steps of 8/1024
-    /// of gain, one every 320 samples, 390 ms end to end. Chorus and delay go through the same
-    /// function in the decompile and are given the same rate here, but neither was isolated in
-    /// memory -- a CC#93 or CC#94 change moves no stable float in the mix scratch, so where they
-    /// reach the bus is not yet pinned. Treat those two as inference.
+    /// Measured for the *reverb* send: `scdec sendramp` puts CC#91 0 -> 127 at 127 steps of
+    /// 8/1024 of gain, one every 320 samples, 1260 ms end to end.
+    ///
+    /// Chorus and delay take the same rate, which the decompile supports but no measurement here
+    /// reaches. A voice carries four (gain, bus) slots -- dry left, dry right, the reverb send on
+    /// bus 0x3c, and a third whose bus the part's `+0x13` picks. Above 0x1f that third slot becomes
+    /// a chorus send (bus 0x3d) or a delay send (bus 0x30), one or the other by `+0x45c`, and both
+    /// then ride this same function. At or below 0x1f -- which is where a default GS part sits, and
+    /// every capture taken here -- it is a direct bus route instead, and CC#93 and CC#94 reach
+    /// nothing at all. Note also that the engine's voice sends to reverb plus *one* of chorus and
+    /// delay, never both, which this port does not model.
     std::array<double, 3> sends_{};
     bool sends_seeded_ = false;
     double level_gain_ = 1.0;
