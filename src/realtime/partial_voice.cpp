@@ -177,6 +177,11 @@ std::pair<double, double> PartialVoice::pan_gains() const noexcept
 
 void PartialVoice::slew_sends(int reverb, int chorus, int delay) noexcept
 {
+    // Only the reverb send slews. The engine gives a voice one send slot, on bus 0x3c, fed by the
+    // part's reverb byte; the chorus and delay branches beside it in the bus-assign are dead code
+    // in this build, so those two never reach a bus per voice at all and there is no per-voice
+    // smoother on them to model. They are passed through unchanged until the send matrix that does
+    // carry them is measured.
     const std::array<double, 3> targets{static_cast<double>(reverb),
                                         static_cast<double>(chorus),
                                         static_cast<double>(delay)};
@@ -192,10 +197,9 @@ void PartialVoice::slew_sends(int reverb, int chorus, int delay) noexcept
         return;
     }
 
-    for (std::size_t i = 0; i < sends_.size(); ++i) {
-        sends_[i] +=
-            std::clamp(targets[i] - sends_[i], -send_slew_per_tick, send_slew_per_tick);
-    }
+    sends_[0] += std::clamp(targets[0] - sends_[0], -send_slew_per_tick, send_slew_per_tick);
+    sends_[1] = targets[1];
+    sends_[2] = targets[2];
 }
 
 double PartialVoice::choke_gain(std::int64_t since) noexcept

@@ -274,14 +274,18 @@ private:
     /// Measured for the *reverb* send: `scdec sendramp` puts CC#91 0 -> 127 at 127 steps of
     /// 8/1024 of gain, one every 320 samples, 1260 ms end to end.
     ///
-    /// Chorus and delay take the same rate, which the decompile supports but no measurement here
-    /// reaches. A voice carries four (gain, bus) slots -- dry left, dry right, the reverb send on
-    /// bus 0x3c, and a third whose bus the part's `+0x13` picks. Above 0x1f that third slot becomes
-    /// a chorus send (bus 0x3d) or a delay send (bus 0x30), one or the other by `+0x45c`, and both
-    /// then ride this same function. At or below 0x1f -- which is where a default GS part sits, and
-    /// every capture taken here -- it is a direct bus route instead, and CC#93 and CC#94 reach
-    /// nothing at all. Note also that the engine's voice sends to reverb plus *one* of chorus and
-    /// delay, never both, which this port does not model.
+    /// **Only the reverb send.** A voice carries four (gain, bus) slots -- dry left, dry right, the
+    /// reverb send on bus 0x3c, and a third whose bus the part's `+0x13` picks. The bus-assign code
+    /// makes that third slot a chorus send (bus 0x3d) or a delay send (bus 0x30) when `+0x13`
+    /// exceeds 0x1f, and a direct bus route otherwise -- but `+0x13` is the part's own **index**,
+    /// the engine has exactly 32 parts, and 31 is 0x1f. The condition can never hold: those two
+    /// branches are dead code in this build, and the third slot is always a direct route to bus
+    /// 16 + index.
+    ///
+    /// So chorus and delay never reach a bus per voice, and there is no per-voice smoother on them
+    /// to model. They pass through unchanged here. Where they *are* applied is the 33-bus send
+    /// matrix in `fx_process_block`, downstream, off the part's `+0x3e2` and `+0x44a` -- unmeasured,
+    /// though the existence of `fx_reg_write_slew` suggests it smooths something of its own.
     std::array<double, 3> sends_{};
     bool sends_seeded_ = false;
     double level_gain_ = 1.0;
