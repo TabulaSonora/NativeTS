@@ -202,4 +202,83 @@ private:
     bool active_ = false;
 };
 
+/// The send matrix's coefficient smoother — the loop `fx_process_block` @`18008c2c0` opens with,
+/// before it touches any audio.
+///
+/// Sixteen coefficients, each an `int16` current chasing an `int16` target, and the GS effect levels
+/// are among them: `40 01 33` is coefficient 6 and `40 01 3a` is coefficient 12. Per 32-sample block
+/// each is stepped sixteen times and the sixteen values written out for the block to use, so like
+/// the part fader this is a per-sample gain rather than a scalar held across the block.
+///
+/// A third distinct shape, and worth not confusing with the other two. It is an exponential approach
+/// like `ControlRamp`, but on a coefficient rather than a gain word, with its own rate and no
+/// zero-order hold: each step closes `0x300/0x10000` — 1.172% — of what is left.
+///
+/// **Arrival comes free from the shift.** There is no `minimum_step` here. Both branches arrange for
+/// the *negative* of the error to be shifted, and an arithmetic shift right rounds toward negative
+/// infinity, so the step's magnitude is rounded up rather than down and can never truncate to zero.
+/// Taking the obvious `(target - current) * rate >> shift` in both directions instead stalls 85
+/// short of a full-scale target, which the oracle does not do.
+///
+/// Verified against the engine block for block: `40 01 33` driven 0 → 127 reproduces 5594, 10229,
+/// 14069, 17248, … and settles on 32512 exactly, with no mismatch in 123 blocks.
+class MatrixRamp {
+public:
+    /// Sub-steps the coefficient takes in one render block.
+    static constexpr int steps_per_block = 16;
+
+    /// The fraction of the remaining error a step closes, as a shift pair.
+    static constexpr int rate = 0x300;
+    static constexpr int rate_shift = 16;
+
+    /// A 0-127 level's coefficient target.
+    static constexpr int level_shift = 8;
+
+    /// The coefficient decodes to a gain in 1/16384ths, so 0x40 — the power-on level — is unity.
+    static constexpr double gain_scale = 0x1p-14;
+
+    [[nodiscard]] static constexpr int target_of(int level) noexcept
+    {
+        return level << level_shift;
+    }
+
+    /// Fills a block's worth of per-sample gains, advancing the coefficient toward `level`.
+    ///
+    /// The first call lands on the target: a stream that never edits a level renders as though this
+    /// did not exist, rather than gliding up from silence at the first block.
+    void fill(int level, std::span<double> gains) noexcept
+    {
+        const int target = target_of(level);
+        if (!seeded_) {
+            current_ = target;
+            seeded_ = true;
+        }
+
+        const std::size_t per = gains.size() / steps_per_block;
+        std::size_t at = 0;
+        for (int step_index = 0; step_index < steps_per_block; ++step_index) {
+            // Whichever way it is going, the *negative* side is what gets shifted.
+            const int step = target < current_
+                                 ? ((target - current_) * rate) >> rate_shift
+                                 : -(((current_ - target) * rate) >> rate_shift);
+            current_ = static_cast<std::int16_t>(current_ + step);
+
+            const double gain = static_cast<double>(current_) * gain_scale;
+            for (std::size_t k = 0; k < per && at < gains.size(); ++k) {
+                gains[at++] = gain;
+            }
+        }
+        while (at < gains.size()) {
+            gains[at++] = static_cast<double>(current_) * gain_scale;
+        }
+    }
+
+    /// The coefficient in force, in its own units.
+    [[nodiscard]] int current() const noexcept { return current_; }
+
+private:
+    int current_ = 0;
+    bool seeded_ = false;
+};
+
 } // namespace ts

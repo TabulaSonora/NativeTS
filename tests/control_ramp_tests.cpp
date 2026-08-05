@@ -136,3 +136,58 @@ TEST_CASE("the volume word matches the engine's own integer law", "[control_ramp
     // The oracle's own reading at CC#7 64, from `scdec volscan`: 1.000549 -> 0.253662.
     CHECK(0.253662 / 1.000549 == Catch::Approx(0.2540).margin(2e-3));
 }
+
+TEST_CASE("the matrix ramp reproduces the engine's coefficient walk", "[control_ramp]")
+{
+    // `scdec fxmatrix sx:40,01,33 0 127` drives the GS reverb level and reads the engine's own
+    // coefficient a block at a time. These are its first eight values, and the port reproduces them
+    // exactly -- 123 blocks compared, no mismatch, settling on 32512 rather than stalling short.
+    constexpr std::array<int, 8> oracle{5594, 10229, 14069, 17248, 19877, 22055, 23860, 25354};
+
+    MatrixRamp ramp;
+    std::array<double, 32> gains{};
+
+    // Seeded at zero by taking the first block at level zero, which is where the capture starts.
+    ramp.fill(0, gains);
+    REQUIRE(ramp.current() == 0);
+
+    for (const int expected : oracle) {
+        ramp.fill(127, gains);
+        CHECK(ramp.current() == expected);
+    }
+}
+
+TEST_CASE("the matrix ramp arrives instead of stalling short", "[control_ramp]")
+{
+    // There is no minimum step here. Arrival comes from the shift: both branches shift the
+    // *negative* of the error, and an arithmetic shift right rounds toward negative infinity, so
+    // the magnitude rounds up and cannot truncate to zero. Taking `(target - current) * rate >>
+    // shift` in both directions instead parks 85 short of a full-scale target.
+    MatrixRamp ramp;
+    std::array<double, 32> gains{};
+    ramp.fill(0, gains);
+
+    for (int block = 0; block < 200; ++block) {
+        ramp.fill(127, gains);
+    }
+    CHECK(ramp.current() == MatrixRamp::target_of(127));
+
+    // And back down, which exercises the other branch.
+    for (int block = 0; block < 200; ++block) {
+        ramp.fill(0, gains);
+    }
+    CHECK(ramp.current() == 0);
+}
+
+TEST_CASE("a level at unity is exactly unity", "[control_ramp]")
+{
+    // 0x40 is the power-on level and has to decode to 1.0 on the nose, because the mixer skips the
+    // multiply entirely in that state and any drift would show up as a silent level change.
+    MatrixRamp ramp;
+    std::array<double, 32> gains{};
+    ramp.fill(0x40, gains);
+    CHECK(ramp.current() == MatrixRamp::target_of(0x40));
+    for (const double gain : gains) {
+        CHECK(gain == 1.0);
+    }
+}

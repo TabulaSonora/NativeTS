@@ -138,6 +138,11 @@ struct ToneGenerator::Impl {
     /// The zero-order-hold mask the part-volume ramp runs on — zero, so one update a sample.
     unsigned volume_ramp_mask = 0;
 
+    /// The wet levels' coefficient smoothers, and the per-sample gains they produce.
+    MatrixRamp reverb_level_ramp;
+    MatrixRamp chorus_level_ramp;
+    std::array<double, block_size> level_gains{};
+
     std::array<float, block_size> reverb_bus{};
     std::array<float, block_size> chorus_bus{};
     std::array<float, block_size> delay_bus{};
@@ -209,10 +214,8 @@ struct ToneGenerator::Impl {
     int reverb_level = 0x40;
     int chorus_level = 0x40;
 
-    [[nodiscard]] static double level_scale(int level) noexcept
-    {
-        return static_cast<double>(level) / 64.0;
-    }
+    /// The level that means unity, which is also the power-on value.
+    static constexpr int unity_level = 0x40;
 
     /// Loads a macro's row, which is what selecting a type does before any edit.
     void load_macro_rows()
@@ -1828,32 +1831,51 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
     // `scale` is the network's wet level, which is not part of its coefficients: it scales what
     // leaves the network rather than shaping it. Unity is skipped rather than multiplied out, so a
     // stream that never edits a level renders exactly as it did before levels existed.
-    const auto add = [&](double scale) {
-        if (scale == 1.0) {
+    const auto add = [&](MatrixRamp* ramp, int level) {
+        // No level to track means the network goes in at unity, and unity is skipped rather than
+        // multiplied out, so a stream that never edits a level renders exactly as it did before
+        // levels existed.
+        if (ramp == nullptr) {
+            simd::add(wet_left, left);
+            simd::add(wet_right, right);
+            return;
+        }
+
+        // A level already settled at unity is skipped rather than multiplied out, which keeps the
+        // old promise: a stream that never edits a level renders bit for bit as it did before any
+        // of this existed. Tested *before* the fill, because a coefficient that merely arrives at
+        // unity during this block spent the earlier samples somewhere else.
+        const bool settled_at_unity = ramp->current() == MatrixRamp::target_of(unity_level)
+                                      && level == unity_level;
+
+        // Otherwise a level moves as a *ramp*, not a step: `fx_process_block` walks its matrix
+        // coefficient sixteen times a block toward the new value, so a level edit takes about 25 ms
+        // to land. Applying it instantly is a click on every change.
+        ramp->fill(level, level_gains);
+        if (settled_at_unity) {
             simd::add(wet_left, left);
             simd::add(wet_right, right);
             return;
         }
         for (int n = 0; n < block_size; ++n) {
-            left[static_cast<std::size_t>(n)] +=
-                static_cast<float>(wet_left[static_cast<std::size_t>(n)] * scale);
-            right[static_cast<std::size_t>(n)] +=
-                static_cast<float>(wet_right[static_cast<std::size_t>(n)] * scale);
+            const auto i = static_cast<std::size_t>(n);
+            left[i] += static_cast<float>(wet_left[i] * level_gains[i]);
+            right[i] += static_cast<float>(wet_right[i] * level_gains[i]);
         }
     };
 
     // The same order the module mixes in: chorus, delay, then reverb.
     if (chorus) {
         chorus->process(chorus_bus, wet_left, wet_right);
-        add(level_scale(chorus_level));
+        add(&chorus_level_ramp, chorus_level);
     }
     if (delay) {
         delay->process(delay_bus, wet_left, wet_right);
-        add(1.0);
+        add(nullptr, 0);
     }
     if (reverb) {
         reverb->process(reverb_bus, wet_left, wet_right);
-        add(level_scale(reverb_level));
+        add(&reverb_level_ramp, reverb_level);
     }
 }
 
