@@ -533,6 +533,21 @@ BankBuild build_bank(const PatchDirectory& directory,
                         Generator::value(Gen::pan, std::clamp(pan, -500, 500)));
                 }
 
+                // Key follow. `block[0x13]` is 0x40 for none and 0x4a for full, ten steps to 100%,
+                // so a step is ten cents per semitone -- which is exactly what `scaleTuning`
+                // holds. 295 of 2644 mapped partials, 11.2%, follow at something other than 100%,
+                // and emitting nothing for them exports a Seashore or a sound-effect partial as
+                // though it tracked the keyboard fully: the wrong pitch at every note away from
+                // its key centre, by as much as the whole interval.
+                //
+                // One partial follows at 150%, which `scaleTuning` can hold (its range runs to
+                // 1200) and which is not a misread: the engine's ladder does not stop at full.
+                const int follow = (partial.raw()[0x13] - 0x40) * 10;
+                if (follow != 100) {
+                    out.generators.push_back(
+                        Generator::value(Gen::scale_tuning, std::clamp(follow, 0, 1200)));
+                }
+
                 const SampleRun& run = set.runs()[static_cast<std::size_t>(run_index)];
                 out.generators.push_back(Generator::value(
                     Gen::sample_modes,
