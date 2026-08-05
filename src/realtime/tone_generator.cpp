@@ -2540,34 +2540,6 @@ void ToneGenerator::Impl::control_change(int channel, Part& part, int controller
         }
         break;
 
-    // The sound controllers land on the same per-part modify bytes as the NRPNs and the part
-    // SysEx: CC#71 is `part+0x3e7` (resonance), CC#72 `0x3ea` (release), and so on through the
-    // recovered `caseD_47`-`caseD_4e` handlers.
-    case 71:
-        part.tvf_resonance = value;
-        break;
-    case 72:
-        part.env_release = value;
-        break;
-    case 73:
-        part.env_attack = value;
-        break;
-    case 74:
-        part.tvf_cutoff = value;
-        break;
-    case 75:
-        part.env_decay = value;
-        break;
-    case 76:
-        part.vibrato_rate = value;
-        break;
-    case 77:
-        part.vibrato_depth = value;
-        break;
-    case 78:
-        part.vibrato_delay = value;
-        break;
-
     case 66:
         if (!part.rx.sostenuto) {
             break;

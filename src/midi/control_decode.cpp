@@ -33,7 +33,15 @@ std::optional<ControlUpdate> decode_control_change(int channel, int controller, 
     case 11:
         return part_update(ControlTarget::expression, channel, value);
 
-    // The sound controllers, all eight.
+    // The sound controllers, all eight. They land on the same per-part modify bytes as the NRPNs
+    // and the part SysEx -- `part+0x3e4` through `part+0x3eb`, in the GS part-parameter order --
+    // through the recovered `caseD_47`-`caseD_4e` handlers, which are named for the controller
+    // numbers themselves (0x47 is 71):
+    //
+    //   CC#71 resonance     0x3e7   caseD_47      CC#75 decay          0x3e9   caseD_4b
+    //   CC#72 release       0x3ea   caseD_48      CC#76 vibrato rate   0x3e4   caseD_4c
+    //   CC#73 attack        0x3e8   caseD_49      CC#77 vibrato depth  0x3e5   caseD_4d
+    //   CC#74 cutoff        0x3e6   caseD_4a      CC#78 vibrato delay  0x3eb   caseD_4e
     case 71:
         return part_update(ControlTarget::tvf_resonance, channel, value);
     case 72:
