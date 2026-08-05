@@ -100,6 +100,16 @@ struct Pdta {
     std::size_t imod_count = 0;
 };
 
+/// Writes one generator record.
+///
+/// **Deliberately unclamped beyond the field's own width.** SF2's per-generator ranges apply to the
+/// *accumulated* value, not to what a zone stores: the reader builds a voice from the spec defaults,
+/// overrides with the instrument's global zone and then its local zone, sums the preset zone's
+/// offsets, sums every modulator's contribution, and only then applies the per-type limits
+/// (`compute_modulator.c:146`, whose own comment cites a `sustainVolEnv` of -461 arriving from
+/// preset-plus-instrument summing as a value that needs the late clamp). Clamping a stored value to
+/// the final range would discard an intermediate the accumulation is entitled to, and could only
+/// ever lose information the reader would have used.
 void write_generator(Buffer& into, const Generator& generator)
 {
     into.u16(static_cast<std::uint16_t>(generator.oper));
