@@ -334,6 +334,44 @@ TEST_CASE("Rotary modulates rather than merely passing", "[efx][sccore]")
           != rms(std::span<const float>{left}.subspan(16000)));
 }
 
+TEST_CASE("the stereo EQ shelves respond and the mid bands are known missing", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x01, 0x00);
+    CHECK(efx.current().name == "Equalizer");
+    CHECK(efx.implemented());
+
+    const std::vector<float> input = sine(8192, 0.25);
+    const auto render = [&](int address, int value) {
+        efx.select_type(0x01, 0x00);
+        if (address >= 0) {
+            efx.set_parameter(address, value);
+        }
+        std::vector<float> l(input.size());
+        std::vector<float> r(input.size());
+        efx.process(input, input, l, r);
+        return rms(std::span<const float>{l}.subspan(4096));
+    };
+
+    const double flat = render(-1, 0);
+    CHECK(flat > 0.0);
+
+    // Both shelf gains have to reach the filter. `04` is the low band's gain and `06` the high
+    // band's. The two extremes are compared against each other rather than against flat: at this
+    // type's default frequency settings the tables saturate, so one end of a band's range can
+    // legitimately land on the same coefficients as the default and comparing to flat would
+    // assert a table property rather than the wiring.
+    CHECK(render(0x04, 0x7F) > render(0x04, 0x00));
+    CHECK(render(0x06, 0x7F) > render(0x06, 0x00));
+    CHECK(render(0x04, 0x7F) > flat);
+
+    // The two mid bands are not programmed yet -- their bank loader is untranscribed -- so this
+    // pins the gap rather than pretending it is not there. When the loader lands, this assertion
+    // is the one that should start failing.
+    CHECK(render(0x09, 0x7F) == flat);
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();

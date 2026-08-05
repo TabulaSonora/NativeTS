@@ -110,6 +110,16 @@ constexpr std::array<int, 19> od2_bank_registers_b{
 /// The second drive curve has two variants here, picked by the chain's OD type rather than fixed:
 /// `0x18198E3C0` is Overdrive's, `0x18198E480` the other one.
 constexpr std::int64_t od2_drive_alt_offset = file_offset(0x18198E480);
+// Stereo EQ (`fx_param_apply_48680`). Each shelf has two frequency settings, and the setting
+// picks which triple of gain tables the band reads — the shared ones the other types use, or
+// these alternates.
+constexpr std::int64_t eq_low_alt_f_offset = file_offset(0x18198B1E0);
+constexpr std::int64_t eq_low_alt_d_offset = file_offset(0x18198B0E0);
+constexpr std::int64_t eq_low_alt_h_offset = file_offset(0x18198A6C0);
+constexpr std::int64_t eq_high_alt_f_offset = file_offset(0x18198AEE0);
+constexpr std::int64_t eq_high_alt_d_offset = file_offset(0x18198AFE0);
+constexpr std::int64_t eq_high_alt_h_offset = file_offset(0x18198AAC0);
+
 // Rotary (`fx_param_apply_57bc0`). Its own three curves on top of the shared gain and level ones.
 constexpr std::int64_t rotary_rate_offset = file_offset(0x18198CA60);   // u16 -> 0x139, 0xBE
 constexpr std::int64_t rotary_spread_offset = file_offset(0x18198F040); // u8  -> 0xF2, 0x126
@@ -1024,12 +1034,85 @@ void rotary_sample(float in_left,
     out_left = c[0x176] * left + 1e-08F;
 }
 
+/// `fx_algo_stereo_eq` @ 0x18001B730: the four-band stereo EQ. Two identical chains of shelving
+/// and peaking sections, one per channel, and the only transcribed algorithm with no modulation
+/// and no delay line at all — it never touches the second buffer.
+///
+/// Both chains are fed from the *same* conditioned sample (slot 0x1F8, which the input stage just
+/// filled from the right input); the left input only reaches the output stage. That is the same
+/// shape OD / OD2's second chain has, and it is the engine's, not a transcription slip.
+void stereo_eq_sample(float in_left,
+                      float in_right,
+                      float& out_left,
+                      float& out_right,
+                      Tape& a,
+                      const float* c) noexcept
+{
+    a.at(0x1F8) = in_right;
+    float f4 = c[0] * a.at(0x1E0) + 1e-08F;
+    float f6 = c[1] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1D4) = f6;
+    f4 = f4 * c[3] + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1F8) = c[4] * f6 + 1e-08F;
+    out_right = c[6] * f4 + 1e-08F;
+
+    // One channel's four sections. The two state slots each section reads are captured before any
+    // of them is rewritten, which is what makes this a cascade rather than a feedback path.
+    const auto chain = [&a, c](int base, int coef, float input, int out_slot) noexcept {
+        const float s0 = a.at(base + 0x08);
+        const float s1 = a.at(base + 0x0C);
+        a.at(base) = input;
+        float f = (c[coef + 0x04] + 1e-05F) * a.at(base) + a.at(base + 0x04) * 1e-05F
+                  + a.at(base + 0x04) * c[coef + 0x06] + s0 * 1e-05F + s0 * c[coef + 0x08] + 1e-08F;
+        a.at(base + 0x04) = f;
+        const float s2 = a.at(base + 0x10);
+        const float g = (c[coef + 0x0C] + 1e-05F) * f + s0 * 1e-05F + s0 * c[coef + 0x0E]
+                        + s1 * 1e-05F + s1 * c[coef + 0x10] + 1e-08F;
+        a.at(base + 0x08) = g;
+        a.at(base + 0x14) = s2 * c[coef + 0x15] + c[coef + 0x16] * a.at(base + 0x18) + 1e-08F;
+        const float s3 = a.at(base + 0x20);
+        float h = s1 * c[coef + 0x14] + c[coef + 0x13] * g
+                  + (c[coef + 0x18] + c[coef + 0x17]) * s2 + c[coef + 0x19] * a.at(base + 0x14)
+                  + 1e-08F;
+        a.at(0x1D4) = h;
+        h = c[coef + 0x1C] * h + s2 * c[coef + 0x1B] + 1e-08F;
+        a.at(base + 0x0C) = h;
+        const float k = c[coef + 0x1F] * h + g * c[coef + 0x1E] + 1e-08F;
+        a.at(base + 0x18) = k;
+        a.at(base + 0x24) = c[coef + 0x25] * a.at(base + 0x28) + s3 * c[coef + 0x24] + 1e-08F;
+        float m = (c[coef + 0x26] + c[coef + 0x27]) * s3 + c[coef + 0x23] * a.at(base + 0x1C)
+                  + k * c[coef + 0x22] + c[coef + 0x28] * a.at(base + 0x24) + 1e-08F;
+        a.at(0x1D4) = m;
+        m = c[coef + 0x2B] * m + s3 * c[coef + 0x2A] + 1e-08F;
+        a.at(base + 0x1C) = m;
+        const float n = c[coef + 0x2E] * m + k * c[coef + 0x2D] + 1e-08F;
+        a.at(0x1D4) = n;
+        a.at(out_slot) = c[coef + 0x31] * n + 1e-08F;
+    };
+
+    chain(0x40, 0x0A, a.at(0x1FC) * c[0x0A] + 1e-08F, 0x1E4);
+    chain(0x80, 0x3F, c[0x3F] * a.at(0x1F8) + 1e-08F, 0x1DC);
+
+    a.at(0x1F8) = in_left;
+    float left = c[0x170] * a.at(0x1E4) + 1e-08F;
+    const float left_in = c[0x171] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1D4) = left_in;
+    left = c[0x173] * left + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1F8) = c[0x174] * left_in + 1e-08F;
+    out_left = c[0x176] * left + 1e-08F;
+}
+
 /// Which transcription serves a dispatch index.
 enum class Processor {
     thru, ///< dispatch 0, and dispatch 1's cleared "no effect" state
     overdrive, ///< dispatch 3 and 4 — one dataflow, two presets
     od_od2, ///< dispatch 42 — two overdrive chains in parallel
     rotary, ///< dispatch 9 — the rotating speaker
+    stereo_eq, ///< dispatch 2 — the four-band stereo EQ
     efx_reverb, ///< dispatch 0x19, with the inverted output routing
     passthrough, ///< not transcribed yet: signal passes unchanged
 };
@@ -1049,6 +1132,8 @@ enum class Processor {
         return Processor::od_od2;
     case 9:
         return Processor::rotary;
+    case 2:
+        return Processor::stereo_eq;
     default:
         return Processor::passthrough;
     }
@@ -1086,6 +1171,14 @@ struct InsertionEffect::Impl {
     std::array<std::uint8_t, 128> od2_drive_alt{};
     std::array<std::uint16_t, amp_bank_register_count> od2_amp_bank_a{};
     std::array<std::uint16_t, amp_bank_register_count> od2_amp_bank_b{};
+    std::array<std::uint16_t, 128> eq_low_alt_f{};
+    std::array<std::uint16_t, 128> eq_low_alt_d{};
+    std::array<std::uint16_t, 128> eq_low_alt_h{};
+    std::array<std::uint16_t, 128> eq_high_alt_f{};
+    std::array<std::uint16_t, 128> eq_high_alt_d{};
+    std::array<std::uint16_t, 128> eq_high_alt_h{};
+    std::array<std::uint8_t, 2> eq_freq_latch{};
+
     std::array<std::uint16_t, 128> rotary_rate{};
     std::array<std::uint8_t, 128> rotary_spread{};
     std::array<std::uint16_t, 128> rotary_speed{};
@@ -1161,6 +1254,7 @@ struct InsertionEffect::Impl {
                           std::uint8_t simulator);
     void apply_od_od2();
     void apply_rotary(bool on_select);
+    void apply_stereo_eq();
     void od2_chain(int chain, int type_param, int drive_param, int control_offset);
     void apply_efx_reverb();
     void reverb_character_program();
@@ -1314,6 +1408,12 @@ void InsertionEffect::Impl::load_tables(const RomImage& rom)
         read_u8s(file_offset(od2_bank_tables[i]), od2_bank[i]);
     }
     read_u8s(od2_drive_alt_offset, od2_drive_alt);
+    read_u16s(eq_low_alt_f_offset, eq_low_alt_f);
+    read_u16s(eq_low_alt_d_offset, eq_low_alt_d);
+    read_u16s(eq_low_alt_h_offset, eq_low_alt_h);
+    read_u16s(eq_high_alt_f_offset, eq_high_alt_f);
+    read_u16s(eq_high_alt_d_offset, eq_high_alt_d);
+    read_u16s(eq_high_alt_h_offset, eq_high_alt_h);
     read_u16s(rotary_rate_offset, rotary_rate);
     read_u8s(rotary_spread_offset, rotary_spread);
     read_u16s(rotary_speed_offset, rotary_speed);
@@ -1417,6 +1517,9 @@ void InsertionEffect::Impl::apply(bool on_select)
         break;
     case Processor::rotary:
         apply_rotary(on_select);
+        break;
+    case Processor::stereo_eq:
+        apply_stereo_eq();
         break;
     case Processor::efx_reverb:
         apply_efx_reverb();
@@ -1558,6 +1661,71 @@ void InsertionEffect::Impl::amp_bank_program(
     registers.write16(r[2], value(14));
     registers.write_slew(r[0], amp_switch_a[sw]);
     registers.write_slew(r[1], amp_switch_b[sw]);
+}
+
+/// `fx_param_apply_48680`, the stereo EQ handler — the two shelving bands and the level.
+///
+/// **The two mid bands are not applied here.** They are programmed by a four-argument bank loader
+/// (`reverb_load_algo_regs`) that unpacks a per-band coefficient table by frequency and Q, and it
+/// is not transcribed yet. Editing `40 03 07`-`40 03 0C` therefore does nothing in this engine,
+/// where the shelves and the level respond. The block's *default* state is unaffected — the
+/// per-type preset fill programs all 384 registers correctly on selection, verified against the
+/// live engine — so a file that selects the EQ and leaves it alone renders exactly right.
+void InsertionEffect::Impl::apply_stereo_eq()
+{
+    apply_common_tail();
+
+    // Low shelf: parameter 0 picks the frequency, latched to 0/1, and 1 is the gain. Both channels
+    // are programmed from the same pair.
+    if (params[0] < 2) {
+        eq_freq_latch[0] = params[0];
+    } else {
+        params[0] = eq_freq_latch[0];
+    }
+    if (changed(0) || changed(1)) {
+        const std::size_t g = params[1];
+        const bool alternate = eq_freq_latch[0] != 0;
+        const std::uint16_t f = alternate ? eq_low_alt_f[g] : low_gain_f[g];
+        const std::uint16_t d = alternate ? eq_low_alt_d[g] : low_gain_d[g];
+        const std::uint16_t h = alternate ? eq_low_alt_h[g] : low_gain_h[g];
+        for (const int base : {0x8D, 0xC2}) {
+            registers.write16(base, f);
+            registers.write16(base + 2, d);
+            registers.write16(base + 4, h);
+        }
+        shadow[0] = eq_freq_latch[0];
+        shadow[1] = params[1];
+    }
+
+    // High shelf: parameter 2 the frequency, 3 the gain, bracketed by its two mute registers.
+    if (params[2] < 2) {
+        eq_freq_latch[1] = params[2];
+    } else {
+        params[2] = eq_freq_latch[1];
+    }
+    if (changed(2) || changed(3)) {
+        registers.write_slew(0xBB, 0);
+        registers.write_slew(0xF0, 0);
+        const std::size_t g = params[3];
+        const bool alternate = eq_freq_latch[1] != 0;
+        const std::uint16_t f = alternate ? eq_high_alt_f[g] : high_gain_f[g];
+        const std::uint16_t d = alternate ? eq_high_alt_d[g] : high_gain_d[g];
+        const std::uint16_t h = alternate ? eq_high_alt_h[g] : high_gain_h[g];
+        for (const int base : {0x95, 0xCA}) {
+            registers.write16(base, f);
+            registers.write16(base + 2, d);
+            registers.write16(base + 4, h);
+        }
+        registers.write_slew(0xBB, 0x20);
+        registers.write_slew(0xF0, 0x20);
+        shadow[2] = eq_freq_latch[1];
+        shadow[3] = params[3];
+    }
+
+    const auto level = static_cast<std::size_t>(std::clamp<int>(params[0x13], 0, 0x7F));
+    registers.write_slew(0x80, level_curve[level]);
+    registers.write_slew(0x1F0, level_curve[level]);
+    shadow[0x13] = params[0x13];
 }
 
 /// `fx_param_apply_57bc0`, the Rotary handler. Parameters 0/1 are the two rotors' slow and fast
@@ -2047,6 +2215,13 @@ void InsertionEffect::process(std::span<const float> in_left,
                         right,
                         impl.tape_a,
                         coef);
+        } else if (impl.processor == Processor::stereo_eq) {
+            stereo_eq_sample(in_left[n] + in_left[n],
+                             in_right[n] + in_right[n],
+                             left,
+                             right,
+                             impl.tape_a,
+                             coef);
         } else if (impl.processor == Processor::rotary) {
             rotary_sample(in_left[n] + in_left[n],
                           in_right[n] + in_right[n],
