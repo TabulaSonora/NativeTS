@@ -850,7 +850,10 @@ struct TableTap {
     };
 }
 
-/// `fx_algo_rotary` @ 0x1800382F0: the rotating speaker. Horn and drum are written into the delay
+/// `fx_algo_rotary` @ 0x1800382F0: the rotating speaker. Verified sample-identical to the module
+/// through `scdec efxir`, which resets the shared state buffer so both sides' rotor phases start
+/// together — without that the free-running rotors make any comparison meaningless.
+/// Horn and drum are written into the delay
 /// buffer at two fixed points and read back by a *rotating* tap — a phase accumulator per rotor,
 /// wrapped into [-1, 1), turned into a table position, and interpolated. Each rotor also has its
 /// own tremolo, taken from the same phase, so a rotor modulates level and delay together, which is

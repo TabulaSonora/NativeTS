@@ -256,6 +256,12 @@ is the only place the host sample rate exists; everything upstream is the 32 kHz
   the pan table's centre sum 1.1811) where a part send, fed pre-pan, is flat. The one measured
   rather than traced quantity is the conversion from an engine bus value into this engine's
   per-network units, expressed for reverb as the engine's own EFX-to-part ratio (0.980).
+- The insertion-EFX algorithms are verified the same way, through `scdec efxir`, which resets the
+  shared state buffer before driving one algorithm by hand — necessary because the modulated types
+  run free-running accumulators out of that buffer, so a comparison against a reimplementation
+  starting from zero otherwise compares two points of the same sweep. The five transcribed so far
+  come out bit-identical (Thru, Overdrive, Rotary) or at the float-against-double floor (EFX
+  Reverb 6e-08, OD / OD2 4e-06).
 - All three send networks are verified against the live engine's own processors by impulse
   response — `scdec revir` / `choir` / `dlyir` drive `fx_reverb_process`, `fx_chorus_stage_l` and
   `fx_chorus_stage_r`, and `tools/dump_effects_dll.py` captures all 26 GS networks as the test
