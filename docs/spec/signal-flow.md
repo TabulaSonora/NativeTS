@@ -100,7 +100,7 @@ flowchart TD
         DC["20 Hz one-pole DC blockers<br/>on each effect input"]
         REV["fx_reverb_process 180086140<br/>allpass/comb tank — 8 GS reverb types"]
         CHO["fx_chorus_stage_l 1800851c0<br/>modulated delay — 8 GS chorus types"]
-        DLY["GS system delay — woven into the<br/>matrix + delay lines, 10 types, 60 ms pre-delay"]
+        DLY["fx_chorus_stage_r 180085460<br/>GS system delay — 3 taps + feedback, 10 types"]
         EFX["insertion EFX — g_fx_algo_dispatch 181895190<br/>67 algorithms incl. 1 unreachable orphan"]
         MTX --> DC
         DC --> REV & CHO & DLY
