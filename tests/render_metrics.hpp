@@ -35,6 +35,22 @@ void transform(std::vector<double>& real, std::vector<double>& imag);
 /// A coarse RMS envelope in dB: catches a missing or late note without seeing phase at all.
 [[nodiscard]] std::vector<double> rms_envelope(const std::vector<double>& mono, int windows);
 
+/// The right channel's share of each window, 0 hard left through 0.5 centred to 1 hard right.
+///
+/// **Every other measure here is taken on the mono sum, and is therefore blind to the stereo image
+/// by construction.** A voice that moves across the field carries its energy with it: the sum, the
+/// spectrum and the envelope above do not move by a hundredth of a dB, so a whole class of defect
+/// -- a pan that is ignored, applied twice, or mirrored -- passes every one of them. Reading drum
+/// pan as an absolute position rather than an offset from the part's panpot did exactly that, and
+/// two corpus songs that pan their drums registered the fix at a thousandth of a dB.
+///
+/// A share rather than a ratio in dB because the pan law's ends are silent on one side, and a
+/// hard-panned passage would be a division by zero. Silent windows read 0.5, and callers should
+/// skip them against the RMS envelope rather than believe them centred.
+[[nodiscard]] std::vector<double> balance_envelope(const std::vector<double>& left,
+                                                   const std::vector<double>& right,
+                                                   int windows);
+
 /// The strongest partial within 3% of `target`, in Hz, or zero when there is nothing to find.
 ///
 /// Every other measure here is blind to tuning. A couple of cents sits far inside an octave band,

@@ -714,6 +714,125 @@ TEST_CASE("a drum key's receive switches govern its whole life", "[stream][sccor
     }
 }
 
+TEST_CASE("a drum part's pan follows CC#10, the kit plane offsetting it", "[stream][sccore]")
+{
+    // The kit's `+0x280` plane is an OFFSET from centre, not the absolute position it reads like.
+    // The engine bases a drum voice on the part panpot exactly as it does a melodic one and folds
+    // the plane in on top -- `pan = clamp(part[0x3dd] + (kit[0x280 + key] - 0x40))`, the pan setup
+    // at 180060620 -- so CC#10 sweeps a drum part across the field.
+    //
+    // **This has to be its own test, because the song gate cannot see it.** Every metric there is
+    // taken on the mono sum, which is by construction blind to where in the image a voice sits:
+    // read as absolute, this port pinned SOMDesert-SC8850.mid's hand clap at the plane's own 54
+    // for the whole song while the module swept it 9..115, and `MAKORO.MID` and `bad_apple`, both
+    // in the corpus and both panning drums, moved by a thousandth of a dB. Measured against the
+    // module, 151 of that file's 153 claps now land on its exact pan and all 153 within one step.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // Key 42, the closed hi-hat, sits well right of centre in the default kit. A centred key could
+    // not tell "the panpot replaces the plane" from "the plane offsets the panpot" -- they agree
+    // wherever the plane is 64, which is most of a kit and every key of a kick-and-snare probe.
+    constexpr int hat = 42;
+    const int plane = notes.drums().key(hat).pan;
+    REQUIRE(plane != PanLaw::centre);
+
+    std::vector<float> left(ToneGenerator::block_size);
+    std::vector<float> right(ToneGenerator::block_size);
+
+    /// One strike, dry, as the right channel's *share* of the hit -- 0 hard left, 1 hard right.
+    /// A share rather than a right-over-left ratio because the pan law's ends are silent on one
+    /// side, and a ratio there is a division by zero that no tolerance can express.
+    ///
+    /// The voice is one mono signal times two gains, so the share of its RMS is the share of the
+    /// gains exactly, and this compares against `PanLaw::gains` with nothing fitted.
+    ///
+    /// The sends are silenced first: their wet is a mono bus that arrives at its own position and
+    /// would dilute the very reading being taken.
+    ///
+    /// Struck into silence, and left in silence: a hit measured over the tail of the one before it
+    /// reads a blend of two positions, which matters as soon as a caller strikes twice.
+    const auto strike = [&](ToneGenerator& generator, int note) {
+        generator.send_channel(0xB9, 91, 0);
+        generator.send_channel(0xB9, 93, 0);
+        generator.send_channel(0xB9, 94, 0);
+        generator.send_channel(0x99, note, 100);
+
+        double left_energy = 0.0;
+        double right_energy = 0.0;
+        for (int block = 0; block < 400; ++block) {
+            generator.render(left, right);
+            for (std::size_t i = 0; i < left.size(); ++i) {
+                left_energy += static_cast<double>(left[i]) * left[i];
+                right_energy += static_cast<double>(right[i]) * right[i];
+            }
+        }
+        REQUIRE(left_energy + right_energy > 0.0);
+
+        for (int block = 0; block < 4000 && generator.active_voices() > 0; ++block) {
+            generator.render(left, right);
+        }
+
+        const double left_rms = std::sqrt(left_energy);
+        const double right_rms = std::sqrt(right_energy);
+        return right_rms / (left_rms + right_rms);
+    };
+
+    /// The same share, from the pan law, for a voice the engine placed at `position`.
+    const auto expected_share = [&](int position) {
+        const auto [gain_left, gain_right] = notes.pan().gains(std::clamp(position, 0, 127));
+        return gain_right / (gain_left + gain_right);
+    };
+
+    SECTION("CC#10 moves the hit, and the plane rides on top of it")
+    {
+        for (const int panpot : {1, 32, 64, 96, 127}) {
+            INFO("CC#10 " << panpot << ", kit plane " << plane);
+            ToneGenerator generator{notes};
+            generator.send_channel(0xB9, 10, panpot);
+            CHECK_THAT(strike(generator, hat),
+                       WithinAbs(expected_share(panpot + plane - PanLaw::centre), 1e-4));
+        }
+    }
+
+    SECTION("at a centred panpot the hit lands on the plane alone")
+    {
+        // The case that let the bug hide: with nothing sent, the part sits at 64 and the offset is
+        // zero, so an absolute reading and this one agree exactly. Pinned here so that agreement
+        // stays a consequence rather than the rule.
+        ToneGenerator generator{notes};
+        CHECK_THAT(strike(generator, hat), WithinAbs(expected_share(plane), 1e-4));
+    }
+
+    SECTION("CC#10 zero is pan 1, not the random draw")
+    {
+        // The wheel cannot reach RND: the engine clamps a zero CC#10 to one, so this is a hard-left
+        // hit and the same one every time.
+        ToneGenerator generator{notes};
+        generator.send_channel(0xB9, 10, 0);
+        CHECK_THAT(strike(generator, hat), WithinAbs(expected_share(1 + plane - PanLaw::centre), 1e-4));
+    }
+
+    SECTION("a SysEx panpot of zero draws a fresh position per hit")
+    {
+        // GS RND, and it wins over the plane outright -- the engine draws and returns before it
+        // ever folds the offset in. Measured on the module, eight strikes of one key at panpot 0
+        // land at 62, 45, 22, 14, 32, 95, 86 and 0, so what is asserted is that the hits differ,
+        // not where they fall: this port's PRNG is not stream-aligned with the module's.
+        ToneGenerator generator{notes};
+        generator.send_sysex(dt1({0x40, 0x10, 0x1C, 0x00}));
+
+        std::vector<double> shares;
+        for (int hit = 0; hit < 8; ++hit) {
+            shares.push_back(strike(generator, hat));
+        }
+        const auto [low, high] = std::minmax_element(shares.begin(), shares.end());
+        INFO("right-channel share spans " << *low << " to " << *high);
+        CHECK(*high - *low > 0.2);
+    }
+}
+
 TEST_CASE("the NRPN-dropped crash still sounds on the SC-55 map", "[stream][sccore]")
 {
     // WATRWLD1.MID drops its crash (key 55) forty steps with the drum pitch NRPN. On the SC-55

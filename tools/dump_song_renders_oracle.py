@@ -164,6 +164,30 @@ def envelope(mono, rate, windows=64):
     return out
 
 
+def balance(left, right, windows=64):
+    """The right channel's share of each window: what every measure above cannot see.
+
+    Peak, RMS, the bands and the envelope are all taken on the mono sum, so a voice that moves
+    across the stereo field moves none of them -- the energy is still there, just somewhere else.
+    This is the measure that sees where. 0 is hard left, 0.5 centred, 1 hard right; a silent window
+    reads 0.5 and the gate skips it against the RMS envelope rather than believing it centred.
+    """
+    if not left:
+        return []
+    span = max(1, len(left) // windows)
+    out = []
+    for w in range(windows):
+        chunk_l = left[w * span:(w + 1) * span]
+        chunk_r = right[w * span:(w + 1) * span]
+        if not chunk_l:
+            break
+        rms_l = math.sqrt(sum(v * v for v in chunk_l) / len(chunk_l))
+        rms_r = math.sqrt(sum(v * v for v in chunk_r) / len(chunk_r))
+        total = rms_l + rms_r
+        out.append(round(rms_r / total, 4) if total > 0 else 0.5)
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -229,6 +253,7 @@ def main():
             "rms": math.sqrt(energy),
             "bands": octave_bands(mono, arguments.rate),
             "envelope": envelope(mono, arguments.rate),
+            "balance": balance(left, right),
             "sha256": hashlib.sha256(audio.read_bytes()).hexdigest(),
         })
 
@@ -237,8 +262,9 @@ def main():
                   "Roland-derived: generate locally, do not redistribute. Tolerance gates: the "
                   "reference's effect LFOs start at a phase this port cannot yet derive, so two "
                   "renders can agree on every note and still correlate near 0.18 sample by sample. "
-                  "Compare frames, peak, rms, the octave bands and the coarse envelope; the sha256 "
-                  "identifies the oracle audio, it is not a target."),
+                  "Compare frames, peak, rms, the octave bands, the coarse envelope and the "
+                  "per-window stereo balance; the sha256 identifies the oracle audio, it is not a "
+                  "target."),
         "generator": "tools/dump_song_renders_oracle.py",
         "dllSha256": hashlib.sha256(arguments.dll.read_bytes()).hexdigest(),
         "sampleRate": arguments.rate,

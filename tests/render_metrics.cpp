@@ -171,4 +171,34 @@ std::vector<double> rms_envelope(const std::vector<double>& mono, int windows)
     return out;
 }
 
+std::vector<double> balance_envelope(const std::vector<double>& left,
+                                     const std::vector<double>& right,
+                                     int windows)
+{
+    std::vector<double> out;
+    if (left.empty() || left.size() != right.size()) {
+        return out;
+    }
+    const std::size_t span =
+        std::max<std::size_t>(1, left.size() / static_cast<std::size_t>(windows));
+    for (int w = 0; w < windows; ++w) {
+        const std::size_t begin = static_cast<std::size_t>(w) * span;
+        if (begin >= left.size()) {
+            break;
+        }
+        const std::size_t end = std::min(begin + span, left.size());
+        double left_energy = 0.0;
+        double right_energy = 0.0;
+        for (std::size_t i = begin; i < end; ++i) {
+            left_energy += left[i] * left[i];
+            right_energy += right[i] * right[i];
+        }
+        const auto count = static_cast<double>(end - begin);
+        const double left_rms = std::sqrt(left_energy / count);
+        const double right_rms = std::sqrt(right_energy / count);
+        out.push_back(left_rms + right_rms > 0.0 ? right_rms / (left_rms + right_rms) : 0.5);
+    }
+    return out;
+}
+
 } // namespace testmetrics

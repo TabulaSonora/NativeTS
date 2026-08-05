@@ -55,6 +55,7 @@ struct Metrics {
     double rms = 0.0;
     std::vector<double> bands;
     std::vector<double> envelope;
+    std::vector<double> balance;
 };
 
 /// The bands the generator takes. Eight, down to 63 Hz: a song has a bass line and a single note
@@ -73,12 +74,16 @@ constexpr double band_window_start = 0.25;
     metrics.frames = left.size();
 
     std::vector<double> mono(left.size());
+    std::vector<double> left_signal(left.size());
+    std::vector<double> right_signal(left.size());
     double energy = 0.0;
     int peak = 0;
     for (std::size_t i = 0; i < left.size(); ++i) {
         peak = std::max({peak, std::abs(static_cast<int>(left[i])),
                          std::abs(static_cast<int>(right[i]))});
-        mono[i] = (static_cast<double>(left[i]) + static_cast<double>(right[i])) * 0.5 / 32768.0;
+        left_signal[i] = static_cast<double>(left[i]) / 32768.0;
+        right_signal[i] = static_cast<double>(right[i]) / 32768.0;
+        mono[i] = (left_signal[i] + right_signal[i]) * 0.5;
         energy += mono[i] * mono[i];
     }
 
@@ -86,6 +91,7 @@ constexpr double band_window_start = 0.25;
     metrics.rms = std::sqrt(energy / static_cast<double>(std::max<std::size_t>(1, mono.size())));
     metrics.bands = testmetrics::octave_bands(mono, rate, band_centres, band_window_start);
     metrics.envelope = testmetrics::rms_envelope(mono, /*windows=*/64);
+    metrics.balance = testmetrics::balance_envelope(left_signal, right_signal, /*windows=*/64);
     return metrics;
 }
 
@@ -106,6 +112,13 @@ struct Deviation {
     double peak = 0.01;
     double band_db = 3.0;
     double envelope_db = 6.0;
+    /// Worst window's stereo balance, as the right channel's share. 0.06 is the corpus's own worst
+    /// once the two songs with rows below are set aside -- canyon at map 2, which is where the
+    /// residual sits on every map.
+    ///
+    /// The one measure here that is not taken on the mono sum, and so the only one that can see the
+    /// stereo image at all -- see `testmetrics::balance_envelope` for why the other four cannot.
+    double balance = 0.06;
 };
 
 struct KnownDeviation {
@@ -150,7 +163,18 @@ struct KnownDeviation {
 /// deviation improved on eight of the nine songs it moved at all**, and `roland_allstars`'s band
 /// error closed completely. Every row that improved was tightened in the same commit, so the table
 /// is net tighter, not looser.
-constexpr std::array<KnownDeviation, 16> known_deviations{{
+constexpr std::array<KnownDeviation, 18> known_deviations{{
+    // The two rows the stereo balance measure opened, and they are one lead rather than two. Both
+    // sit where the send returns dominate and nowhere else: `panwet.mid` -- a one-note probe named
+    // for exactly this -- agrees with the module **exactly** on its attack window, 0.7380 against
+    // 0.7380, and only parts company through the body and tail, where this port pulls toward centre
+    // while the module holds the voice's side. `bad_apple`'s worst two windows are its last two, at
+    // -32 and -36 dB, which is its reverb tail and nothing else. The dry pan is not in question in
+    // either; where the wet comes back is.
+    {"panwet.mid", {1.0, 0.01, 3.0, 6.0, 0.36}, "wet return placement, not the dry pan"},
+    {"bad_apple_feat_nomico_s__msgs.mid", {1.0, 0.01, 3.0, 6.0, 0.15},
+     "wet return placement in the closing tail"},
+
     // XG, and inside every default but the peak: measured against the module at -0.28 dB RMS,
     // 0.95 dB on the worst octave band and 1.20 dB on the worst envelope window, which is
     // better than most of this corpus. The peak is 0.051 out, in line with canyon at map 4
@@ -338,6 +362,34 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         }
         INFO("worst envelope window: " << worst << " dB");
         CHECK(worst < allowed.envelope_db);
+
+        // Where in the image, which nothing above can see: every other measure is taken on the mono
+        // sum and a voice that moves across the field carries its energy with it. Skipped on the
+        // same silence guard as the envelope -- a window with no signal has no balance, and the
+        // generator writes 0.5 there rather than pretend otherwise.
+        const auto expected_balance = entry.value("balance", std::vector<double>{});
+        if (expected_balance.empty()) {
+            WARN("fixture predates the stereo balance measure; regenerate "
+                 "fixtures/song_renders_oracle.json to gate on it");
+        } else {
+            REQUIRE(ours.balance.size() == expected_balance.size());
+            double worst_balance = 0.0;
+            std::size_t worst_window = 0;
+            for (std::size_t window = 0; window < ours.balance.size(); ++window) {
+                if (expected_envelope[window] < -60.0) {
+                    continue;
+                }
+                const double off = std::abs(ours.balance[window] - expected_balance[window]);
+                if (off > worst_balance) {
+                    worst_balance = off;
+                    worst_window = window;
+                }
+            }
+            INFO("worst balance window " << worst_window << ": " << ours.balance[worst_window]
+                                         << " vs " << expected_balance[worst_window] << " ("
+                                         << worst_balance << ")");
+            CHECK(worst_balance < allowed.balance);
+        }
 
         ++compared;
     }
