@@ -138,6 +138,11 @@ std::int64_t EnvelopeMachine::hold_samples(const PartialParameters& partial,
                                            int velocity) const noexcept
 {
     const int clock = partial.raw()[0x00];
+    // The engine has no such early exit: it always forms the index from the two part biases and
+    // this byte. It is equivalent only because both biases default to 0x40 and `g_rate_curve[0]`
+    // is exactly zero, so a neutral part computes a zero period here anyway. GS `40 1x 38` and
+    // `40 4x 38` move those biases -- see the FINDINGS entry -- and honouring them means losing
+    // this exit, since a raised bias arms the clock on a partial that has no delay of its own.
     if (clock == 0) {
         return 0;
     }

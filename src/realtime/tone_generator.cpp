@@ -1388,8 +1388,28 @@ void ToneGenerator::Impl::gs_part_parameter(int part_index,
         part.rx.bank_lsb = value != 0;
         break;
 
+    case 0x26:
+        // Recognised and dropped, and that is exact rather than a shortcut: the engine stores this
+        // one as a boolean at `part+0x446` and then never reads it. The offset appears exactly once
+        // in the whole binary -- that write. No voice path, no getter, no CC, no NRPN, and it is
+        // not in the published Roland list either.
+        break;
+
     case 0x2C:
         part.delay_send = value;
+        break;
+
+    case 0x38:
+        // The ninth tone-modify slot (`part+0x44b`, 0x40 neutral), continuing the `30`-`37` run
+        // past where Roland's list ends. It biases the envelope hold clock's rate index --
+        // `clamp(part[0x45b] + part[0x44b] + (clock & 0x7F) - 0x80, 0, 0x7F)` at every note-on --
+        // so above neutral it *arms* a start delay on partials that have none, up to 24 s, and
+        // below neutral it shortens the ones that do.
+        //
+        // Deliberately not stored yet: honouring it means `EnvelopeMachine::hold_samples` taking
+        // the bias and losing its `clock == 0` early exit, which is only equivalent while the bias
+        // is neutral (`g_rate_curve[0]` is 0). Dropping it keeps this engine exactly where it was
+        // rather than half-wiring it. See the FINDINGS entry for the full law.
         break;
 
     // The part modify offsets -- third writer onto the same bytes as CC#71-78 and the NRPNs.
