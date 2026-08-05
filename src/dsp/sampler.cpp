@@ -9,13 +9,27 @@
 namespace ts {
 namespace {
 
-/// Packs the three descriptor fields that determine a wave's bytes into one cache key.
+/// Packs the descriptor fields that determine a decoded wave into one cache key.
 ///
-/// Region is 7 bits and the two positions are 20 bits each, so 47 bits is the whole key and no hash
-/// combiner is needed.
+/// Region is 7 bits and the two positions are 20 bits each, and the two dispatch flags take one bit
+/// apiece, so 49 bits is the whole key and no hash combiner is needed.
+///
+/// **The flags have to be in the key even though they do not change a single byte read from the
+/// ROM.** They change what `decode_core` builds out of those bytes: reverse turns the samples
+/// round, and ping-pong selects a different `mode` and so a different read path entirely. 526 of
+/// the 4259 descriptors share a region/start/end triple with another descriptor whose flags differ
+/// — almost always a forward wave and its reverse twin over the same extent, as wave 959 and wave
+/// 4177 are. Keying on the bytes alone hands whichever arrived second the first one's decode, so a
+/// reverse wave plays forwards, and *which* one wins depends on what the song touched first. That
+/// made the output depend on render order.
+///
+/// Bit 1 is deliberately absent: it takes no part in the sampler dispatch, so including it would
+/// split the cache without changing what is decoded.
 [[nodiscard]] constexpr std::uint64_t cache_key(const WaveDescriptor& descriptor) noexcept
 {
-    return (static_cast<std::uint64_t>(descriptor.region & 0x7F) << 40)
+    return (static_cast<std::uint64_t>(descriptor.reverse() ? 1 : 0) << 48)
+           | (static_cast<std::uint64_t>(descriptor.ping_pong() ? 1 : 0) << 47)
+           | (static_cast<std::uint64_t>(descriptor.region & 0x7F) << 40)
            | (static_cast<std::uint64_t>(descriptor.loop & 0xFFFFF) << 20)
            | static_cast<std::uint64_t>(descriptor.start & 0xFFFFF);
 }
