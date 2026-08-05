@@ -514,6 +514,16 @@ TEST_CASE("the NRPN modify set shares bytes with the sound controllers", "[strea
     generator.send_channel(0xB0, 6, 0x30);
     CHECK(generator.part(0).tvf_cutoff == 0x30);
 
+    // `01 21` is the resonance, the byte next door. It reaches the filter through `modifiers()`
+    // like the other seven -- a route that used to stop at the part on the strength of a decompile
+    // search that could not see the reads.
+    generator.send_channel(0xB0, 99, 0x01);
+    generator.send_channel(0xB0, 98, 0x21);
+    generator.send_channel(0xB0, 6, 0x2A);
+    CHECK(generator.part(0).tvf_resonance == 0x2A);
+    CHECK(generator.part(0).modifiers().tvf_resonance == 0x2A);
+    CHECK_FALSE(generator.part(0).modifiers().is_neutral());
+
     // The drum planes only land on a rhythm part.
     generator.send_channel(0xB0, 99, 0x1A);
     generator.send_channel(0xB0, 98, 46);
@@ -1371,4 +1381,110 @@ TEST_CASE("CC#74 moves the cutoff once, not twice", "[stream][sccore]")
     // And the control still does something -- a test that only guarded the doubling would pass on
     // an engine that ignored CC#74 entirely.
     CHECK(energy_at(0) / neutral < 0.9);
+}
+
+TEST_CASE("CC#71 opens the filter's resonance, and the wrong way round", "[stream][sccore]")
+{
+    // This control was recorded as unimplemented in the module for a long time, on the strength of
+    // a search that found `part+0x3e7`'s four writers and no readers. The readers were there: Ghidra
+    // prints that offset in decimal, so `999` is what the reads spell and a hex search cannot see
+    // them. Measured against the DLL, the control is worth 9.2 dB of level across its range.
+    //
+    // The direction is the trap. `resonance_byte` subtracts the controller, and the byte is
+    // reciprocal-Q, so *raising* CC#71 lowers the byte and makes the filter more resonant -- which
+    // on this tone means louder. An implementation that got the sign backwards would still pass a
+    // test that only asked whether the control did something.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    const auto energy_at = [&](int cc71) {
+        ToneGenerator generator{notes};
+        generator.send_channel(0xB0, 7, 127);
+        generator.send_channel(0xB0, 91, 0);
+        generator.send_channel(0xB0, 93, 0);
+        generator.send_channel(0xB0, 74, 0x40);
+        generator.send_channel(0xB0, 71, cc71);
+        generator.send_channel(0xC0, 38, 0);
+        generator.send_channel(0x90, 48, 127);
+
+        std::vector<float> left(64000);
+        std::vector<float> right(64000);
+        generator.render(left, right);
+
+        double sum = 0.0;
+        for (const float sample : left) {
+            sum += static_cast<double>(sample) * sample;
+        }
+        return std::sqrt(sum / static_cast<double>(left.size()));
+    };
+
+    const double neutral = energy_at(0x40);
+    REQUIRE(neutral > 0.0);
+
+    // The DLL's own figures for this note and tone, 2 s at 32 kHz: 0.01416 / 0.02504 / 0.04088 at
+    // CC#71 0 / 64 / 127. Ratios rather than absolutes, so this does not also pin the master gain.
+    CHECK_THAT(energy_at(0) / neutral, WithinAbs(0.5655, 0.05));
+    CHECK_THAT(energy_at(127) / neutral, WithinAbs(1.6326, 0.10));
+
+    // The control saturates: the resonance byte floors at 4, which this tone's partials reach by
+    // CC#71 96, so everything above that is the same render.
+    CHECK_THAT(energy_at(127), WithinRel(energy_at(96), 1e-09));
+}
+
+TEST_CASE("CC#71 reaches a note that is already sounding", "[stream][sccore]")
+{
+    // Stage A re-derives the resonance byte every control tick from the part's live byte, so a
+    // resonance sweep bends notes that are already down. Latching it at note-on instead would leave
+    // a held chord behind the sweep -- the same mistake the cutoff offset used to make, and the one
+    // that makes a filter sweep sound like it starts on the next note instead of now.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    const auto energy_of = [](std::span<const float> block) {
+        double sum = 0.0;
+        for (const float sample : block) {
+            sum += static_cast<double>(sample) * sample;
+        }
+        return std::sqrt(sum / static_cast<double>(block.size()));
+    };
+
+    // Two runs, identical up to the half-second mark, differing only in whether the controller
+    // arrives after the note is already down. Comparing the second half against the *first* half
+    // instead would measure the tone's own decay, which on this tone swamps the control: it loses
+    // more over that half second than the filter opening gains back.
+    const auto second_half = [&](bool sweep) {
+        ToneGenerator generator{notes};
+        generator.send_channel(0xB0, 7, 127);
+        generator.send_channel(0xB0, 91, 0);
+        generator.send_channel(0xB0, 93, 0);
+        generator.send_channel(0xC0, 38, 0);
+        generator.send_channel(0x90, 48, 127);
+
+        std::vector<float> left(16000);
+        std::vector<float> right(16000);
+        generator.render(left, right);
+        const double first = energy_of(left);
+
+        // No new note -- only the controller, and only in one of the two runs.
+        if (sweep) {
+            generator.send_channel(0xB0, 71, 127);
+        }
+        generator.render(left, right);
+        return std::pair{first, energy_of(left)};
+    };
+
+    const auto [held_first, held] = second_half(false);
+    const auto [swept_first, swept] = second_half(true);
+
+    // The runs really were identical up to the message.
+    REQUIRE(held_first > 0.0);
+    CHECK_THAT(swept_first, WithinRel(held_first, 1e-09));
+
+    // And the controller moved the note that was already sounding. Latching at note-on would leave
+    // these two *bit-identical*, so strictly the margin only has to exclude numerical noise; the
+    // measured figure is 1.21, and the bound is set below that rather than at it so the test does
+    // not re-break on any change that moves the filter slightly without breaking the routing.
+    CHECK(swept > held * 1.1);
 }

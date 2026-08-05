@@ -26,11 +26,12 @@ enum class ControlTarget {
     bank,
     bend_range,
 
-    // The part modify offsets. TVF resonance is absent because the engine never reads it.
+    // The part modify offsets, all eight of them.
     vibrato_rate,
     vibrato_depth,
     vibrato_delay,
     tvf_cutoff,
+    tvf_resonance,
     env_attack,
     env_decay,
     env_release,

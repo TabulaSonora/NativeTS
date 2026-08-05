@@ -209,12 +209,12 @@ struct PartTimelines {
     /// The GS part modify offsets, in `PartModifiers` order, latched at note-on.
     ///
     /// Each has three writers, exactly as the live path does: a sound controller (CC#71-78), an
-    /// NRPN, and the part SysEx `40 1x 30`-`37`. TVF resonance is absent because the engine never
-    /// reads it — see `PartModifiers`.
+    /// NRPN, and the part SysEx `40 1x 30`-`37`.
     ControllerTimeline vibrato_rate;
     ControllerTimeline vibrato_depth;
     ControllerTimeline vibrato_delay;
     ControllerTimeline tvf_cutoff;
+    ControllerTimeline tvf_resonance;
     ControllerTimeline env_attack;
     ControllerTimeline env_decay;
     ControllerTimeline env_release;

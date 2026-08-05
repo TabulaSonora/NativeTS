@@ -48,12 +48,19 @@ FilterTap TvfChain::tap(int filter_type) const noexcept
     }
 }
 
+int TvfChain::resonance_byte_of(int partial_resonance,
+                                int part_resonance,
+                                int part_resonance_default) noexcept
+{
+    const int value = (2 * (0x80 - part_resonance_default - part_resonance)) + partial_resonance;
+    return std::max(4, std::min(0x7F, std::max(0, value)));
+}
+
 int TvfChain::resonance_byte(const PartialParameters& partial,
                              int part_resonance,
                              int part_resonance_default) noexcept
 {
-    const int value = (2 * (0x80 - part_resonance_default - part_resonance)) + partial.resonance();
-    return std::max(4, std::min(0x7F, std::max(0, value)));
+    return resonance_byte_of(partial.resonance(), part_resonance, part_resonance_default);
 }
 
 int TvfChain::cutoff_units(double cutoff15, int resonance_byte_value) const noexcept

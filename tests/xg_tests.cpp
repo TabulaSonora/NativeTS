@@ -105,11 +105,95 @@ TEST_CASE("XG Multi Part parameters decode to the shared targets", "[xg]")
     CHECK(pan->target == ControlTarget::pan);
     CHECK(pan->value == 1);
 
+    // The filter pair. 0x18 and 0x19 are the two halves of the same block, and `xg_multipart_param`
+    // lands them on `part+0x3e6` and `part+0x3e7` -- the same two bytes CC#74 and CC#71 write.
+    const std::optional<ControlUpdate> cutoff = value_of(0x18, 0x20);
+    REQUIRE(cutoff);
+    CHECK(cutoff->target == ControlTarget::tvf_cutoff);
+    const std::optional<ControlUpdate> resonance = value_of(0x19, 0x20);
+    REQUIRE(resonance);
+    CHECK(resonance->target == ControlTarget::tvf_resonance);
+    CHECK(resonance->value == 0x20);
+
     // Bank, program, part mode and the rest do something rather than store something, so they are
     // deliberately not in this vocabulary.
     CHECK_FALSE(value_of(0x01, 0x7F));
     CHECK_FALSE(value_of(0x03, 0x20));
     CHECK_FALSE(value_of(0x07, 0x01));
+}
+
+TEST_CASE("XG System On turns Rx NRPN off on every part", "[xg][sccore]")
+{
+    // `xg_system_on` sets `g_xg_mode` before it calls `engine_all_parts_reset`, so the part default
+    // the reset lands on is XG's: the Rx word at part+0x3d6 reads 0xffff after a GS reset and
+    // 0x7fff after XG System On -- bit 15, Rx NRPN, cleared. Read off the DLL with
+    // `scdec partdump 90 6 gs` against `... xg`, on every part rather than only the drum ones.
+    //
+    // The consequence is the whole GS NRPN set: the eight modify offsets at `01 xx` and all six
+    // drum planes are dead in XG mode. An XG file that also sends GS drum NRPNs -- and they exist,
+    // because the two dialects get mixed -- gets nothing from them, and matching that matters more
+    // than the messages themselves, since acting on them would move drums the module leaves alone.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    REQUIRE(generator.part(0).rx.nrpn);
+    REQUIRE(generator.part(9).rx.nrpn);
+
+    const std::array<std::uint8_t, 9> system_on{0xF0, 0x43, 0x10, 0x4C, 0x00, 0x00, 0x7E, 0x00,
+                                                0xF7};
+    generator.send_sysex(system_on);
+
+    for (int channel = 0; channel < 16; ++channel) {
+        INFO("channel " << channel);
+        CHECK_FALSE(generator.part(channel).rx.nrpn);
+    }
+
+    // And the route the module leaves to get back: Rcv NRPN, `08 nn 37`.
+    const std::array<std::uint8_t, 9> rx_nrpn_on{0xF0, 0x43, 0x10, 0x4C, 0x08, 0x03,
+                                                 0x37, 0x01, 0xF7};
+    generator.send_sysex(rx_nrpn_on);
+    CHECK(generator.part(3).rx.nrpn);
+    CHECK_FALSE(generator.part(4).rx.nrpn);
+
+    // An NRPN taken while the gate is shut changes nothing -- the gate is the whole point.
+    generator.send_channel(0xB0 | 4, 99, 0x01);
+    generator.send_channel(0xB0 | 4, 98, 0x21);
+    generator.send_channel(0xB0 | 4, 6, 0x2A);
+    CHECK(generator.part(4).tvf_resonance == 0x40);
+
+    // The same NRPN on the part that reopened it does land.
+    generator.send_channel(0xB0 | 3, 99, 0x01);
+    generator.send_channel(0xB0 | 3, 98, 0x21);
+    generator.send_channel(0xB0 | 3, 6, 0x2A);
+    CHECK(generator.part(3).tvf_resonance == 0x2A);
+}
+
+TEST_CASE("XG Drum Setup filter parameters are parsed and dropped", "[xg]")
+{
+    // XG defines a per-key filter cutoff (`0x0B`) and resonance (`0x0C`) in its Drum Setup block.
+    // This module accepts neither: `xg_drum_setup_param` is an exhaustive sixteen-way switch, and
+    // where Level, Pan, the sends and the two Rx bits each store into a per-key plane, `0x0B` and
+    // everything from `0x0C` up only step the address cursor and return.
+    //
+    // Confirmed on the DLL rather than read off the listing, because the planes live behind a heap
+    // pointer that no static dump reaches -- `scdec xgdrumfilt 38 <param> 3` strikes a drum key,
+    // sends one Drum Setup parameter and reads the planes back through the voice's part pointer.
+    // Level moves 100 -> 3 and Pan 64 -> 3 on that path; `0B` and `0C` leave every plane, the
+    // voice's resonance byte and both filter coefficients bit-identical.
+    //
+    // So the right behaviour is to classify the block and act on none of it, which is what
+    // `decode_xg_sysex` does. This test exists so that adding drum-setup handling later cannot
+    // quietly add these two along with the ones that are real.
+    for (const int parameter : {0x0B, 0x0C, 0x0D, 0x0E, 0x0F}) {
+        const XgAddress address =
+            decode_xg_sysex(xg(0x30, 0x26, parameter, {0x03}));
+        INFO("drum setup parameter " << parameter);
+        CHECK(address.kind == XgMessage::drum_setup);
+        // Classified, but carrying no part -- nothing downstream can mistake it for a part write.
+        CHECK(address.part == -1);
+    }
 }
 
 TEST_CASE("XG blocks this engine does not act on are still classified", "[xg]")

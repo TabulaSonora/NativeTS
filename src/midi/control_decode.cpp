@@ -33,8 +33,9 @@ std::optional<ControlUpdate> decode_control_change(int channel, int controller, 
     case 11:
         return part_update(ControlTarget::expression, channel, value);
 
-    // The sound controllers. CC#71 is missing on purpose: TVF resonance is stored by the engine
-    // and read by nothing in it.
+    // The sound controllers, all eight.
+    case 71:
+        return part_update(ControlTarget::tvf_resonance, channel, value);
     case 72:
         return part_update(ControlTarget::env_release, channel, value);
     case 73:
@@ -127,13 +128,15 @@ std::optional<ControlUpdate> decode_gs_sysex(std::span<const std::uint8_t> bytes
         case 0x2C:
             return part_update(ControlTarget::delay_send, channel, value);
         // The modify block. Its order is not the NRPNs': vibrato delay is last here and third
-        // there, and 0x33 is the resonance that goes nowhere.
+        // there.
         case 0x30:
             return part_update(ControlTarget::vibrato_rate, channel, value);
         case 0x31:
             return part_update(ControlTarget::vibrato_depth, channel, value);
         case 0x32:
             return part_update(ControlTarget::tvf_cutoff, channel, value);
+        case 0x33:
+            return part_update(ControlTarget::tvf_resonance, channel, value);
         case 0x34:
             return part_update(ControlTarget::env_attack, channel, value);
         case 0x35:
@@ -263,6 +266,8 @@ std::optional<ControlUpdate> decode_xg_multi_part(const XgAddress& address) noex
         return part_update(ControlTarget::vibrato_delay, channel, value);
     case 0x18:
         return part_update(ControlTarget::tvf_cutoff, channel, value);
+    case 0x19:
+        return part_update(ControlTarget::tvf_resonance, channel, value);
     case 0x1A:
         return part_update(ControlTarget::env_attack, channel, value);
     case 0x1B:

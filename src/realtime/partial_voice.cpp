@@ -61,7 +61,8 @@ void PartialVoice::start(VoiceSetup&& setup)
     lfo1_ = std::move(setup.lfo1);
     lfo2_ = std::move(setup.lfo2);
 
-    resonance_byte_ = TvfChain::resonance_byte(setup.partial);
+    partial_resonance_ = setup.partial.resonance();
+    resonance_byte_ = TvfChain::resonance_byte_of(partial_resonance_, setup.part_resonance);
     filter_type_ = setup.partial.filter_type();
     tap_ = tvf_->tap(filter_type_);
 

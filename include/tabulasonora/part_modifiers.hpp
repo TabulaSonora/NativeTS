@@ -27,21 +27,24 @@ struct PartModifiers {
     int vibrato_delay = neutral;
     /// CC#74 / NRPN `01 20` / `40 1x 32` — `part+0x3e6`.
     int tvf_cutoff = neutral;
+    /// CC#71 / NRPN `01 21` / `40 1x 33` / XG `08 nn 19` — `part+0x3e7`.
+    ///
+    /// This one was recorded as unread for a long time, and the reason is worth keeping: Ghidra
+    /// prints `0x3e7` and `0x3e8` in *decimal*, alone among the eight, so a search for the hex
+    /// spelling finds the four writes and misses all eleven reads. Two of those reads are
+    /// synthesis — voice setup seeds `voice+0xee` from it, and stage A (`FUN_1800845c0`) recomputes
+    /// it every control tick, both through the voice's heap part pointer at `voice+0x128`.
+    ///
+    /// It runs the *opposite* way to the rest: the law is `(0x80 - sibling - this) * 2`, so a
+    /// larger controller value makes a **smaller** resonance byte, and the byte is reciprocal-Q.
+    /// CC#71 above about 0x50 pins it on its floor of 4, which is Q = 16.
+    int tvf_resonance = neutral;
     /// CC#73 / NRPN `01 63` / `40 1x 34` — `part+0x3e8`.
     int env_attack = neutral;
     /// CC#75 / NRPN `01 64` / `40 1x 35` — `part+0x3e9`.
     int env_decay = neutral;
     /// CC#72 / NRPN `01 66` / `40 1x 36` — `part+0x3ea`.
     int env_release = neutral;
-
-    // TVF resonance (CC#71 / NRPN `01 21` / `40 1x 33`) is deliberately absent.
-    //
-    // It is not unimplemented here — it is unimplemented in the engine. The byte it writes,
-    // `part+0x3e7`, is written by the CC handler, the NRPN handler, the SysEx handler and the reset
-    // path, it can be read back over a dump, and **no code anywhere reads it**. Its patch-level
-    // sibling `part+0x456` *is* wired into the resonance path, so this is a route that was left
-    // unconnected rather than a parameter the module has no use for. `Part::tvf_resonance` stays
-    // write-only on purpose; adding it here would make this engine louder than the one it copies.
 
     /// The neutral value every one of these centres on.
     static constexpr int neutral = 0x40;
@@ -50,8 +53,8 @@ struct PartModifiers {
     [[nodiscard]] constexpr bool is_neutral() const noexcept
     {
         return vibrato_rate == neutral && vibrato_depth == neutral && vibrato_delay == neutral
-               && tvf_cutoff == neutral && env_attack == neutral && env_decay == neutral
-               && env_release == neutral;
+               && tvf_cutoff == neutral && tvf_resonance == neutral && env_attack == neutral
+               && env_decay == neutral && env_release == neutral;
     }
 
     /// The envelope rate bias for segments 0 and 1, in rate-curve index steps.

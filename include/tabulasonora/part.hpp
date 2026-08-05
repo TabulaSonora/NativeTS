@@ -164,29 +164,24 @@ public:
     /// controllers (CC#71-78), the NRPNs (`01 08`-`01 66`), and the part SysEx (`40 1x 30`-`37`)
     /// all land on the same per-part byte in the engine (`part+0x3e4`-`0x3eb`).
     ///
-    /// Seven of the eight reach the synthesis chains through `modifiers()`.
+    /// All eight reach the synthesis chains through `modifiers()`.
     int vibrato_rate = 0x40;
     int vibrato_depth = 0x40;
     int vibrato_delay = 0x40;
     int tvf_cutoff = 0x40;
+    int tvf_resonance = 0x40;
     int env_attack = 0x40;
     int env_decay = 0x40;
     int env_release = 0x40;
 
-    /// The eighth: CC#71 / NRPN `01 21` / `40 1x 33`, and the one that goes nowhere.
-    ///
-    /// Write-only **to match the engine**, which stores it at `part+0x3e7` and never reads it.
-    /// See `PartModifiers` for why that is a finding rather than an omission. Tracked here anyway
-    /// so the value survives a round trip, as it does on the module.
-    int tvf_resonance = 0x40;
-
-    /// The seven live modify offsets, in the form the synthesis chains take.
+    /// The eight live modify offsets, in the form the synthesis chains take.
     [[nodiscard]] PartModifiers modifiers() const noexcept
     {
         return PartModifiers{vibrato_rate,
                              vibrato_depth,
                              vibrato_delay,
                              tvf_cutoff,
+                             tvf_resonance,
                              env_attack,
                              env_decay,
                              env_release};

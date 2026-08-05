@@ -627,6 +627,53 @@ TEST_CASE("the part modify offsets reach the chains that consume them", "[dsp][s
         CHECK(highest == 0x7F);
     }
 
+    SECTION("CC#71 walks the resonance byte the way the engine's own does")
+    {
+        // Read straight off the DLL with `scdec svfmel 38 0 48 127 64 <cc71> gs`, which prints
+        // voice+0xee and the filter's q for every sounding voice. Program 38 sounds two partials
+        // whose own resonance bytes are 48 and 18, so one table pins the law at two different
+        // starting points -- including where each one hits the rails, which is at a different
+        // controller value for each.
+        //
+        // The law is `(0x80 - sibling - cc71) * 2 + partial`, with the user-tone sibling neutral at
+        // 0x40 on any standard file. Both terms subtract, which is why the walk descends.
+        struct Point {
+            int cc71;
+            int from48;
+            int from18;
+        };
+        constexpr std::array<Point, 9> measured{{
+            {0, 127, 127},
+            {16, 127, 114},
+            {32, 112, 82},
+            {48, 80, 50},
+            {64, 48, 18},
+            {80, 16, 4},
+            {96, 4, 4},
+            {112, 4, 4},
+            {127, 4, 4},
+        }};
+
+        for (const Point& point : measured) {
+            INFO("CC#71 " << point.cc71);
+            CHECK(TvfChain::resonance_byte_of(48, point.cc71) == point.from48);
+            CHECK(TvfChain::resonance_byte_of(18, point.cc71) == point.from18);
+        }
+
+        // Neutral is neutral: the whole point of the default is that a file which never sends the
+        // controller renders exactly as it did before this control existed.
+        CHECK(TvfChain::resonance_byte_of(partial.resonance(), PartModifiers::neutral)
+              == TvfChain::resonance_byte(partial));
+
+        // And q is the byte over 64 -- 0.750000 at 48, 1.984375 at 127, 0.062500 at the floor, all
+        // three read off the DLL's own coefficient slot in the same sweep.
+        const TvfChain& tvf = fixture.tvf();
+        const int units = tvf.cutoff_units(0x4000, 0x40);
+        CHECK_THAT(tvf.damping_coefficient(units, 48, 0), WithinAbs(0.750000, 1e-09));
+        CHECK_THAT(tvf.damping_coefficient(units, 127, 0), WithinAbs(1.984375, 1e-09));
+        CHECK_THAT(tvf.damping_coefficient(units, 4, 0), WithinAbs(0.062500, 1e-09));
+    }
+
     SECTION("the cutoff offset is not in the base, because the live path adds it")
     {
         // `base_cutoff` is a property of the tone. The part's cutoff offset reaches the filter from

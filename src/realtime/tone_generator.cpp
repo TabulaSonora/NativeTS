@@ -860,6 +860,15 @@ void ToneGenerator::Impl::xg_multi_part(int part_index, Part& part, int paramete
         part.rx_channel = value > 0x0F ? Sequence::channel_count : value;
         return;
 
+    // Rcv NRPN, one of the sixteen Rcv switches at `30`-`3f` that `xg_part_rx_switches` maps onto
+    // the Rx word at part+0x3d6. Only this one is wired, because only this one is reachable in a
+    // state a file can otherwise not get out of: XG System On clears Rx NRPN on every part, so
+    // without `08 nn 37` an XG file could never use an NRPN again. The other fifteen default on
+    // and stay on, so ignoring them costs nothing until a file turns one off.
+    case 0x37:
+        part.rx.nrpn = value != 0;
+        return;
+
     // Part Mode: 0 normal, 1 drum, 3/4/5 the numbered drum setups. Anything drum-shaped routes the
     // part to the drum path and re-resolves its program there.
     case 0x07:
@@ -1565,6 +1574,18 @@ void ToneGenerator::Impl::stream_reset()
         Part& part = parts[static_cast<std::size_t>(i)];
         part.reset();
         part.rx_channel = i % Sequence::channel_count;
+
+        // XG parts come up with Rx NRPN *off*. `xg_system_on` sets `g_xg_mode` before it calls
+        // `engine_all_parts_reset`, so the part default it resets to is the XG one: the Rx word at
+        // part+0x3d6 reads 0xffff after a GS reset and 0x7fff after XG System On, on every part
+        // rather than only the drum ones.
+        //
+        // The whole GS NRPN set goes with it -- the eight modify offsets at `01 xx` and all six
+        // drum planes -- which is why an XG file that also sends GS drum NRPNs gets nothing from
+        // them. Only `08 nn 37`, Rcv NRPN, turns the route back on.
+        if (xg_mode) {
+            part.rx.nrpn = false;
+        }
     }
 
     reverb_type = options.reverb_type;
@@ -1748,8 +1769,11 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     const double pitch_offset =
         part.tune_milli_semitones() + matrix.pitch + master_tune_milli_semitones();
     // Refreshed per block, not latched at note-on: a filter sweep has to reach notes that are
-    // already sounding.
-    voice.set_cutoff_offset(part.modifiers().cutoff_offset());
+    // already sounding. Both halves of the filter move this way -- the engine's stage A re-reads
+    // the part's cutoff and resonance bytes on every control tick.
+    const PartModifiers modifiers = part.modifiers();
+    voice.set_cutoff_offset(modifiers.cutoff_offset());
+    voice.set_part_resonance(modifiers.tvf_resonance);
 
     // Ahead of `render`, which advances the sample clock the retarget tick is found from. The ramp
     // runs whether or not the part is audible, so muting cannot leave it stranded mid-glide.
@@ -1957,6 +1981,7 @@ void ToneGenerator::Impl::begin(int channel, int note, int velocity, int group, 
     // callers, because it is a property of the part rather than of the tone being started.
     setup.volume_word = parts[static_cast<std::size_t>(channel)].volume_word();
     setup.volume_mask = volume_ramp_mask;
+    setup.part_resonance = parts[static_cast<std::size_t>(channel)].tvf_resonance;
 
     // Allocating may steal, which hands whatever was sounding to the dying list and empties the
     // slot; anything still there was already finished.
@@ -2359,6 +2384,9 @@ void ToneGenerator::Impl::flush_part_voices(int channel)
         return true;
     case ControlTarget::tvf_cutoff:
         part.tvf_cutoff = value;
+        return true;
+    case ControlTarget::tvf_resonance:
+        part.tvf_resonance = value;
         return true;
     case ControlTarget::env_attack:
         part.env_attack = value;

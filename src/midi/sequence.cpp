@@ -361,6 +361,9 @@ void record(const ControlUpdate& update, std::int64_t position, State& state)
     case ControlTarget::tvf_cutoff:
         part.tvf_cutoff.add(position, value);
         break;
+    case ControlTarget::tvf_resonance:
+        part.tvf_resonance.add(position, value);
+        break;
     case ControlTarget::env_attack:
         part.env_attack.add(position, value);
         break;

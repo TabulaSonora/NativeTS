@@ -68,6 +68,13 @@ struct VoiceSetup {
     int volume_word = 0;
     unsigned volume_mask = 0;
 
+    /// The part's CC#71 modify byte as the voice starts, 0x40 neutral.
+    ///
+    /// Seeded here as well as refreshed per block because voice setup derives `voice+0xee` from it
+    /// before the first block runs, and a note struck into an already-resonant part must not sound
+    /// its first block unfiltered.
+    int part_resonance = PartModifiers::neutral;
+
     /// Sample at which a voice is force-released, or -1 to let its envelope decide.
     ///
     /// Samples the envelope machine stays held at its note-on state.
@@ -182,6 +189,16 @@ public:
     /// Sets the part's live cutoff offset, in the 15-bit cutoff units the filter sums.
     void set_cutoff_offset(double offset) noexcept { cutoff_offset_ = offset; }
 
+    /// Sets the part's live CC#71 modify byte and re-derives the resonance byte from it.
+    ///
+    /// Refreshed per block for the same reason the cutoff offset is: stage A runs every control
+    /// tick in the engine and reads the part byte fresh each time, so a resonance sweep reaches
+    /// notes that are already sounding.
+    void set_part_resonance(int part_resonance) noexcept
+    {
+        resonance_byte_ = TvfChain::resonance_byte_of(partial_resonance_, part_resonance);
+    }
+
     /// Fills one block of per-sample part-volume gains from the anti-zipper ramp.
     ///
     /// Call this *before* `render` for the same block. It reads the voice's own sample clock to
@@ -234,6 +251,9 @@ private:
     /// sounding voice behind the sweep, which is a difference at the scale of notes rather than of
     /// cycles.
     double cutoff_offset_ = 0.0;
+
+    /// The partial's own resonance byte, kept so `set_part_resonance` can redo stage A.
+    int partial_resonance_ = 0x40;
     int resonance_byte_ = 0x40;
     int filter_type_ = 0;
     FilterTap tap_ = FilterTap::bypass;

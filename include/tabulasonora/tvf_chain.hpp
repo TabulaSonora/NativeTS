@@ -61,9 +61,24 @@ public:
     [[nodiscard]] FilterTap tap(int filter_type) const noexcept;
 
     /// The resonance byte — stage A. Floored at 4.
+    ///
+    /// `part_resonance` is the part's CC#71 modify byte (`part+0x3e7`) and `part_resonance_default`
+    /// its user-tone sibling (`part+0x456`), which a standard file leaves neutral. Both subtract, so
+    /// raising CC#71 *lowers* the byte and, since the byte is reciprocal-Q, raises the resonance.
+    ///
+    /// The engine recomputes this every control tick, not once per note: `FUN_1800845c0` reads both
+    /// part bytes through the voice's part pointer each time stage A runs.
     [[nodiscard]] static int resonance_byte(const PartialParameters& partial,
                                             int part_resonance = 0x40,
                                             int part_resonance_default = 0x40) noexcept;
+
+    /// The same, from a partial's already-extracted resonance byte.
+    ///
+    /// A voice keeps that one byte rather than the whole partial, because it has to redo this on
+    /// every block against a CC#71 that may have moved since the note started.
+    [[nodiscard]] static int resonance_byte_of(int partial_resonance,
+                                               int part_resonance = 0x40,
+                                               int part_resonance_default = 0x40) noexcept;
 
     /// Warps a 15-bit cutoff sum and clamps it to the resonance-dependent ceiling — stage C.
     ///
