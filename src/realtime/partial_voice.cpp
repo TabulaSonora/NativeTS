@@ -45,7 +45,7 @@ void PartialVoice::start(VoiceSetup&& setup)
     pan_follows_part_ = setup.pan_follows_part;
     random_pan_ = setup.random_pan.value_or(-1);
     pan_seeded_ = false;
-    sends_seeded_ = false;
+    send_seeded_ = false;
 
     volume_ramp_.seed(ControlRamp::target_of(setup.volume_word),
                       ControlRamp::volume_rate_word,
@@ -175,21 +175,16 @@ std::pair<double, double> PartialVoice::pan_gains() const noexcept
     return pan_law_->gains(pan_position_);
 }
 
-void PartialVoice::slew_sends(int reverb, int chorus, int delay) noexcept
+void PartialVoice::slew_reverb_send(int level) noexcept
 {
-    // Only the reverb send slews. The engine gives a voice one send slot, on bus 0x3c, fed by the
-    // part's reverb byte; the chorus and delay branches beside it in the bus-assign are dead code
-    // in this build, so those two never reach a bus per voice at all and there is no per-voice
-    // smoother on them to model. They are passed through unchanged until the send matrix that does
-    // carry them is measured.
-    const std::array<double, 3> targets{static_cast<double>(reverb),
-                                        static_cast<double>(chorus),
-                                        static_cast<double>(delay)};
+    // Only the reverb send is a per-voice slot. Chorus and delay are one matrix coefficient a part
+    // and are slewed on `Part` instead.
+    const auto target = static_cast<double>(level);
 
-    // As with the pan, a voice starts at the level rather than fading its sends up to it.
-    if (!sends_seeded_) {
-        sends_ = targets;
-        sends_seeded_ = true;
+    // As with the pan, a voice starts at the level rather than fading its send up to it.
+    if (!send_seeded_) {
+        reverb_send_ = target;
+        send_seeded_ = true;
         return;
     }
 
@@ -197,9 +192,7 @@ void PartialVoice::slew_sends(int reverb, int chorus, int delay) noexcept
         return;
     }
 
-    sends_[0] += std::clamp(targets[0] - sends_[0], -send_slew_per_tick, send_slew_per_tick);
-    sends_[1] = targets[1];
-    sends_[2] = targets[2];
+    reverb_send_ += std::clamp(target - reverb_send_, -send_slew_per_tick, send_slew_per_tick);
 }
 
 double PartialVoice::choke_gain(std::int64_t since) noexcept

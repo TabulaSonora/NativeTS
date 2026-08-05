@@ -348,6 +348,30 @@ public:
         recompute();
     }
 
+    /// The chorus and delay sends in force, which chase `chorus_send` and `delay_send`.
+    ///
+    /// Per *part*, not per voice, because that is what the engine smooths: these two are taps in
+    /// the 33-bus send matrix -- chorus at `DAT_181a6f310` tap 1, delay at `DAT_181a6e8c0` tap 1 --
+    /// one coefficient each for the whole part. Only the reverb send is per voice.
+    [[nodiscard]] double chorus_send_level() const noexcept { return chorus_send_level_; }
+    [[nodiscard]] double delay_send_level() const noexcept { return delay_send_level_; }
+
+    /// Controller units a send moves in one control tick.
+    ///
+    /// Measured on the matrix coefficient itself: CC#93 driven 0 -> 127 walks it in 64 steps of
+    /// 16/1024, one every 640 samples, 1255 ms end to end. That is the same effective rate as the
+    /// per-voice reverb send's 1260 ms -- one controller unit a tick -- reached in double steps at
+    /// half the cadence.
+    static constexpr double send_slew_per_tick = 1.0;
+
+    /// Advances both toward their targets by one control tick's worth.
+    void slew_sends(double per_tick) noexcept
+    {
+        chorus_send_level_ +=
+            std::clamp(chorus_send - chorus_send_level_, -per_tick, per_tick);
+        delay_send_level_ += std::clamp(delay_send - delay_send_level_, -per_tick, per_tick);
+    }
+
     /// The combined volume multiplier, 1.0 with everything at 127.
     [[nodiscard]] double volume_scale() const noexcept { return volume_scale_; }
 
@@ -467,6 +491,8 @@ private:
     int master_ = sequence_builder::default_master;
     double volume_scale_ = 1.0;
     int volume_word_ = TvaChain::part_volume_word();
+    double chorus_send_level_ = 0.0;
+    double delay_send_level_ = 0.0;
 };
 
 } // namespace ts

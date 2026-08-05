@@ -157,17 +157,15 @@ public:
     /// The stereo gains for this voice, at the pan position the slew has reached.
     [[nodiscard]] std::pair<double, double> pan_gains() const noexcept;
 
-    /// Slews the three send levels toward the part's, once a control tick.
+    /// Slews the reverb send toward the part's, once a control tick.
     ///
     /// Same ordering requirement as `slew_pan`, and the same shape of smoother -- `voice_pan_smooth`
     /// @`180083be0` is the sends' equivalent of `voice_expr_smooth`. It moves the gain word by
     /// 8 of 1024 a tick, so a full-scale send change takes 40 ticks, 400 ms.
-    void slew_sends(int reverb, int chorus, int delay) noexcept;
+    void slew_reverb_send(int level) noexcept;
 
-    /// The send levels in force, on the controller's own 0-127 scale but continuous.
-    [[nodiscard]] double reverb_send() const noexcept { return sends_[0]; }
-    [[nodiscard]] double chorus_send() const noexcept { return sends_[1]; }
-    [[nodiscard]] double delay_send() const noexcept { return sends_[2]; }
+    /// The reverb send in force, on the controller's own 0-127 scale but continuous.
+    [[nodiscard]] double reverb_send() const noexcept { return reverb_send_; }
 
     /// Renders one block.
     ///
@@ -265,16 +263,15 @@ private:
     /// Whether the position has been seeded; a voice starts *at* its pan, it does not glide in.
     bool pan_seeded_ = false;
 
-    /// The send levels in force, chasing the part's rather than jumping to them.
+    /// The reverb send in force, chasing the part's rather than jumping to it.
     ///
-    /// Held on the controller's 0-127 scale rather than as gains, because all three laws are
-    /// linear in the controller and the engine's step is a fixed distance -- so one rate covers
-    /// them whatever each effect's full-scale gain happens to be.
+    /// Held on the controller's 0-127 scale rather than as a gain, because the law is linear in the
+    /// controller and the engine's step is a fixed distance.
     ///
     /// Measured for the *reverb* send: `scdec sendramp` puts CC#91 0 -> 127 at 127 steps of
     /// 8/1024 of gain, one every 320 samples, 1260 ms end to end.
     ///
-    /// **Only the reverb send.** A voice carries four (gain, bus) slots -- dry left, dry right, the
+    /// **Only the reverb send is per voice.** A voice carries four (gain, bus) slots -- dry left, dry right, the
     /// reverb send on bus 0x3c, and a third whose bus the part's `+0x13` picks. The bus-assign code
     /// makes that third slot a chorus send (bus 0x3d) or a delay send (bus 0x30) when `+0x13`
     /// exceeds 0x1f, and a direct bus route otherwise -- but `+0x13` is the part's own **index**,
@@ -282,12 +279,12 @@ private:
     /// branches are dead code in this build, and the third slot is always a direct route to bus
     /// 16 + index.
     ///
-    /// So chorus and delay never reach a bus per voice, and there is no per-voice smoother on them
-    /// to model. They pass through unchanged here. Where they *are* applied is the 33-bus send
-    /// matrix in `fx_process_block`, downstream, off the part's `+0x3e2` and `+0x44a` -- unmeasured,
-    /// though the existence of `fx_reg_write_slew` suggests it smooths something of its own.
-    std::array<double, 3> sends_{};
-    bool sends_seeded_ = false;
+    /// So chorus and delay never reach a bus per voice. They are applied one coefficient a *part*,
+    /// in the 33-bus send matrix `fx_process_block` runs -- chorus at `DAT_181a6f310` tap 1, delay
+    /// at `DAT_181a6e8c0` tap 1 -- and are smoothed there at the same effective rate, which is why
+    /// `Part` carries those two and this carries only the reverb.
+    double reverb_send_ = 0.0;
+    bool send_seeded_ = false;
     double level_gain_ = 1.0;
 
     /// The part-volume anti-zipper ramp — `voice_ctrl_ramp_b`'s state, one per voice.

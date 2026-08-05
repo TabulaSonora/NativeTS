@@ -1,4 +1,5 @@
 #include "tabulasonora/control_ramp.hpp"
+#include "tabulasonora/part.hpp"
 #include "tabulasonora/tva_chain.hpp"
 
 #include <catch2/catch_approx.hpp>
@@ -190,4 +191,36 @@ TEST_CASE("a level at unity is exactly unity", "[control_ramp]")
     for (const double gain : gains) {
         CHECK(gain == 1.0);
     }
+}
+
+TEST_CASE("a part's chorus and delay sends cross full scale in 127 ticks", "[control_ramp]")
+{
+    // These two are not per-voice. They are single taps in the 33-bus send matrix -- chorus at
+    // DAT_181a6f310 tap 1, delay at DAT_181a6e8c0 tap 1 -- one coefficient a part, and the engine
+    // slews them there. Measured with `scdec mattrace 93 1 1 0 127`: 64 steps of 16/1024, one every
+    // 640 samples, 1255 ms. Which is one controller unit a control tick, the same effective rate as
+    // the per-voice reverb send, just taken in double steps at half the cadence.
+    Part part;
+    REQUIRE(part.chorus_send_level() == 0.0);
+
+    part.chorus_send = 127;
+    part.delay_send = 127;
+
+    int ticks = 0;
+    while (part.chorus_send_level() < 127.0 && ticks < 1000) {
+        part.slew_sends(Part::send_slew_per_tick);
+        ++ticks;
+    }
+    CHECK(ticks == 127);
+    CHECK(part.delay_send_level() == 127.0);
+
+    // 127 ticks is 1.27 s at the 100 Hz control rate.
+    CHECK(ticks / 100.0 == Catch::Approx(1.27).margin(0.01));
+
+    // And back down at the same rate, so a send being turned off keeps feeding the bus on its way.
+    part.chorus_send = 0;
+    for (int i = 0; i < 63; ++i) {
+        part.slew_sends(Part::send_slew_per_tick);
+    }
+    CHECK(part.chorus_send_level() == Catch::Approx(64.0).margin(1e-9));
 }

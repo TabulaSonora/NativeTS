@@ -138,6 +138,9 @@ struct ToneGenerator::Impl {
     /// The zero-order-hold mask the part-volume ramp runs on — zero, so one update a sample.
     unsigned volume_ramp_mask = 0;
 
+    /// Where the block loop sits within a control tick, for the per-part send slew.
+    int block_tick = 0;
+
     /// The wet levels' coefficient smoothers, and the per-sample gains they produce.
     MatrixRamp reverb_level_ramp;
     MatrixRamp chorus_level_ramp;
@@ -1645,6 +1648,15 @@ void ToneGenerator::render(std::span<float> left, std::span<float> right)
 
 void ToneGenerator::Impl::render_block()
 {
+    // The parts' chorus and delay sends are matrix coefficients, one a part, and move on the
+    // control tick like everything else. Ten blocks to a tick.
+    if (block_tick == 0) {
+        for (Part& part : parts) {
+            part.slew_sends(Part::send_slew_per_tick);
+        }
+    }
+    block_tick = (block_tick + 1) % (control_block / block_size);
+
     std::span<float> left{block_left};
     std::span<float> right{block_right};
 
@@ -1743,7 +1755,7 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // runs whether or not the part is audible, so muting cannot leave it stranded mid-glide.
     voice.volume_gains(part.volume_word(), volume_ramp_mask, volume_gains);
     voice.slew_pan(part.pan);
-    voice.slew_sends(part.reverb_send, part.chorus_send, part.delay_send);
+    voice.slew_reverb_send(part.reverb_send);
 
     voice.render(block, pitch_offset, matrix);
 
@@ -1787,11 +1799,11 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     const double to_reverb = !efx_part && reverb && voice.reverb_send() > 0.0
                                  ? Reverb::send_gain(voice.reverb_send())
                                  : 0.0;
-    const double to_chorus = !efx_part && chorus && voice.chorus_send() > 0.0
-                                 ? Chorus::send_gain(voice.chorus_send())
+    const double to_chorus = !efx_part && chorus && part.chorus_send_level() > 0.0
+                                 ? Chorus::send_gain(part.chorus_send_level())
                                  : 0.0;
-    const double to_delay = !efx_part && delay && voice.delay_send() > 0.0
-                                ? SystemDelay::send_gain(voice.delay_send())
+    const double to_delay = !efx_part && delay && part.delay_send_level() > 0.0
+                                ? SystemDelay::send_gain(part.delay_send_level())
                                 : 0.0;
 
     // The voice gain stays a separate multiply from the pan and send levels: collapsing them would
