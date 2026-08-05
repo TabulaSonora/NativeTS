@@ -89,6 +89,31 @@ constexpr std::int64_t reverb_feedback_b_offset = file_offset(0x18198BBE0); // �
 constexpr std::int64_t reverb_p16_a_offset = file_offset(0x18198B5E0); // → 0x18C, 0x1B4
 constexpr std::int64_t reverb_p16_b_offset = file_offset(0x18198B660); // → 0x18B, 0x1B3
 
+// OD / OD2 (`fx_param_apply_51be0`). Two overdrive chains side by side, each with its own type,
+// drive, amp simulator, pan and level, mixed at the end. Selecting a chain's OD type programs a
+// bank of nineteen byte registers from these tables, indexed by the type (0 or 1); both chains
+// read the same tables and write different registers.
+constexpr std::array<std::int64_t, 19> od2_bank_tables{
+    0x18198E0A8, 0x18198E0A8, 0x18198E464, 0x18198E440, 0x18198E3BC, 0x18198E3B8, 0x18198E468,
+    0x18198E3B0, 0x18198E45C, 0x18198E460, 0x18198E454, 0x18198E458, 0x18198E470, 0x18198E444,
+    0x18198E46C, 0x18198E448, 0x18198E3B4, 0x18198E44C, 0x18198E450,
+};
+/// The register each of those tables writes, as `fx_reg_write` indices (register minus 0x80).
+constexpr std::array<int, 19> od2_bank_registers_a{
+    0x2D, 0x30, 0x16, 0x17, 0x18, 0x1B, 0x1A, 0x19, 0x1E, 0x1D,
+    0x1C, 0x4D, 0x4C, 0x4B, 0x50, 0x4F, 0x4E, 0x51, 0x52,
+};
+constexpr std::array<int, 19> od2_bank_registers_b{
+    0xAF, 0xB2, 0x98, 0x99, 0x9A, 0x9D, 0x9C, 0x9B, 0xA0, 0x9F,
+    0x9E, 0xCF, 0xCE, 0xCD, 0xD2, 0xD1, 0xD0, 0xD3, 0xD4,
+};
+/// The second drive curve has two variants here, picked by the chain's OD type rather than fixed:
+/// `0x18198E3C0` is Overdrive's, `0x18198E480` the other one.
+constexpr std::int64_t od2_drive_alt_offset = file_offset(0x18198E480);
+/// The two chains' amp-simulator register banks (`chorus_load_algo_regs` takes the bank).
+constexpr std::int64_t od2_amp_bank_a_offset = file_offset(0x181896E60);
+constexpr std::int64_t od2_amp_bank_b_offset = file_offset(0x181896E88);
+
 /// The tap index array `DAT_181a0f108`–`0f18c`: slot 0 is pinned to 0x6001 by the programmer
 /// (one sample behind the fixed write at float index 0x6000), slot 1 is unused, and slots 2–33
 /// carry the 32 unpacked u16 taps.
@@ -191,6 +216,14 @@ public:
                                      | ((static_cast<std::uint32_t>(value) & 0x8000U) << 1);
         write_index(reg + 6 - 0x80, merged);
         mirror(reg + 6) = merged;
+    }
+
+    /// A raw-index byte write: the value merges into the mirror's low byte, index unbiased.
+    void write_index_byte(int index, std::uint8_t value) noexcept
+    {
+        const std::uint32_t merged = (mirror(index + 0x80) & ~0xFFU) | value;
+        write_index(index, merged);
+        mirror(index + 0x80) = merged;
     }
 
     /// The byte-merge write the bank programmer uses: low byte into the mirror word, whole word
@@ -585,10 +618,193 @@ void reverb_sample(float in_left,
     out_left = c[0x176] * left + 1e-08F;
 }
 
+/// `fx_algo_overdrive_1_par_overdrive_2` @ 0x18002F450: OD / OD2, two overdrive chains running
+/// side by side off the same input and mixed at the end, each with its own drive, clipper, amp
+/// simulator and tone stack. The chains are not quite symmetric in one respect worth keeping:
+/// chain one reads the conditioned input one sample late (slot 0x1FC, where the conditioner wrote
+/// 0x1F8 last sample) while chain two reads it in the same sample. That is the engine's, not a
+/// transcription slip.
+void od_od2_sample(float in_left,
+                   float in_right,
+                   float& out_left,
+                   float& out_right,
+                   Tape& a,
+                   const float* c) noexcept
+{
+    const auto clamp_unit = [](float x) noexcept {
+        const float v = x + 1e-08F;
+        return v > 1.0F ? 1.0F : (v < -1.0F ? -1.0F : v);
+    };
+
+    a.at(0x1F8) = in_right;
+    float f4 = c[0] * a.at(0x1E0) + 1e-08F;
+    const float f6 = c[1] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1D4) = f6;
+    f4 = c[3] * f4 + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1F8) = c[4] * f6 + 1e-08F;
+    out_right = c[6] * f4 + 1e-08F;
+
+    // ---- chain one -------------------------------------------------------------------------
+    float x = a.at(0x1FC) * c[0x0A] + 1e-08F;
+    a.at(0x1D4) = x;
+    x = x * 1e-05F + a.at(0x1C) * c[0x0C] + x * c[0x0E] + 1e-08F;
+    a.at(0x28) = x;
+    a.at(0x18) = a.at(0x1C) * c[0x10] + x * 1e-05F + x * c[0x12] + 1e-08F;
+    float t1 = x * c[0x16] + c[0x17] * a.at(0x2C) + a.at(0x30) * c[0x18] + 1e-08F;
+    a.at(0x2C) = t1;
+    float t2 = c[0x1A] * a.at(0x30) + a.at(0x34) * c[0x19] + c[0x1B] * t1 + 1e-08F;
+    a.at(0x30) = t2;
+    t2 = c[0x1C] * a.at(0x38) + c[0x1D] * a.at(0x34) + c[0x1E] * t2 + 1e-08F;
+    a.at(0x34) = t2;
+    for (const int k : {0x21, 0x24, 0x27, 0x2A, 0x2D}) {
+        t2 = c[k] * t2 + 1e-08F;
+        a.at(0x1D4) = t2;
+    }
+    a.at(0x1E8) = clamp_unit(c[0x30] * t2);
+    float shape = c[0x33] * a.at(0x1E8);
+    if (shape <= 0.0F) {
+        shape = -shape;
+    }
+    shape = c[0x34] * 0.5F + shape;
+    a.at(0x1D4) = shape + 1e-08F;
+    if (shape < 0.0F) {
+        a.at(0x1D4) = c[0x3A] * 1.52588e-05F + 1e-08F;
+    }
+    float f5 = c[0x3E] * a.at(0x1D4) + c[0x3F] * 0.5F + 1e-08F;
+    a.at(0x1D4) = f5;
+    float knee = c[0x42] * f5 + c[0x41] * 0.5F + 1e-08F;
+    x = (a.at(0x1E8) * 1e-05F - knee * a.at(0x1E8)) + 1e-08F;
+    a.at(0x1D4) = x;
+    a.at(0x3C) = c[0x4A] * x + 1e-08F;
+    t2 = a.at(0x44) * c[0x4B] + c[0x4C] * a.at(0x40) + c[0x4D] * a.at(0x3C) + 1e-08F;
+    a.at(0x40) = t2;
+    x = a.at(0x44) * c[0x4F] + c[0x4E] * a.at(0x48) + c[0x50] * t2 + c[0x51] * a.at(0x4C)
+        + c[0x52] * a.at(0x50) + 1e-08F;
+    a.at(0x48) = x;
+    const float d110 = a.at(0x110);
+    a.at(0x80) = c[0x55] * x + 1e-08F;
+    const float chain_a_tap = a.at(0x80);
+    float f8 = (c[0x57] + 1e-05F) * a.at(0x84) + chain_a_tap * 1e-05F + chain_a_tap * c[0x59]
+               + a.at(0x88) * 1e-05F + a.at(0x88) * c[0x5B] + 1e-08F;
+    a.at(0x84) = f8;
+    const float d120 = a.at(0x120);
+    f8 = c[0x60] * d110 + c[0x5F] * f8 + 1e-08F;
+    a.at(0x114) = (c[0x5D] + 1e-05F) * d110 + c[0x5E] * a.at(0x118) + 1e-08F;
+    a.at(0x1D4) = f8;
+    a.at(0x8C) = c[0x63] * f8 + c[0x62] * a.at(0x114) + 1e-08F;
+    const float f8c = a.at(0x8C);
+    a.at(0x10C) = f8c * 1e-05F + d110 * c[0x65] + f8c * c[0x67] + 1e-08F;
+    const float f10 = c[0x75] * a.at(0x128) + (c[0x74] + 1e-05F) * d120 + 1e-08F;
+    const float f8d = (c[0x69] + 1e-05F) * f8c + c[0x6A] * a.at(0x10C) + a.at(0x90) * 1e-05F
+                      + a.at(0x90) * c[0x6C] + a.at(0x94) * 1e-05F + a.at(0x94) * c[0x6E]
+                      + a.at(0x98) * 1e-05F + a.at(0x98) * c[0x70] + a.at(0x9C) * 1e-05F
+                      + a.at(0x9C) * c[0x72] + 1e-08F;
+    a.at(0x94) = f8d;
+    a.at(0x124) = f10;
+    float f6b = c[0x76] * f8d + d120 * c[0x77] + 1e-08F;
+    a.at(0x1D4) = f6b;
+    float f9b = c[0x7A] * f6b + c[0x79] * a.at(0x124) + 1e-08F;
+    a.at(0x1D4) = f9b;
+    a.at(0x9C) = f10;
+    a.at(0x11C) = f9b * 1e-05F + d120 * c[0x7C] + f9b * c[0x7E] + 1e-08F;
+    f5 = (c[0x83] + 1e-05F) * f10 + a.at(0x108) * 1e-05F + a.at(0x108) * c[0x85] + 1e-08F;
+    a.at(0x1D4) = f5;
+    a.at(0x1E8) = c[0x88] * f5 + chain_a_tap * c[0x87] + 1e-08F;
+
+    // ---- chain two -------------------------------------------------------------------------
+    float y = c[0x8C] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = y;
+    y = y * 1e-05F + a.at(0x24) * c[0x8E] + y * c[0x90] + 1e-08F;
+    a.at(0x54) = y;
+    a.at(0x20) = y * 1e-05F + a.at(0x24) * c[0x92] + y * c[0x94] + 1e-08F;
+    t1 = y * c[0x98] + c[0x99] * a.at(0x58) + a.at(0x5C) * c[0x9A] + 1e-08F;
+    a.at(0x58) = t1;
+    t2 = c[0x9D] * t1 + a.at(0x5C) * c[0x9C] + a.at(0x60) * c[0x9B] + 1e-08F;
+    a.at(0x5C) = t2;
+    t2 = c[0xA0] * t2 + a.at(0x60) * c[0x9F] + c[0x9E] * a.at(0x64) + 1e-08F;
+    a.at(0x60) = t2;
+    for (const int k : {0xA3, 0xA6, 0xA9, 0xAC, 0xAF}) {
+        t2 = c[k] * t2 + 1e-08F;
+        a.at(0x1D4) = t2;
+    }
+    a.at(0x1EC) = clamp_unit(c[0xB2] * t2);
+    shape = c[0xB5] * a.at(0x1EC);
+    if (shape <= 0.0F) {
+        shape = -shape;
+    }
+    shape = c[0xB6] * 0.5F + shape;
+    a.at(0x1D4) = shape + 1e-08F;
+    if (shape < 0.0F) {
+        a.at(0x1D4) = c[0xBC] * 1.52588e-05F + 1e-08F;
+    }
+    f5 = c[0xC0] * a.at(0x1D4) + c[0xC1] * 0.5F + 1e-08F;
+    a.at(0x1D4) = f5;
+    knee = c[0xC4] * f5 + c[0xC3] * 0.5F + 1e-08F;
+    y = (a.at(0x1EC) * 1e-05F - a.at(0x1EC) * knee) + 1e-08F;
+    a.at(0x1D4) = y;
+    a.at(0x68) = c[0xCC] * y + 1e-08F;
+    t2 = c[0xCE] * a.at(0x6C) + a.at(0x70) * c[0xCD] + c[0xCF] * a.at(0x68) + 1e-08F;
+    a.at(0x6C) = t2;
+    y = c[0xD0] * a.at(0x74) + a.at(0x70) * c[0xD1] + c[0xD2] * t2 + c[0xD3] * a.at(0x78)
+        + c[0xD4] * a.at(0x7C) + 1e-08F;
+    a.at(0x74) = y;
+    const float d1bc = a.at(0x1BC);
+    a.at(0x12C) = c[0xD7] * y + 1e-08F;
+    const float chain_b_tap = a.at(0x12C);
+    f8 = (c[0xD9] + 1e-05F) * a.at(0x130) + chain_b_tap * 1e-05F + chain_b_tap * c[0xDB]
+         + a.at(0x134) * 1e-05F + a.at(0x134) * c[0xDD] + 1e-08F;
+    a.at(0x130) = f8;
+    const float d1cc = a.at(0x1CC);
+    f8 = c[0xE1] * f8 + d1bc * c[0xE2] + 1e-08F;
+    a.at(0x1C0) = (c[0xDF] + 1e-05F) * d1bc + c[0xE0] * a.at(0x1C4) + 1e-08F;
+    a.at(0x1D4) = f8;
+    a.at(0x138) = c[0xE5] * f8 + c[0xE4] * a.at(0x1C0) + 1e-08F;
+    const float f8e = a.at(0x138);
+    a.at(0x1B8) = f8e * 1e-05F + d1bc * c[0xE7] + f8e * c[0xE9] + 1e-08F;
+    const float f10b = c[0xF7] * a.at(0x1F4) + (c[0xF6] + 1e-05F) * d1cc + 1e-08F;
+    const float f8f = c[0xEC] * a.at(0x1B8) + (c[0xEB] + 1e-05F) * f8e + a.at(0x13C) * 1e-05F
+                      + a.at(0x13C) * c[0xEE] + a.at(0x140) * 1e-05F + a.at(0x140) * c[0xF0]
+                      + a.at(0x144) * 1e-05F + a.at(0x144) * c[0xF2] + a.at(0x148) * 1e-05F
+                      + a.at(0x148) * c[0xF4] + 1e-08F;
+    a.at(0x140) = f8f;
+    a.at(0x1F0) = f10b;
+    f6b = c[0xF8] * f8f + d1cc * c[0xF9] + 1e-08F;
+    a.at(0x1D4) = f6b;
+    f9b = c[0xFC] * f6b + c[0xFB] * a.at(0x1F0) + 1e-08F;
+    a.at(0x1D4) = f9b;
+    a.at(0x148) = f10b;
+    a.at(0x1C8) = f9b * 1e-05F + d1cc * c[0xFE] + f9b * c[0x100] + 1e-08F;
+    f5 = (c[0x105] + 1e-05F) * f10b + a.at(0x1B4) * 1e-05F + a.at(0x1B4) * c[0x107] + 1e-08F;
+    a.at(0x1D4) = f5;
+    const float chain_b_out = c[0x10A] * f5 + chain_b_tap * c[0x109] + 1e-08F;
+    a.at(0x1EC) = chain_b_out;
+
+    // ---- mix the two chains into the output pair ---------------------------------------------
+    const float mix_a = c[0x10E] * a.at(0x1E8) + 1e-08F;
+    const float mix_b = c[0x10F] * chain_b_out + 1e-08F;
+    a.at(0x1D4) = mix_a;
+    a.at(0x1D8) = mix_b;
+    a.at(0x1E4) = mix_b * c[0x112] + mix_a * c[0x111] + 1e-08F;
+    a.at(0x1DC) = mix_a * c[0x116] + mix_b * c[0x117] + 1e-08F;
+
+    a.at(0x1F8) = in_left;
+    float left = c[0x170] * a.at(0x1E4) + 1e-08F;
+    const float left_in = c[0x171] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1D4) = left_in;
+    left = c[0x173] * left + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1F8) = c[0x174] * left_in + 1e-08F;
+    out_left = c[0x176] * left + 1e-08F;
+}
+
 /// Which transcription serves a dispatch index.
 enum class Processor {
     thru, ///< dispatch 0, and dispatch 1's cleared "no effect" state
     overdrive, ///< dispatch 3 and 4 — one dataflow, two presets
+    od_od2, ///< dispatch 42 — two overdrive chains in parallel
     efx_reverb, ///< dispatch 0x19, with the inverted output routing
     passthrough, ///< not transcribed yet: signal passes unchanged
 };
@@ -604,6 +820,8 @@ enum class Processor {
         return Processor::overdrive;
     case 0x19:
         return Processor::efx_reverb;
+    case 42:
+        return Processor::od_od2;
     default:
         return Processor::passthrough;
     }
@@ -635,6 +853,15 @@ struct InsertionEffect::Impl {
     std::array<std::uint16_t, 128> high_gain_d{};
     std::array<std::uint16_t, 128> high_gain_h{};
     std::array<std::uint16_t, amp_bank_register_count> amp_bank_registers{};
+
+    // OD / OD2.
+    std::array<std::array<std::uint8_t, 2>, 19> od2_bank{};
+    std::array<std::uint8_t, 128> od2_drive_alt{};
+    std::array<std::uint16_t, amp_bank_register_count> od2_amp_bank_a{};
+    std::array<std::uint16_t, amp_bank_register_count> od2_amp_bank_b{};
+    std::array<std::uint8_t, 2> od2_type_latch{};
+    std::array<std::uint8_t, 2> od2_amp_type_latch{};
+    std::array<std::uint8_t, 2> od2_amp_switch_latch{};
     std::array<std::array<std::uint16_t, 4>, 16> amp_bank_values{};
 
     // EFX Reverb tables.
@@ -698,7 +925,11 @@ struct InsertionEffect::Impl {
     void apply(bool on_select);
     void apply_common_tail();
     void apply_overdrive();
-    void amp_bank_program(std::uint8_t type, std::uint8_t simulator);
+    void amp_bank_program(const std::array<std::uint16_t, amp_bank_register_count>& bank,
+                          std::uint8_t type,
+                          std::uint8_t simulator);
+    void apply_od_od2();
+    void od2_chain(int chain, int type_param, int drive_param, int control_offset);
     void apply_efx_reverb();
     void reverb_character_program();
 
@@ -845,6 +1076,15 @@ void InsertionEffect::Impl::load_tables(const RomImage& rom)
         }
     }
 
+    // OD / OD2: the nineteen two-entry bank tables, the alternate drive curve, and the two
+    // amp-simulator register banks.
+    for (std::size_t i = 0; i < od2_bank_tables.size(); ++i) {
+        read_u8s(file_offset(od2_bank_tables[i]), od2_bank[i]);
+    }
+    read_u8s(od2_drive_alt_offset, od2_drive_alt);
+    read_u16s(od2_amp_bank_a_offset, od2_amp_bank_a);
+    read_u16s(od2_amp_bank_b_offset, od2_amp_bank_b);
+
     // EFX Reverb: register bank, defaults, the six character tables reached through their two
     // pointer arrays, and the parameter curves.
     read_u16s(reverb_bank_regs16_offset, rev_regs16);
@@ -937,6 +1177,9 @@ void InsertionEffect::Impl::apply(bool on_select)
     case Processor::overdrive:
         apply_overdrive();
         break;
+    case Processor::od_od2:
+        apply_od_od2();
+        break;
     case Processor::efx_reverb:
         apply_efx_reverb();
         break;
@@ -1021,7 +1264,7 @@ void InsertionEffect::Impl::apply_overdrive()
         params[1] = amp_type_latch;
     }
     if (changed(1)) {
-        amp_bank_program(amp_type_latch, amp_switch_latch);
+        amp_bank_program(amp_bank_registers, amp_type_latch, amp_switch_latch);
         shadow[1] = amp_type_latch;
     }
 
@@ -1039,13 +1282,16 @@ void InsertionEffect::Impl::apply_overdrive()
 }
 
 /// `chorus_load_algo_regs` @ 0x180005860, programming the amp-simulator register bank.
-void InsertionEffect::Impl::amp_bank_program(std::uint8_t type, std::uint8_t simulator)
+void InsertionEffect::Impl::amp_bank_program(
+    const std::array<std::uint16_t, amp_bank_register_count>& bank,
+    std::uint8_t type,
+    std::uint8_t simulator)
 {
     if (type >= 4) {
         return;
     }
     const std::uint8_t sw = std::min<std::uint8_t>(simulator, 1);
-    const auto& r = amp_bank_registers;
+    const auto& r = bank;
     const auto value = [this, type](int table) {
         return amp_bank_values[static_cast<std::size_t>(table)][type];
     };
@@ -1074,6 +1320,128 @@ void InsertionEffect::Impl::amp_bank_program(std::uint8_t type, std::uint8_t sim
     registers.write16(r[2], value(14));
     registers.write_slew(r[0], amp_switch_a[sw]);
     registers.write_slew(r[1], amp_switch_b[sw]);
+}
+
+/// `fx_param_apply_51be0`, the OD / OD2 handler. Two chains, laid out identically in the GS
+/// parameter block: chain one takes params 0/1/2/3 (type, drive, amp type, amp switch) with pan at
+/// 0x0F and level at 0x10, chain two takes 5/6/7/8 with pan 0x11 and level 0x12.
+void InsertionEffect::Impl::apply_od_od2()
+{
+    apply_common_tail();
+
+    if (changed(0x13)) {
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+        shadow[0x13] = params[0x13];
+    }
+
+    // Chain one, then chain two. The OD type is latched to 0/1 and the amp type to 0-3, the same
+    // read-back-the-latch clamp the other handlers use.
+    od2_chain(0, 0, 1, 0x18);
+    od2_chain(1, 5, 6, 0x19);
+
+    // Amp switch and amp type, per chain.
+    for (const int chain : {0, 1}) {
+        const int switch_param = chain == 0 ? 3 : 8;
+        const int type_param = chain == 0 ? 2 : 7;
+        auto& switch_latch = od2_amp_switch_latch[static_cast<std::size_t>(chain)];
+        auto& type_latch = od2_amp_type_latch[static_cast<std::size_t>(chain)];
+        if (params[static_cast<std::size_t>(switch_param)] < 2) {
+            switch_latch = params[static_cast<std::size_t>(switch_param)];
+        } else {
+            params[static_cast<std::size_t>(switch_param)] = switch_latch;
+        }
+        if (changed(switch_param)) {
+            registers.write_slew(chain == 0 ? 0x108 : 0x18A, amp_switch_a[switch_latch]);
+            registers.write_slew(chain == 0 ? 0x107 : 0x189, amp_switch_b[switch_latch]);
+            shadow[static_cast<std::size_t>(switch_param)] = switch_latch;
+        }
+        if (params[static_cast<std::size_t>(type_param)] < 4) {
+            type_latch = params[static_cast<std::size_t>(type_param)];
+        } else {
+            params[static_cast<std::size_t>(type_param)] = type_latch;
+        }
+        if (changed(type_param)) {
+            amp_bank_program(chain == 0 ? od2_amp_bank_a : od2_amp_bank_b, type_latch, switch_latch);
+            shadow[static_cast<std::size_t>(type_param)] = type_latch;
+        }
+    }
+
+    // Pan and level, per chain.
+    if (changed(0x0F)) {
+        registers.write_slew(0x191, pan_left[params[0x0F]]);
+        registers.write_slew(0x196, pan_right[params[0x0F]]);
+        shadow[0x0F] = params[0x0F];
+    }
+    if (changed(0x10)) {
+        registers.write_slew(0x18E, level_curve[params[0x10]]);
+        shadow[0x10] = params[0x10];
+    }
+    if (changed(0x11)) {
+        registers.write_slew(0x192, pan_left[params[0x11]]);
+        registers.write_slew(0x197, pan_right[params[0x11]]);
+        shadow[0x11] = params[0x11];
+    }
+    if (changed(0x12)) {
+        registers.write_slew(0x18F, level_curve[params[0x12]]);
+        shadow[0x12] = params[0x12];
+    }
+
+    // The drive pair runs in the control-only mode too, carrying the EFX control offsets -- zero
+    // here until control sources are modelled. Which second curve it uses depends on the chain's
+    // OD type, and the two chains disagree about which way round that test goes.
+    const auto drive_pair = [&](int chain, int drive_param) {
+        const auto v = static_cast<std::size_t>(
+            std::clamp<int>(params[static_cast<std::size_t>(drive_param)], 0, 0x7F));
+        // Which second drive curve the chain uses turns on its OD type -- and the two chains
+        // test it opposite ways round: chain one takes the alternate curve when its type is 1,
+        // chain two whenever its type is anything but 0.
+        const std::uint8_t type = od2_type_latch[static_cast<std::size_t>(chain)];
+        const bool alternate = chain == 0 ? type == 1 : type != 0;
+        const std::uint8_t second = alternate ? od2_drive_alt[v] : drive_b[v];
+        registers.write_pair(chain == 0 ? 0xA1 : 0x123, drive_a[v], chain == 0 ? 0xD5 : 0x157,
+                             second);
+        shadow[static_cast<std::size_t>(drive_param)] = params[static_cast<std::size_t>(drive_param)];
+    };
+    drive_pair(0, 1);
+    drive_pair(1, 6);
+}
+
+/// One chain's OD type: latched to 0/1, and on a change it programs that chain's nineteen-register
+/// bank from the shared tables, brackets the change with the chain's mute registers, and refreshes
+/// its drive pair and level.
+void InsertionEffect::Impl::od2_chain(int chain, int type_param, int drive_param, int)
+{
+    auto& latch = od2_type_latch[static_cast<std::size_t>(chain)];
+    if (params[static_cast<std::size_t>(type_param)] < 2) {
+        latch = params[static_cast<std::size_t>(type_param)];
+    } else {
+        params[static_cast<std::size_t>(type_param)] = latch;
+    }
+    if (!changed(type_param)) {
+        return;
+    }
+
+    const int mute_level = chain == 0 ? 0x18E : 0x18F;
+    const int mute_bank = chain == 0 ? 0x8A : 0x10C;
+    registers.write_slew(mute_level, 0);
+    registers.write_slew(mute_bank, 0);
+
+    const auto& bank_registers = chain == 0 ? od2_bank_registers_a : od2_bank_registers_b;
+    for (std::size_t i = 0; i < bank_registers.size(); ++i) {
+        // These are raw `fx_reg_write` indices, so they carry no 0x80 bias.
+        const std::uint8_t value = od2_bank[i][latch];
+        registers.write_index_byte(bank_registers[i], value);
+    }
+
+    const auto v = static_cast<std::size_t>(
+        std::clamp<int>(params[static_cast<std::size_t>(drive_param)], 0, 0x7F));
+    const bool alternate = chain == 0 ? latch == 1 : latch != 0;
+    const std::uint8_t second = alternate ? od2_drive_alt[v] : drive_b[v];
+    registers.write_pair(chain == 0 ? 0xA1 : 0x123, drive_a[v], chain == 0 ? 0xD5 : 0x157, second);
+    registers.write_slew(mute_bank, 0x20);
+    registers.write_slew(mute_level, level_curve[params[chain == 0 ? 0x10 : 0x12]]);
+    shadow[static_cast<std::size_t>(type_param)] = latch;
 }
 
 /// `fx_process` @ 0x180056560, the EFX Reverb's apply handler. The 20 GS parameters: 1 is the
@@ -1358,6 +1726,13 @@ void InsertionEffect::process(std::span<const float> in_left,
                         right,
                         impl.tape_a,
                         coef);
+        } else if (impl.processor == Processor::od_od2) {
+            od_od2_sample(in_left[n] + in_left[n],
+                          in_right[n] + in_right[n],
+                          left,
+                          right,
+                          impl.tape_a,
+                          coef);
         } else if (impl.processor == Processor::efx_reverb) {
             reverb_sample(in_left[n] + in_left[n],
                           in_right[n] + in_right[n],

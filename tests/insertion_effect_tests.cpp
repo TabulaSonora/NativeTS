@@ -249,6 +249,51 @@ TEST_CASE("the block's sends carry the engine's own ratios", "[efx][sccore]")
     CHECK(efx.reverb_send() == full);
 }
 
+TEST_CASE("OD / OD2 runs both chains", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x11, 0x03);
+    CHECK(efx.current().name == "OD / OD2");
+    CHECK(efx.implemented());
+
+    const std::vector<float> input = sine(8192, 0.25);
+    std::vector<float> left(input.size());
+    std::vector<float> right(input.size());
+    efx.process(input, input, left, right);
+    const double base = rms(std::span<const float>{left}.subspan(4096));
+    CHECK(base > 0.0);
+
+    // The two chains have separate drive controls -- 0x04 for the first, 0x09 for the second --
+    // and each has to reach the output on its own. A transcription that wires one chain twice, or
+    // drops one, passes every other check in this file and fails here.
+    const auto with = [&](int address, int value) {
+        efx.select_type(0x11, 0x03);
+        efx.set_parameter(address, value);
+        std::vector<float> l(input.size());
+        std::vector<float> r(input.size());
+        efx.process(input, input, l, r);
+        return rms(std::span<const float>{l}.subspan(4096));
+    };
+    const double chain_one = with(0x04, 0x7F);
+    const double chain_two = with(0x09, 0x7F);
+    CHECK(chain_one > 0.0);
+    CHECK(chain_two > 0.0);
+    CHECK(chain_one != base);
+    CHECK(chain_two != base);
+    CHECK(chain_one != chain_two);
+
+    // Each chain also has its own level, and turning both down has to silence the block where
+    // turning one down does not.
+    efx.select_type(0x11, 0x03);
+    efx.set_parameter(0x13, 0x00);
+    efx.set_parameter(0x15, 0x00);
+    std::vector<float> quiet_left(input.size());
+    std::vector<float> quiet_right(input.size());
+    efx.process(input, input, quiet_left, quiet_right);
+    CHECK(rms(std::span<const float>{quiet_left}.subspan(4096)) < base);
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();
