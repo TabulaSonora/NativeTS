@@ -1,5 +1,5 @@
 <template>
-    <section class="panel enter-rise">
+    <section class="panel transport-panel enter-rise">
         <h2>Song</h2>
 
         <div class="row">

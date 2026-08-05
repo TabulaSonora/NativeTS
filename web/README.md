@@ -37,8 +37,7 @@ netlify deploy --prod --dir=web/dist
 
 Any Emscripten install will do, and the preset finds it: `cmake/emscripten-toolchain.cmake` looks at
 `$EMSDK` first, then at the layouts around whichever `emcc` is on `PATH`, then asks `em-config`. That
-covers an emsdk checkout, a Homebrew `emscripten` on macOS and the Linux distribution packages alike
-— the preset used to name the emsdk path outright, which is what confined this build to one machine.
+covers an emsdk checkout, a Homebrew `emscripten` on macOS and the Linux distribution packages alike.
 `-DCMAKE_TOOLCHAIN_FILE=…` still overrides the lot. vcpkg is not involved; the one dependency,
 nlohmann_json, is fetched during configure, so the build needs the network the first time.
 
@@ -54,6 +53,6 @@ tabula-sonora render --dll SCCore.dll --map 4 --stream testdata/canyon.mid nativ
 cmp web.wav native.wav
 ```
 
-Build the native side from the same commit before believing a mismatch: the engine changes often
-enough that a stale `build/release` will differ from a fresh WASM build for reasons that have
-nothing to do with Emscripten.
+Build both sides from the same commit before believing a mismatch. A stale native binary differs
+from a fresh WASM one for reasons that have nothing to do with Emscripten, and the difference is
+large enough to look like a real fault.

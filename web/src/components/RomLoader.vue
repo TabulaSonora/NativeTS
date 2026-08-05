@@ -28,8 +28,25 @@
                 <span class="note">Tables loaded.</span>
             </div>
 
-            <div class="row">
+            <!--
+                Forgetting is one click away from a five-second re-read of a 27 MB file the user has
+                to go and find again, so it asks first. Inline rather than a window.confirm: the
+                dialog would block the audio thread's message pump along with everything else.
+            -->
+            <div v-if="confirming" class="row">
+                <span class="note">
+                    Forget it? Playing again means picking <code>SCCore.dll</code> off this machine
+                    once more.
+                </span>
                 <button class="btn btn-secondary" :disabled="busy" @click="forget">
+                    Forget it
+                </button>
+                <button class="btn btn-ghost" :disabled="busy" @click="confirming = false">
+                    Keep it
+                </button>
+            </div>
+            <div v-else class="row">
+                <button class="btn btn-secondary" :disabled="busy" @click="confirming = true">
                     Forget stored DLL
                 </button>
                 <span v-if="persistent" class="tag tag-muted">Storage is persistent</span>
@@ -70,6 +87,7 @@ import { useEngineStore } from '../stores/engine';
 const store = useEngineStore();
 
 const busy = ref(false);
+const confirming = ref(false);
 const persistent = ref(false);
 const error = ref<string | null>(null);
 const step = ref('');
@@ -139,6 +157,7 @@ async function forget() {
         error.value = null;
     } finally {
         busy.value = false;
+        confirming.value = false;
     }
 }
 </script>

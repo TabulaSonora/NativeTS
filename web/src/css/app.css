@@ -127,6 +127,12 @@ header .sec-label {
     NavLink writes aria-current="page" on the match, so the active link is styled from the DOM the
     router already produces rather than from a flag this sheet would have to be told about.
 */
+/* What the nav's box comes to: 0.6rem of padding either side of an 11px uppercase line, plus the
+   hairline. Anything else that sticks below the nav offsets by this, so it is stated once. */
+:root {
+    --nav-height: 2.35rem;
+}
+
 .nav {
     position: sticky;
     top: 0;
@@ -219,6 +225,27 @@ header .sec-label {
     border-radius: var(--radius-container);
     padding: var(--space-md) var(--space-lg) var(--space-lg);
     margin: var(--space-md) 0;
+}
+
+/*
+    The transport follows the page down. Play, the scrubber and the clock are what a long mixer is
+    being scrolled against -- reaching them should not mean scrolling back to the top and losing the
+    row that was being adjusted.
+
+    It sticks below the nav rather than at 0, and takes a shadow because it now overlaps the panels
+    passing beneath it; the panel background is already opaque, so nothing shows through. z-index
+    stays under the nav's 10 and above the panels' auto.
+
+    Only where the viewport can spare it: this panel is a fifth of a short window, and pinning it
+    there would cost more scrolling room than it saves.
+*/
+@media (min-height: 44rem) {
+    .panel.transport-panel {
+        position: sticky;
+        top: var(--nav-height);
+        z-index: 5;
+        box-shadow: 0 4px 16px rgb(0 0 0 / 0.10);
+    }
 }
 
 /* Muted rather than orange: the page-level section label owns the single orange marker, and a
@@ -362,6 +389,124 @@ input[type="file"]:hover,
 input[type="search"]:hover {
     border-color: var(--border-strong);
 }
+
+/*
+    The design system's select, from the Customizable Select API: the popup is a real styled element
+    rather than the OS menu, so a vintage list reads in the page's own type and colour instead of
+    Aqua's. Everything above stays the fallback -- `appearance: base-select` is dropped as an invalid
+    value where the API is missing, which leaves the native control fully styled by the rules above.
+
+    Both marks are drawn as masks rather than background images so they take a token colour and
+    follow the dark theme; the SVG-with-a-baked-in-hex spelling in the skill cannot.
+*/
+@supports (appearance: base-select) {
+
+select,
+select::picker(select) {
+    appearance: base-select;
+}
+
+/* base-select turns the control into a button box, so the chevron needs a flex line to be pushed
+   to the end of. Outside the @supports arm this would apply to a replaced native control. */
+select {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-xs);
+    min-height: 2rem;
+    text-align: left;
+    cursor: pointer;
+}
+
+select::picker-icon {
+    content: "";
+    width: 12px;
+    height: 12px;
+    margin-left: auto;
+    background: currentColor;
+    color: var(--muted);
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round' d='M3 4.5l3 3 3-3'/%3E%3C/svg%3E") center / contain no-repeat;
+    transition: transform var(--dur-quick) var(--ease-out);
+}
+
+select:open::picker-icon {
+    transform: rotate(180deg);
+}
+
+/* Growing out of the control, so it takes the control's material rather than the panel's. */
+select::picker(select) {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-input);
+    padding: 4px;
+    margin-top: 4px;
+    box-shadow: 0 4px 16px rgb(0 0 0 / 0.10);
+    min-width: anchor-size(width);
+    font-family: var(--font-sans);
+    font-size: var(--text-body);
+    color: var(--text);
+
+    transform-origin: top center;
+    opacity: 0;
+    transform: scaleY(0.85) translateY(-4px);
+    filter: blur(6px);
+    transition:
+        opacity   var(--dur-quick) var(--ease-out),
+        transform var(--dur-quick) var(--ease-out),
+        filter    var(--dur-quick) var(--ease-out),
+        overlay   var(--dur-quick) allow-discrete,
+        display   var(--dur-quick) allow-discrete;
+}
+
+select::picker(select):popover-open {
+    opacity: 1;
+    transform: scaleY(1) translateY(0);
+    filter: blur(0);
+}
+
+@starting-style {
+    select::picker(select):popover-open {
+        opacity: 0;
+        transform: scaleY(0.85) translateY(-4px);
+        filter: blur(6px);
+    }
+}
+
+select option {
+    display: grid;
+    grid-template-columns: 16px 1fr auto;
+    align-items: center;
+    gap: var(--space-xs);
+    padding: 6px 8px;
+    border-radius: var(--radius-control);
+    cursor: pointer;
+}
+
+select option:hover,
+select option:focus-visible {
+    background: var(--border);
+    outline: none;
+}
+
+/* The checkmark carries the selected state, so the row itself stays unfilled. */
+select option:checked {
+    background: transparent;
+    color: var(--teal-light);
+    font-weight: 600;
+}
+
+select option::checkmark {
+    content: "";
+    width: 12px;
+    height: 12px;
+    background: currentColor;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23000' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.2l2.6 2.6L9.8 3.5'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+select option:not(:checked)::checkmark {
+    opacity: 0;
+}
+
+}   /* @supports (appearance: base-select) */
 
 input[type="range"] {
     padding: 0;
