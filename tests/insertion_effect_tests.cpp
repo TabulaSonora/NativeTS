@@ -178,6 +178,42 @@ TEST_CASE("overdrive shapes and responds to drive", "[efx][sccore]")
     CHECK(high_drive != zero_drive);
 }
 
+TEST_CASE("the EFX reverb builds a tail and its tap program", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x01, 0x55);
+    CHECK(efx.current().name == "Reverb");
+    CHECK(efx.implemented());
+
+    // The character program's taps: slot 0 is the pre-delay (curve + 0x6000), slot 1 the fixed
+    // second read, and 2 onward the 32-tap network. All must be inside buffer B.
+    const auto taps = efx.tap_program();
+    REQUIRE(taps.size() == 34);
+    CHECK(taps[0] > 0x6000);
+    for (const std::int32_t tap : taps) {
+        CHECK(tap >= 0);
+        CHECK(tap < (1 << 17));
+    }
+
+    // A short burst, then silence: the tail has to outlive the input and decay rather than run
+    // away — a wrong feedback tap shows up as one or the other.
+    std::vector<float> burst = sine(2048, 0.25);
+    std::vector<float> quiet(16384, 0.0F);
+    std::vector<float> out_left(burst.size());
+    std::vector<float> out_right(burst.size());
+    efx.process(burst, burst, out_left, out_right);
+    std::vector<float> tail_left(quiet.size());
+    std::vector<float> tail_right(quiet.size());
+    efx.process(quiet, quiet, tail_left, tail_right);
+
+    const double early = rms(std::span<const float>{tail_left}.subspan(0, 4096));
+    const double late = rms(std::span<const float>{tail_left}.subspan(12288));
+    CHECK(early > 1e-5);
+    CHECK(late < early);
+    CHECK(late < 1.0);
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();

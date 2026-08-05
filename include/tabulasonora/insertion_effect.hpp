@@ -107,6 +107,12 @@ public:
     /// Clears delay lines and scratch, keeping type and parameters.
     void reset();
 
+    /// The programmed state, for oracle harnesses: the float coefficient file and the reverb tap
+    /// program, in the engine's own layout. A diff against a live `scdec efxdump` names the exact
+    /// register a wrong curve, width kind or preset slice landed in.
+    [[nodiscard]] std::span<const float> coefficients() const;
+    [[nodiscard]] std::span<const std::int32_t> tap_program() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
