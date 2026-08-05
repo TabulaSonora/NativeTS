@@ -255,12 +255,18 @@ is the only place the host sample rate exists; everything upstream is the 32 kHz
   the pan table's centre sum 1.1811) where a part send, fed pre-pan, is flat. The one measured
   rather than traced quantity is the conversion from an engine bus value into this engine's
   per-network units, expressed for reverb as the engine's own EFX-to-part ratio (0.980).
-- The GS reverb network is verified against the live engine's own processor: `scdec revir` drives
-  `fx_reverb_process` with a controlled impulse and captures its response, which matches this
-  engine's to 1.0000 in every window of a 32000-sample capture, peaks agreeing to five figures.
-  Wet levels compared off *rendered notes* instead differ by up to ~11% and vary with the patch —
-  that is the dry signal feeding the reverb, not the reverb, and it is why the network should be
+- All three send networks are verified against the live engine's own processors by impulse
+  response — `scdec revir` / `choir` / `dlyir` drive `fx_reverb_process`, `fx_chorus_stage_l` and
+  `fx_chorus_stage_r`, and `tools/dump_effects_dll.py` captures all 26 GS networks as the test
+  gate. Agreement is within 5e-5 on every one, which is the float-against-double floor rather than
+  a modelling error. Wet levels compared off *rendered notes* instead differ by up to ~11% and vary
+  with the patch — that is the dry signal feeding the reverb, not the reverb — so networks are
   compared with an impulse and never with a note.
+- `fx_chorus_stage_r` is the **GS system delay**, not the chorus's right channel: three taps with
+  their own gains, a feedback path, a pre-LPF on the input, and a send into the reverb, working the
+  region of the shared delay memory 0x8000 below the chorus's. Its Ghidra name misleads.
+- The chorus sweep LFO free-runs, so its response is only reproducible from a known phase; the
+  capture pins the engine's accumulator to zero, where this engine's starts.
 - Bus numbering (58/59 dry, 60 reverb, 3 chorus, 2 delay/EFX) comes from the DC-blocker and
   accumulator analysis; treat individual bus indices as evidence-backed labels, not a verified full
   bus map.

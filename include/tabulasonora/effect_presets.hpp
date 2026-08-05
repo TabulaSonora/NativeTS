@@ -103,11 +103,6 @@ struct DelayPresets {
     /// Send-bus gain at full scale.
     static constexpr double send_at_full_scale = 0.356;
 
-    /// Fixed input pre-delay ahead of the feedback line, in samples — 60 ms at 32 kHz.
-    ///
-    /// Measured from first arrival; it is not in the preset table.
-    static constexpr int pre_delay_samples = 1920;
-
     /// Pre-lowpass coefficient ladder; index 0 bypasses, which every preset uses.
     static constexpr std::array<double, 8> pre_low_pass_coefficients{
         0.0, 0.10, 0.18, 0.28, 0.40, 0.55, 0.70, 0.84};

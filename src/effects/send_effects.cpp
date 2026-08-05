@@ -211,8 +211,6 @@ SystemDelay::SystemDelay(const DelayParameters& parameters) : parameters_(parame
                   parameters.pre_low_pass)]
             : 0.0;
 
-    pending_left_.assign(static_cast<std::size_t>(pre_delay_), 0.0F);
-    pending_right_.assign(static_cast<std::size_t>(pre_delay_), 0.0F);
 }
 
 SystemDelay SystemDelay::for_type(int type)
@@ -246,9 +244,15 @@ DelayParameters SystemDelay::compile(std::span<const int> raw, int sample_rate)
     // after this to absorb the difference, so a tap length really can land one sample either side.
     const auto round_even = [](double value) { return static_cast<int>(std::nearbyint(value)); };
 
+    // The left and right taps are the centre scaled by `n / 24`, not by the published percent
+    // table -- that table is the front panel's rounding (4%, 88%, 133%) and it is a percent or so
+    // off the arithmetic. Read straight off the live engine's tap registers, all ten types come
+    // out at exactly `centre * n / 24`: ratio 1 on a 10880 centre gives 453 where 4% gives 435,
+    // and type 9's 21 and 32 on a 24000 centre give 21000 and 32000 where 88% and 133% give
+    // 21120 and 31920.
     const int centre = round_even(time_milliseconds(raw[1]) * sample_rate / 1000.0);
-    const int left = round_even(centre * ratio_percent(raw[2]) / 100.0);
-    const int right = round_even(centre * ratio_percent(raw[3]) / 100.0);
+    const int left = round_even(centre * raw[2] / 24.0);
+    const int right = round_even(centre * raw[3] / 24.0);
 
     // The return level scales the whole wet output and is kept separate from the send.
     const double return_level = raw[7] / 127.0;
@@ -257,11 +261,17 @@ DelayParameters SystemDelay::compile(std::span<const int> raw, int sample_rate)
         .centre_samples = std::max(1, centre),
         .left_samples = std::max(1, left),
         .right_samples = std::max(1, right),
-        .centre_gain = raw[4] / 127.0 * return_level,
-        .left_gain = raw[5] / 127.0 * return_level,
-        .right_gain = raw[6] / 127.0 * return_level,
-        // Raw 0-127 maps to -1..+1; the display range is -64..+63.
-        .feedback = (raw[8] - 64) / 64.0,
+        // The tap gains quantise over 128, not 127: the live engine's registers read 0.9921875
+        // for a raw 127 and 0.7578125 for a raw 97, which is n/128 exactly, on every type.
+        .centre_gain = raw[4] / 128.0 * return_level,
+        .left_gain = raw[5] / 128.0 * return_level,
+        .right_gain = raw[6] / 128.0 * return_level,
+        // Raw 0-127 maps to -1..+1 over a 31/32 full scale, not a whole one: read back off the
+        // live engine's own feedback register, all ten types come out at exactly 31/32 of
+        // `(raw - 64) / 64` -- 0.2421875 where that gives 0.25, 0.12109375 where it gives 0.125,
+        // and so on through the negative ones. It is the same n/(n+1) fixed-point edge the tap
+        // gains show at 127/128. The display range is -64..+63.
+        .feedback = (raw[8] - 64) * 31.0 / 2048.0,
         .pre_low_pass = raw[0],
         .send_to_reverb = raw[9] / 127.0,
     };
@@ -270,9 +280,8 @@ DelayParameters SystemDelay::compile(std::span<const int> raw, int sample_rate)
 void SystemDelay::reset()
 {
     std::fill(ring_.begin(), ring_.end(), 0.0);
-    std::fill(pending_left_.begin(), pending_left_.end(), 0.0F);
-    std::fill(pending_right_.begin(), pending_right_.end(), 0.0F);
-    pending_ = 0;
+    dc_state_ = 0.0;
+    feedback_hold_ = 0.0;
     lowpass_ = 0.0;
     write_cursor_ = 0;
 }
@@ -284,18 +293,33 @@ void SystemDelay::process(std::span<const float> input,
     const DelayParameters& p = parameters_;
 
     for (std::size_t i = 0; i < input.size(); ++i) {
-        const double centre =
-            ring_[static_cast<std::size_t>((write_cursor_ - p.centre_samples) & ring_mask)];
+        // The delay's input carries the same 20 Hz DC blocker the reverb and chorus inputs do --
+        // the engine's delay processor opens with the identical `x * 0.99804 + state` pair.
+        const double dry = static_cast<double>(input[i]);
+        const double conditioned = (dry * DcBlocker::input_coefficient) + dc_state_;
+        dc_state_ += conditioned * DcBlocker::state_coefficient;
 
-        double feedback_source = centre;
+        // The pre-lowpass sits on the INPUT, not on the feedback: the engine's line is
+        // `state = lpfIn * dcBlocked + state * lpfFb`, taken before the feedback is added. Every
+        // one of the ten presets bypasses it (lpfIn 1, lpfFb ~0), so this is placement rather than
+        // audible behaviour, but it is where the engine puts it.
+        double injected = conditioned;
         if (pre_low_pass_coefficient_ != 0.0) {
             lowpass_ = (lowpass_ * pre_low_pass_coefficient_)
-                       + ((1.0 - pre_low_pass_coefficient_) * centre);
-            feedback_source = lowpass_;
+                       + ((1.0 - pre_low_pass_coefficient_) * conditioned);
+            injected = lowpass_;
         }
 
+        // The feedback re-injects the PREVIOUS sample's centre read, not this one's: the engine
+        // writes using the value it read last iteration and only then refreshes it. That makes the
+        // loop one sample longer than the tap, which is why its second echo lands at 2*tap + 1 --
+        // 21761 for the 10880-sample type-0 tap, where using this sample's read gives 21760.
         ring_[static_cast<std::size_t>(write_cursor_)] =
-            static_cast<double>(input[i]) + (p.feedback * feedback_source);
+            injected + (p.feedback * feedback_hold_);
+
+        const double centre =
+            ring_[static_cast<std::size_t>((write_cursor_ - p.centre_samples) & ring_mask)];
+        feedback_hold_ = centre;
 
         const double l =
             ring_[static_cast<std::size_t>((write_cursor_ - p.left_samples) & ring_mask)];
@@ -307,22 +331,14 @@ void SystemDelay::process(std::span<const float> input,
 
         write_cursor_ = (write_cursor_ + 1) & ring_mask;
 
-        // Apply the fixed input pre-delay as an equivalent output shift.
-        if (pending_ < pre_delay_) {
-            pending_left_[static_cast<std::size_t>(pending_)] = wet_left;
-            pending_right_[static_cast<std::size_t>(pending_)] = wet_right;
-            ++pending_;
-            left[i] = 0.0F;
-            right[i] = 0.0F;
-        } else {
-            const auto slot =
-                static_cast<std::size_t>((pending_ - pre_delay_) % std::max(1, pre_delay_));
-            left[i] = pending_left_[slot];
-            right[i] = pending_right_[slot];
-            pending_left_[slot] = wet_left;
-            pending_right_[slot] = wet_right;
-            ++pending_;
-        }
+        // No input pre-delay. An earlier revision carried a fixed 1920-sample (60 ms) one, said to
+        // have been measured from a render's first arrival; the engine's own delay processor has
+        // none. Called directly with an impulse it answers at exactly the tap length, and that tap
+        // length is this one -- the live tap register equals `centre_samples` on all ten types
+        // (10880, 17600, 32000, 4160, 16000, 22400, 32000, 8320, 22400, 24000). The 60 ms was
+        // making every delay type a sixteenth-note late at 120 bpm.
+        left[i] = wet_left;
+        right[i] = wet_right;
     }
 }
 

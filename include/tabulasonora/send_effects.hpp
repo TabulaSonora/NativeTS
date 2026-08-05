@@ -199,11 +199,9 @@ private:
     DelayParameters parameters_;
     std::vector<double> ring_ = std::vector<double>(ring_size, 0.0);
 
-    int pre_delay_ = DelayPresets::pre_delay_samples;
     double pre_low_pass_coefficient_ = 0.0;
-    std::vector<float> pending_left_;
-    std::vector<float> pending_right_;
-    int pending_ = 0;
+    double dc_state_ = 0.0;
+    double feedback_hold_ = 0.0;
     double lowpass_ = 0.0;
     int write_cursor_ = 0;
 };

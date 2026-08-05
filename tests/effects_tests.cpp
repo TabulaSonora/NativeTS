@@ -22,6 +22,7 @@
 
 using namespace ts;
 using Catch::Matchers::WithinAbs;
+using Catch::Matchers::WithinRel;
 namespace fs = std::filesystem;
 
 namespace {
@@ -91,57 +92,102 @@ struct Response {
 
 } // namespace
 
-TEST_CASE("every send-effect network matches the reference by impulse response", "[effects][gate]")
+TEST_CASE("every send-effect network matches the module by impulse response", "[effects][gate]")
 {
     testdata::require_effect_presets();
 
-    // The Phase 6 gate: all 26 GS networks -- 8 reverb, 8 chorus, 10 delay -- against the reference
-    // build's own impulse responses.
+    // All 26 GS networks -- 8 reverb, 8 chorus, 10 delay -- against impulse responses taken from
+    // the module itself (`tools/dump_effects_dll.py`, which drives the engine's own processors
+    // through scdec). An earlier version of this gate compared against the retired C# port and was
+    // bit-exact about it; that only ever proved the two agreed, and they agreed on a delay with
+    // five separate faults in it. Facing the module instead is what found them.
     //
-    // The peak assertion is the important one. Twelve of these comparisons were once green upstream
-    // while testing nothing at all: the fixture windows were shorter than the delays, so both sides
-    // were silent and agreed perfectly. This port nearly repeated it -- delay type 2 does not speak
-    // until sample 67,840, so the 48,000-sample window the reverbs use would have made it silent.
-    const fs::path fixture_path = testdata::repository_root() / "fixtures" / "effects.json";
-    if (!fs::exists(fixture_path)) {
-        SKIP("No effects fixture. Generate it with:\n"
-             "  python3 tools/dump_effects.py fixtures/effects.json");
+    // The comparison is a tolerance rather than a digest, because the module computes in float and
+    // this engine in double: that difference alone is worth about 3e-5 on a unit impulse, and no
+    // amount of correctness will close it. So the ceiling is 5e-5 -- just above the floor measured
+    // across all 26 -- and 1e-5, about -100 dB against these peaks, is asserted on the bulk of the
+    // samples instead. Both are far below anything a real fault produces: the delay's swapped tap
+    // scaling showed up here as 9.9e-1.
+    const fs::path directory = testdata::repository_root() / "fixtures" / "effects_dll";
+    if (!fs::exists(directory)) {
+        SKIP("No module impulse responses. Generate them with:\n"
+             "  python3 tools/dump_effects_dll.py --dll <SCCore.dll>");
     }
 
-    std::ifstream stream{fixture_path};
-    REQUIRE(stream);
-    const nlohmann::json document = nlohmann::json::parse(stream);
+    constexpr double ceiling = 5e-5;
+    constexpr double tolerance = 1e-5;
+    constexpr int captured_samples = 48000;
 
-    const auto& cases = document.at("cases");
-    REQUIRE(cases.size() == 26);
+    struct Network {
+        const char* kind;
+        int count;
+    };
+    constexpr std::array<Network, 3> networks{{{"reverb", 8}, {"chorus", 8}, {"delay", 10}}};
 
     std::size_t compared = 0;
-    for (const auto& entry : cases) {
-        const auto kind = entry.at("kind").get<std::string>();
-        const int type = entry.at("type").get<int>();
-        const int samples = entry.at("samples").get<int>();
+    for (const Network& network : networks) {
+        for (int type = 0; type < network.count; ++type) {
+            INFO(network.kind << " type " << type);
+            const fs::path path =
+                directory / (std::string{network.kind} + std::to_string(type) + ".f32");
+            REQUIRE(fs::exists(path));
 
-        INFO(kind << " type " << type);
-        const Response response = impulse(kind, type, samples);
+            std::ifstream stream{path, std::ios::binary};
+            REQUIRE(stream);
+            std::vector<float> reference(static_cast<std::size_t>(captured_samples) * 2);
+            stream.read(reinterpret_cast<char*>(reference.data()),
+                        static_cast<std::streamsize>(reference.size() * sizeof(float)));
+            REQUIRE(stream.gcount()
+                    == static_cast<std::streamsize>(reference.size() * sizeof(float)));
 
-        // Non-vacuity first: a silent network agrees with anything.
-        const double peak = response.peak();
-        REQUIRE(peak > 0.0);
-        REQUIRE_THAT(peak, WithinAbs(entry.at("peak").get<double>(), 1e-12));
+            const Response response = impulse(network.kind, type, captured_samples);
 
-        // Where it starts speaking, which is the most diagnosable number when a digest moves.
-        REQUIRE(response.first_sounding_index()
-                == entry.at("firstSoundingIndex").get<std::ptrdiff_t>());
+            // The delay's level lives downstream of the module's processor and inside this
+            // engine's tap gains, so the captured response carries no level and ours does.
+            double scale = 1.0;
+            if (std::string{network.kind} == "delay") {
+                const auto& raw = EffectPresets::defaults().delay().raw_presets[
+                    static_cast<std::size_t>(type)];
+                scale = raw[7] / 127.0;
+            }
 
-        const auto& last8 = entry.at("last8");
-        for (std::size_t i = 0; i < last8.size(); ++i) {
-            const std::size_t at = response.left.size() * 2 - last8.size() + i;
-            const float actual = (at % 2 == 0) ? response.left[at / 2] : response.right[at / 2];
-            REQUIRE(actual == last8[i].get<float>());
+            // Non-vacuity first: a silent network agrees with anything, and delay type 2 does not
+            // speak until sample 32000.
+            double reference_peak = 0.0;
+            for (const float sample : reference) {
+                reference_peak = std::max(reference_peak, std::abs(static_cast<double>(sample)));
+            }
+            REQUIRE(reference_peak > 1e-3);
+            REQUIRE(response.peak() > 1e-3);
+
+            double worst = 0.0;
+            std::size_t worst_at = 0;
+            std::size_t within = 0;
+            for (std::size_t i = 0; i < static_cast<std::size_t>(captured_samples); ++i) {
+                const double ours_left = static_cast<double>(response.left[i]) / scale;
+                const double ours_right = static_cast<double>(response.right[i]) / scale;
+                const double error_left =
+                    std::abs(ours_left - static_cast<double>(reference[i * 2]));
+                const double error_right =
+                    std::abs(ours_right - static_cast<double>(reference[(i * 2) + 1]));
+                const double error = std::max(error_left, error_right);
+                if (error > worst) {
+                    worst = error;
+                    worst_at = i;
+                }
+                if (error <= tolerance) {
+                    ++within;
+                }
+            }
+            const double fraction =
+                static_cast<double>(within) / static_cast<double>(captured_samples);
+            INFO("worst error " << worst << " at sample " << worst_at << "; "
+                                << (fraction * 100.0) << "% within " << tolerance);
+            CHECK(worst <= ceiling);
+            CHECK(fraction >= 0.95);
+            CHECK_THAT(response.peak() / scale, WithinRel(reference_peak, 1e-3));
+            ++compared;
         }
-
-        REQUIRE(response.digest() == entry.at("sha256").get<std::string>());
-        ++compared;
     }
 
     CHECK(compared == 26);
