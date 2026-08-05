@@ -120,6 +120,28 @@ constexpr std::int64_t eq_high_alt_f_offset = file_offset(0x18198AEE0);
 constexpr std::int64_t eq_high_alt_d_offset = file_offset(0x18198AFE0);
 constexpr std::int64_t eq_high_alt_h_offset = file_offset(0x18198AAC0);
 
+// The four-argument bank loader (`reverb_load_algo_regs` @ 0x1800053E0) the EQ's two mid bands
+// and several other types program through. A band picks one of seventeen coefficient tables by
+// its frequency, then a five-byte row inside it by gain and Q, and the row's fifth byte carries
+// four scale flags for the four registers the first four bytes fill.
+constexpr std::array<std::int64_t, 17> bank_coef_tables{
+    0x181989940, 0x181988F40, 0x181988A40, 0x1819891C0, 0x181989BC0, 0x1819882A0,
+    0x181989440, 0x181988CC0, 0x18198A0C0, 0x1819887C0, 0x181989E40, 0x18198A340,
+    0x181988020, 0x181987DA0, 0x181987B20, 0x181988520, 0x1819896C0,
+};
+/// Index 7 falls to the same table the switch uses as its default.
+constexpr std::size_t bank_default_table = 7;
+constexpr int bank_table_rows = 125; ///< (gain 0-24) x (Q 0-4)
+constexpr int bank_row_bytes = 5;
+/// The byte pair each frequency also carries: value, then a flag in the high bit of the next.
+constexpr std::int64_t bank_pair_offset = file_offset(0x181988798);
+
+/// The EQ's four register banks — the two mid bands, each programmed twice (once per channel).
+constexpr std::array<std::int64_t, 4> eq_mid_banks{
+    0x1818967E0, 0x181896768, 0x181896798, 0x181896778,
+};
+constexpr int bank_register_count = 7;
+
 // Rotary (`fx_param_apply_57bc0`). Its own three curves on top of the shared gain and level ones.
 constexpr std::int64_t rotary_rate_offset = file_offset(0x18198CA60);   // u16 -> 0x139, 0xBE
 constexpr std::int64_t rotary_spread_offset = file_offset(0x18198F040); // u8  -> 0xF2, 0x126
@@ -231,6 +253,19 @@ public:
                                      | ((static_cast<std::uint32_t>(value) & 0x8000U) << 1);
         write_index(reg + 6 - 0x80, merged);
         mirror(reg + 6) = merged;
+    }
+
+    /// A write that also sets the wide-scale flag from a table bit: the low byte and bit 15 are
+    /// cleared, the flag reinstated, and the value merged in.
+    void write_flagged(int reg, std::uint8_t value, bool flag) noexcept
+    {
+        std::uint32_t merged = mirror(reg) & 0xFFFF7F00U;
+        if (flag) {
+            merged |= 0x8000U;
+        }
+        merged |= value;
+        write_index(reg - 0x80, merged);
+        mirror(reg) = merged;
     }
 
     /// A raw-index byte write: the value merges into the mirror's low byte, index unbiased.
@@ -1178,6 +1213,10 @@ struct InsertionEffect::Impl {
     std::array<std::uint16_t, 128> eq_high_alt_d{};
     std::array<std::uint16_t, 128> eq_high_alt_h{};
     std::array<std::uint8_t, 2> eq_freq_latch{};
+    std::array<std::uint8_t, 5> eq_q_latch{};
+    std::array<std::vector<std::uint8_t>, 17> bank_tables;
+    std::array<std::uint8_t, 64> bank_pairs{};
+    std::array<std::array<std::uint16_t, bank_register_count>, 4> eq_mid_registers{};
 
     std::array<std::uint16_t, 128> rotary_rate{};
     std::array<std::uint8_t, 128> rotary_spread{};
@@ -1255,6 +1294,10 @@ struct InsertionEffect::Impl {
     void apply_od_od2();
     void apply_rotary(bool on_select);
     void apply_stereo_eq();
+    void bank_load(const std::array<std::uint16_t, bank_register_count>& registers_,
+                   std::uint8_t frequency,
+                   std::uint8_t q,
+                   std::uint8_t gain);
     void od2_chain(int chain, int type_param, int drive_param, int control_offset);
     void apply_efx_reverb();
     void reverb_character_program();
@@ -1408,6 +1451,14 @@ void InsertionEffect::Impl::load_tables(const RomImage& rom)
         read_u8s(file_offset(od2_bank_tables[i]), od2_bank[i]);
     }
     read_u8s(od2_drive_alt_offset, od2_drive_alt);
+    for (std::size_t i = 0; i < bank_coef_tables.size(); ++i) {
+        bank_tables[i] = rom.read(file_offset(bank_coef_tables[i]),
+                                  static_cast<std::size_t>(bank_table_rows) * bank_row_bytes);
+    }
+    read_u8s(bank_pair_offset, bank_pairs);
+    for (std::size_t i = 0; i < eq_mid_banks.size(); ++i) {
+        read_u16s(file_offset(eq_mid_banks[i]), eq_mid_registers[i]);
+    }
     read_u16s(eq_low_alt_f_offset, eq_low_alt_f);
     read_u16s(eq_low_alt_d_offset, eq_low_alt_d);
     read_u16s(eq_low_alt_h_offset, eq_low_alt_h);
@@ -1663,6 +1714,61 @@ void InsertionEffect::Impl::amp_bank_program(
     registers.write_slew(r[1], amp_switch_b[sw]);
 }
 
+/// `reverb_load_algo_regs` @ 0x1800053E0. Frequency selects a coefficient table and a byte pair;
+/// gain and Q select a five-byte row inside it; the row's fifth byte holds four flags, one per
+/// register group, that set the wide-scale bit. Each of the first four bytes is written twice —
+/// once merging the value alone, once with its flag — which is the engine's own order and matters
+/// because the second write reads the mirror the first one left.
+void InsertionEffect::Impl::bank_load(
+    const std::array<std::uint16_t, bank_register_count>& bank,
+    std::uint8_t frequency,
+    std::uint8_t q,
+    std::uint8_t gain)
+{
+    registers.write_slew(bank[6], 0);
+
+    const int clamped_q =
+        static_cast<std::int8_t>(q) < 0 ? 0 : std::min<int>(static_cast<std::int8_t>(q), 4);
+    // Gain is a window, not a scale: everything below 0x34 is the bottom of the table, 0x34-0x4C
+    // maps straight through, and everything above pins to the top row.
+    const int mapped_gain = gain < 0x34 ? 0 : (gain < 0x4D ? gain - 0x34 : 0x18);
+
+    const std::size_t selector = static_cast<std::size_t>(frequency >> 3);
+    const std::vector<std::uint8_t>& table =
+        bank_tables[selector < bank_tables.size() ? selector : bank_default_table];
+    const std::size_t pair = selector * 2;
+    const std::uint8_t pair_value = bank_pairs[pair];
+    const bool pair_flag = (bank_pairs[pair + 1] >> 7) != 0;
+
+    const std::size_t row =
+        static_cast<std::size_t>(((mapped_gain * 5) + clamped_q) * bank_row_bytes);
+    if (row + 4 >= table.size()) {
+        return;
+    }
+    const std::uint8_t flags = table[row + 4];
+    const auto flag = [flags](int k) { return ((flags >> (7 - k)) & 1) != 0; };
+
+    registers.write_slew(bank[2], pair_value);
+    registers.write_flagged(bank[2], pair_value, pair_flag);
+
+    registers.write_slew(bank[0], table[row]);
+    registers.write_slew(bank[1], table[row]);
+    registers.write_flagged(bank[0], table[row], flag(0));
+    registers.write_flagged(bank[1], table[row], flag(0));
+
+    registers.write_slew(bank[3], table[row + 1]);
+    registers.write_slew(bank[4], table[row + 1]);
+    registers.write_flagged(bank[3], table[row + 1], flag(1));
+    registers.write_flagged(bank[4], table[row + 1], flag(1));
+
+    registers.write_slew(bank[5], table[row + 2]);
+    registers.write_flagged(bank[5], table[row + 2], flag(2));
+
+    registers.write_flagged(bank[6], 0, flag(3));
+    registers.write_slew(bank[6], table[row + 3]);
+    registers.write_flagged(bank[6], table[row + 3], flag(3));
+}
+
 /// `fx_param_apply_48680`, the stereo EQ handler — the two shelving bands and the level.
 ///
 /// **The two mid bands are not applied here.** They are programmed by a four-argument bank loader
@@ -1720,6 +1826,34 @@ void InsertionEffect::Impl::apply_stereo_eq()
         registers.write_slew(0xF0, 0x20);
         shadow[2] = eq_freq_latch[1];
         shadow[3] = params[3];
+    }
+
+    // The two mid bands. Each is programmed twice, once per channel, and the first of the pair
+    // takes the latched Q while the second takes the raw byte — the engine's own asymmetry, and
+    // it only shows when the Q byte is out of range.
+    for (int band = 0; band < 2; ++band) {
+        const int frequency_param = band == 0 ? 4 : 7;
+        const int q_param = band == 0 ? 5 : 8;
+        const int gain_param = band == 0 ? 6 : 9;
+        auto& latch = eq_q_latch[static_cast<std::size_t>(band)];
+        if (params[static_cast<std::size_t>(q_param)] < 5) {
+            latch = params[static_cast<std::size_t>(q_param)];
+        } else {
+            params[static_cast<std::size_t>(q_param)] = latch;
+        }
+        if (!changed(frequency_param) && !changed(q_param) && !changed(gain_param)) {
+            continue;
+        }
+        const std::uint8_t frequency = params[static_cast<std::size_t>(frequency_param)];
+        const std::uint8_t gain = params[static_cast<std::size_t>(gain_param)];
+        bank_load(eq_mid_registers[static_cast<std::size_t>(band * 2)], frequency, latch, gain);
+        bank_load(eq_mid_registers[static_cast<std::size_t>((band * 2) + 1)],
+                  frequency,
+                  params[static_cast<std::size_t>(q_param)],
+                  gain);
+        shadow[static_cast<std::size_t>(frequency_param)] = frequency;
+        shadow[static_cast<std::size_t>(q_param)] = latch;
+        shadow[static_cast<std::size_t>(gain_param)] = gain;
     }
 
     const auto level = static_cast<std::size_t>(std::clamp<int>(params[0x13], 0, 0x7F));

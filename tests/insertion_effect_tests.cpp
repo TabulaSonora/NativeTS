@@ -366,10 +366,12 @@ TEST_CASE("the stereo EQ shelves respond and the mid bands are known missing", "
     CHECK(render(0x06, 0x7F) > render(0x06, 0x00));
     CHECK(render(0x04, 0x7F) > flat);
 
-    // The two mid bands are not programmed yet -- their bank loader is untranscribed -- so this
-    // pins the gap rather than pretending it is not there. When the loader lands, this assertion
-    // is the one that should start failing.
-    CHECK(render(0x09, 0x7F) == flat);
+    // The two mid bands go through the four-argument bank loader, which programs each band twice,
+    // once per channel. Their gain byte is a window rather than a scale -- everything below 0x34
+    // is the bottom of the table -- so the pair that has to differ is one inside the window
+    // against one below it.
+    CHECK(render(0x09, 0x60) != render(0x09, 0x00));
+    CHECK(render(0x0C, 0x60) != render(0x0C, 0x00));
 }
 
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
