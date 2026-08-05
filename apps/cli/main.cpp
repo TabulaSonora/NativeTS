@@ -1,10 +1,12 @@
 #include "tabulasonora/envelope_machine.hpp"
+#include "tabulasonora/insertion_effect.hpp"
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/render_options.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/rom_locator.hpp"
 #include "tabulasonora/send_effects.hpp"
+#include "tabulasonora/sequence.hpp"
 #include "tabulasonora/sequence_player.hpp"
 #include "tabulasonora/smf_reader.hpp"
 #include "tabulasonora/table_manifest.hpp"
@@ -12,10 +14,13 @@
 #include "tabulasonora/wave_rom.hpp"
 
 #include <CLI/CLI.hpp>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <optional>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -23,6 +28,8 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -550,6 +557,215 @@ void apply_channels(ts::ChannelMask& mask, const std::vector<std::string>& lists
     }
 }
 
+/// Tags each file with the insertion-EFX traffic it carries, one JSON row per file that has any.
+///
+/// Corpus triage for the EFX block: which GS types the wild actually selects, and which files
+/// route notes through the block heavily enough to hear. The files go through `smf::read` — the
+/// same reader the render path uses, so XMI, MUS and the rest are scanned as they would be
+/// played — and the SysEx walk mirrors `ToneGenerator::send_sysex` byte for byte: DT1 only, the
+/// checksum folded to zero, `50` accepted beside `40`, and a message spanning several `40 03`
+/// addresses walked one byte at a time.
+///
+/// Names and the implemented flag come from the DLL's own directory, which is why this needs the
+/// ROM at all; `tools/scan_midi_efx.py` drives it over an archive and aggregates the rows.
+int scan_efx_command(const std::string& dll, const std::vector<fs::path>& files)
+{
+    const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
+    ts::InsertionEffect efx{rom};
+
+    // The directory with each type selected once, so a row can say whether this engine renders
+    // the type or passes it through. Keyed by the GS type key, `(MSB << 8) | LSB`.
+    //
+    // The implemented flag is *derived*, not a list kept here: `InsertionEffect::implemented()`
+    // reports whether the selected type resolved to a real processor rather than the passthrough,
+    // so transcribing an algorithm moves these rows on the next scan with no edit to this file.
+    // Do not replace it with a hard-coded set -- a stale one would quietly recommend the wrong
+    // comparison material.
+    std::map<int, std::pair<std::string, bool>> directory;
+    for (const ts::EfxRecord& record : efx.directory()) {
+        if (record.type_key == 0xFFFF) {
+            continue;
+        }
+        efx.select_type(record.type_key >> 8, record.type_key & 0xFF);
+        directory[record.type_key] = {record.name, efx.implemented()};
+    }
+
+    const auto key_label = [](int key) {
+        std::ostringstream text;
+        text << std::uppercase << std::setfill('0') << std::hex << std::setw(2)
+             << ((key >> 8) & 0x7F) << ' ' << std::setw(2) << (key & 0x7F);
+        return text.str();
+    };
+
+    for (const fs::path& file : files) {
+        std::vector<ts::MidiEvent> events;
+        try {
+            events = ts::smf::read(file);
+        } catch (const std::exception& error) {
+            std::cerr << file.string() << ": " << error.what() << '\n';
+            continue;
+        }
+
+        // Per-type tallies. Key -1 is the power-on state: parts routed through the block while
+        // no type was ever selected, which sounds as Thru with the default sends.
+        struct TypeUse {
+            int selects = 0;
+            std::int64_t notes = 0;
+        };
+        std::map<int, TypeUse> uses;
+
+        int selected = -1;
+        int type_msb = 0;
+        std::array<bool, 64> enabled{};
+        std::set<int> parts_on;
+        int switch_writes = 0;
+        int param_writes = 0;
+        int send_writes = 0;
+        int control_writes = 0;
+        std::int64_t notes_through = 0;
+        std::optional<std::int64_t> first_write;
+
+        // The resets that return the block to power-on: GM/GM2 System On, XG System On, GS
+        // reset and the system mode set, exactly the messages that reach `stream_reset`.
+        const auto reset_state = [&] {
+            selected = -1;
+            type_msb = 0;
+            enabled.fill(false);
+        };
+
+        for (const ts::MidiEvent& event : events) {
+            if (event.kind == ts::MidiEventKind::channel) {
+                if (event.message_type() == 0x90 && event.data2 > 0) {
+                    const int part = (event.port & 3) * 16 + event.channel();
+                    if (enabled[static_cast<std::size_t>(part)]) {
+                        ++notes_through;
+                        ++uses[selected].notes;
+                    }
+                }
+                continue;
+            }
+
+            const std::vector<std::uint8_t>& bytes = event.sysex;
+            if (bytes.size() >= 6 && bytes[0] == 0xF0 && bytes[1] == 0x7E && bytes[3] == 0x09
+                && (bytes[4] == 0x01 || bytes[4] == 0x03)) {
+                reset_state();
+                continue;
+            }
+            if (bytes.size() >= 9 && bytes[0] == 0xF0 && bytes[1] == 0x43 && bytes[3] == 0x4C
+                && bytes[4] == 0x00 && bytes[5] == 0x00 && bytes[6] == 0x7E) {
+                reset_state();
+                continue;
+            }
+            if (bytes.size() < 11 || bytes[0] != 0xF0 || bytes[1] != 0x41 || bytes[3] != 0x42
+                || bytes[4] != 0x12) {
+                continue;
+            }
+            unsigned int sum = 0;
+            for (std::size_t i = 5; i + 1 < bytes.size(); ++i) {
+                sum += bytes[i];
+            }
+            if (sum % 0x80 != 0) {
+                continue;
+            }
+
+            const int a1 = bytes[5];
+            const int a2 = bytes[6];
+            const int a3 = bytes[7];
+            const std::span<const std::uint8_t> data{bytes.data() + 8, bytes.size() - 10};
+            if (data.empty()) {
+                continue;
+            }
+
+            if ((a1 == 0x00 && a2 == 0x00 && a3 == 0x7F)
+                || ((a1 == 0x40 || a1 == 0x50) && a2 == 0x00 && a3 == 0x7F)) {
+                reset_state();
+                continue;
+            }
+            if (a1 != 0x40 && a1 != 0x50) {
+                continue;
+            }
+            const int block_port = a1 == 0x50 ? 1 : (event.port & 3);
+
+            if (a2 == 0x03) {
+                if (!first_write) {
+                    first_write = event.position;
+                }
+                int address = a3;
+                for (const std::uint8_t byte : data) {
+                    if (address == 0x00) {
+                        type_msb = byte;
+                    } else if (address == 0x01) {
+                        selected = (type_msb << 8) | byte;
+                        ++uses[selected].selects;
+                    } else if (address >= 0x03 && address <= 0x16) {
+                        ++param_writes;
+                    } else if (address >= 0x17 && address <= 0x1A) {
+                        // Sends *and* the routing byte at 1A. These are the ranges
+                        // `InsertionEffect::set_parameter` folds into its own parameter array --
+                        // 03-16 to index 0, 17-1A to 0x14, 1B-1E to 0x1C -- and they have to stay
+                        // in step with it, or a write the engine consumes is counted as nothing
+                        // here. 1A was missing and is why this range now ends there.
+                        ++send_writes;
+                    } else if (address >= 0x1B && address <= 0x1E) {
+                        ++control_writes;
+                    }
+                    ++address;
+                }
+            } else if ((a2 & 0xF0) == 0x40 && a3 == 0x22) {
+                if (!first_write) {
+                    first_write = event.position;
+                }
+                const int part =
+                    block_port * 16 + ts::sequence_builder::channel_from_block(a2 & 0x0F);
+                ++switch_writes;
+                enabled[static_cast<std::size_t>(part)] = data[0] != 0;
+                if (data[0] != 0) {
+                    parts_on.insert(part + 1); // as a mixer labels them, like --mute
+                }
+            }
+        }
+
+        if (uses.empty() && switch_writes == 0 && param_writes == 0 && send_writes == 0
+            && control_writes == 0) {
+            continue;
+        }
+
+        nlohmann::json types = nlohmann::json::object();
+        for (const auto& [key, use] : uses) {
+            nlohmann::json entry{{"selects", use.selects}, {"notes", use.notes}};
+            if (key < 0) {
+                entry["name"] = "(power-on Thru)";
+                entry["implemented"] = true;
+            } else if (const auto found = directory.find(key); found != directory.end()) {
+                entry["name"] = found->second.first;
+                entry["implemented"] = found->second.second;
+            } else {
+                entry["name"] = "(unknown type)";
+                entry["implemented"] = false;
+            }
+            types[key < 0 ? std::string{"--"} : key_label(key)] = std::move(entry);
+        }
+
+        const std::int64_t last = events.empty() ? 0 : events.back().position;
+        nlohmann::json row{{"path", file.string()},
+                           {"size", static_cast<std::int64_t>(fs::file_size(file))},
+                           {"seconds", std::round(static_cast<double>(last) / 3200.0) / 10.0},
+                           {"types", std::move(types)},
+                           {"param_writes", param_writes},
+                           {"send_writes", send_writes},
+                           {"control_writes", control_writes},
+                           {"switch_writes", switch_writes},
+                           {"parts_on", parts_on},
+                           {"notes_through", notes_through}};
+        if (first_write) {
+            row["first_write_s"] =
+                std::round(static_cast<double>(*first_write) / 3200.0) / 10.0;
+        }
+        std::cout << row.dump() << '\n';
+    }
+    return 0;
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -671,6 +887,12 @@ int main(int argc, char** argv)
     bench->add_option("midi", midi_path, "A MIDI file, to also time the two sequence stages");
     bench->add_option("--iterations", iterations, "Runs per stage; the fastest is reported");
 
+    std::vector<fs::path> scan_paths;
+    CLI::App* scan_efx = app.add_subcommand(
+        "scan-efx", "Tag files with the insertion-EFX traffic they carry, one JSON row each.");
+    add_dll(scan_efx);
+    scan_efx->add_option("files", scan_paths, "Music files to scan")->required();
+
     CLI11_PARSE(app, argc, argv);
 
     try {
@@ -712,6 +934,9 @@ int main(int argc, char** argv)
         }
         if (bench->parsed()) {
             return bench_command(dll, midi_path, iterations);
+        }
+        if (scan_efx->parsed()) {
+            return scan_efx_command(dll, scan_paths);
         }
         if (dump_effect->parsed()) {
             return dump_effect_command(dll, effect_kind, effect_type, effect_samples, output_file);
