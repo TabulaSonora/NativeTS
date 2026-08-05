@@ -38,6 +38,7 @@ add_library(tabulasonora
     soundfont/envelope_fit.cpp
     soundfont/modulators.cpp
     soundfont/sample_set.cpp
+    soundfont/sflist.cpp
     soundfont/writer.cpp
     voices/voice_pool.cpp
     realtime/frame_ring.cpp
