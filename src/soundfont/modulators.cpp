@@ -3,11 +3,6 @@
 namespace ts::sf2 {
 namespace {
 
-/// Packs an SF2 modulator source word.
-///
-/// `curve` is one of the four shapes (linear, concave, convex, switch); `bipolar` spans -1 to 1
-/// rather than 0 to 1; `negative` runs the curve backwards; `is_cc` selects a MIDI controller
-/// rather than one of the named sources.
 [[nodiscard]] constexpr std::uint16_t source(int curve,
                                              bool bipolar,
                                              bool negative,
@@ -57,6 +52,17 @@ constexpr int attenuation_amount = 960;
 }
 
 } // namespace
+
+std::uint16_t modulator_source(int curve, bool bipolar, bool negative, bool is_cc,
+                               int index) noexcept
+{
+    return source(curve, bipolar, negative, is_cc, index);
+}
+
+std::uint16_t velocity_attenuation_source() noexcept
+{
+    return source(curve_concave, false, true, false, velocity_source);
+}
 
 std::vector<Modulator> default_modulators(bool general_sound_extensions)
 {
@@ -126,11 +132,10 @@ std::vector<Modulator> default_modulators(bool general_sound_extensions)
     modulators.push_back(make(source(curve_linear, true, false, true, cc_vibrato_delay), 0,
                               Gen::delay_vib_lfo, 2400));
 
-    // CC#64 as a release extension. The engine only does this on the 57 half-damper piano tones and
-    // quantises the pedal to fully up or down everywhere else, so this is deliberately gentle: it
-    // is the closest a bank-wide default can get to a per-tone capability.
-    modulators.push_back(make(source(curve_linear, false, false, true, cc_sustain), 0,
-                              Gen::release_vol_env, 1200));
+    // CC#64 is deliberately NOT here. Half-damper is a per-tone capability -- 57 piano tones carry
+    // it and every other tone quantises the pedal to fully up or fully down -- so a bank-wide
+    // default would lengthen the release of the entire library. It is emitted per instrument
+    // instead; see `build_bank`.
 
     return modulators;
 }

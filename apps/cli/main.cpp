@@ -817,6 +817,11 @@ int export_soundfont_command(const std::string& dll,
               << built.overflowed_zones << " of " << built.fitted_zones
               << " zones needing more segments than SF2 has\n";
 
+    std::cout << "  per-instrument modulators: " << built.half_damper_instruments
+              << " half-damper, " << built.env_modifier_partials
+              << " filter-envelope modify, " << built.inverted_velocity_partials
+              << " inverted velocity\n";
+
     std::cout << "Writing " << output << "...\n";
     const ts::sf2::WriteReport report = ts::sf2::write(output, built.bank, codec);
     std::cout << "  igen " << report.igen_count << ", pgen " << report.pgen_count << "; xdta is "

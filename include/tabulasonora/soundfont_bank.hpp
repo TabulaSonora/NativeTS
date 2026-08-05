@@ -61,6 +61,15 @@ struct BankBuild {
     int lfos_emitted = 0;
     int random_lfos = 0;
 
+    /// Per-instrument modulators, which state what a partial does that a bank default cannot.
+    ///
+    /// `inverted_velocity_partials` are the ones that get *quieter* as velocity rises -- they
+    /// crossfade in from the top of their window -- which the default velocity response has
+    /// backwards.
+    int inverted_velocity_partials = 0;
+    int half_damper_instruments = 0;
+    int env_modifier_partials = 0;
+
     [[nodiscard]] double mean_fit_error() const noexcept
     {
         return fitted_zones > 0 ? fit_error_sum / fitted_zones : 0.0;
@@ -87,6 +96,23 @@ struct BankBuild {
 /// here rather than assumed. Passing `false` gives exactly the reader's own set, which is useful
 /// for telling a modulator problem apart from a generator one.
 [[nodiscard]] std::vector<Modulator> default_modulators(bool general_sound_extensions = true);
+
+/// Packs an SF2 modulator source word.
+///
+/// `curve` is one of the four shapes — 0 linear, 1 concave, 2 convex, 3 switch. `bipolar` spans
+/// -1 to 1 rather than 0 to 1, `negative` runs the curve backwards, and `is_cc` selects a MIDI
+/// controller rather than one of the named sources.
+[[nodiscard]] std::uint16_t modulator_source(int curve,
+                                             bool bipolar,
+                                             bool negative,
+                                             bool is_cc,
+                                             int index) noexcept;
+
+/// The source word the default velocity-to-attenuation modulator uses.
+///
+/// A zone modulator carrying this exact word **replaces** the bank default rather than adding to
+/// it, which is the whole mechanism by which a partial states its own velocity response.
+[[nodiscard]] std::uint16_t velocity_attenuation_source() noexcept;
 
 [[nodiscard]] BankBuild build_bank(const PatchDirectory& directory,
                                    const DrumKitTable& kits,

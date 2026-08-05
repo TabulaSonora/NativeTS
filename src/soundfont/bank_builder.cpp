@@ -229,6 +229,8 @@ BankBuild build_bank(const PatchDirectory& directory,
 
             Instrument instrument;
             instrument.name = tidy(record->name()) + "#" + std::to_string(partial_index);
+            int first_key = 60;
+            bool have_first_key = false;
 
             const auto [velocity_low, velocity_high] = partial.velocity_window();
             const int tone_level = directory.tone_level(tone_number);
@@ -240,6 +242,11 @@ BankBuild build_bank(const PatchDirectory& directory,
                 const int run_index = set.run_for_wave(zone.wave);
                 if (run_index < 0) {
                     continue;
+                }
+
+                if (!have_first_key) {
+                    first_key = zone.key_low;
+                    have_first_key = true;
                 }
 
                 Zone out;
@@ -489,6 +496,82 @@ BankBuild build_bank(const PatchDirectory& directory,
 
             if (instrument.zones.empty()) {
                 continue;
+            }
+
+            // ── the partial's own modulators, in a global zone ───────────────
+            //
+            // A zone modulator whose source, destination and amount-source match a bank default
+            // *replaces* it rather than adding to it, and the reader merges an instrument's global
+            // zone the same way (`ss_preset_get_synthesis_data`: instrument zone, then unique
+            // global, then unique defaults). So per-partial behaviour that contradicts a default
+            // belongs here, once per instrument rather than once per key zone.
+            Zone global;
+
+            // Velocity. The default set applies a uniform 960 cB concave response to everything,
+            // which this engine does not do: a partial crossfades between its own two edge levels
+            // across its own velocity window, and some partials run the other way entirely --
+            // louder at the bottom of the window than the top. Replacing the default with the
+            // measured span keeps both the depth and the direction.
+            //
+            // It stays an approximation. The modulator's curve spans the whole 0-127 range while
+            // the partial's crossfade spans only its window, so a narrow window is under-served.
+            {
+                const auto [velocity_low, velocity_high] = partial.velocity_window();
+                const int tone_level = directory.tone_level(tone_number);
+                const int key = instrument.zones.empty() ? 60 : first_key;
+
+                const std::optional<int> low_level = levels.partial_level(partial, velocity_low);
+                const std::optional<int> high_level = levels.partial_level(partial, velocity_high);
+                if (low_level && high_level) {
+                    const int zone_level = directory.zone_level(partial.multisample(), key,
+                                                                partial.key_center());
+                    const double low_gain = levels.amp_of(
+                        levels.base_level(partial, *low_level, key, zone_level, tone_level));
+                    const double high_gain = levels.amp_of(
+                        levels.base_level(partial, *high_level, key, zone_level, tone_level));
+                    const int span = centibels(low_gain) - centibels(high_gain);
+
+                    global.modulators.push_back(Modulator{velocity_attenuation_source(),
+                                                          Gen::initial_attenuation,
+                                                          static_cast<std::int16_t>(
+                                                              std::clamp(span, -960, 960)),
+                                                          0, 0});
+                    if (span < 0) {
+                        ++built.inverted_velocity_partials;
+                    }
+                }
+            }
+
+            // Half-damper. Only the 57 piano tones respond to a partly-pressed pedal at all; every
+            // other tone quantises CC#64 to fully up or fully down before it can reach the release
+            // ramp. A bank-wide default would lengthen the whole library's release.
+            if (directory.half_damper(tone_number)) {
+                global.modulators.push_back(
+                    Modulator{modulator_source(0, false, false, true, 64), Gen::release_vol_env,
+                              1200, 0, 0});
+                ++built.half_damper_instruments;
+            }
+
+            // CC#72/73/75 reach the filter envelope as well as the amplitude one, but only on
+            // partials that opt in through bit 4 of block byte 0x0e. `tvf_compute_env_rates` zeroes
+            // the bias outright when the bit is clear, so on the rest those controllers move the
+            // amplitude envelope alone -- which is what the bank defaults already do.
+            if (TvfChain::responds_to_env_modifiers(partial)) {
+                global.modulators.push_back(
+                    Modulator{modulator_source(0, true, false, true, 73), Gen::attack_mod_env,
+                              6000, 0, 0});
+                global.modulators.push_back(
+                    Modulator{modulator_source(0, true, false, true, 75), Gen::decay_mod_env, 3600,
+                              0, 0});
+                global.modulators.push_back(
+                    Modulator{modulator_source(0, true, false, true, 72), Gen::release_mod_env,
+                              3600, 0, 0});
+                ++built.env_modifier_partials;
+            }
+
+            if (!global.modulators.empty()) {
+                // A global zone is one carrying no `sampleID`, and it must come first.
+                instrument.zones.insert(instrument.zones.begin(), std::move(global));
             }
 
             instrument_of_partial.emplace(
