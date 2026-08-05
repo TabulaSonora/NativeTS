@@ -319,11 +319,6 @@ private:
     double tremolo_ = 1.0;
     double frequency_ = 0.0;
     double damping_ = 0.0;
-    /// Where the control tick wants the coefficients; the ramps below approach it.
-    double frequency_target_ = 0.0;
-    double damping_target_ = 0.0;
-    CoefficientRamp frequency_ramp_;
-    CoefficientRamp damping_ramp_;
     double pitch_modulation_ = 0.0;
 };
 

@@ -25,87 +25,10 @@ namespace ts {
 ///
 /// Cutoff is note-independent. There is no key-follow on it; brightness tracks the keyboard through
 /// the multisample instead.
-/// The engine's anti-zipper smoother for the filter coefficients — `voice_ctrl_ramp_c`.
-///
-/// The coefficients do not step. `f` and `q` each approach their new value exponentially, closing a
-/// fixed fraction of the remaining distance once a millisecond: `step = (target − current) × rate
-/// >> 13`, with the rate drawn from a table of `4096 / (2i)`. That makes the fraction `1 / (4i)` and
-/// the time constant `4i` milliseconds — the 2 to 40 ms the reverse-engineering notes record.
-///
-/// Stepping them instead is audible in a way that is easy to miss, because it is not a wrong
-/// timbre: refreshing coefficients once per 320-sample control block puts a discontinuity in the
-/// filter state every 10 ms, and 100 Hz is not harmonically related to any note, so the splatter
-/// lands *between* the harmonics as a broadband floor. Measured on a middle C through Piano 1, that
-/// floor sat about 10 dB above the same note rendered through a smoothed filter, and swamped the
-/// real signal above about 4 kHz.
-///
-/// `f` and `q` ramp **independently**, which is why the stability clamp is applied per sample here
-/// rather than once when the pair is computed: during a move the two are not the mutually
-/// consistent pair a steady-state calculation produces, and a change that raises `q` faster than it
-/// lowers `f` can cross a bound neither endpoint crosses.
-class CoefficientRamp {
-public:
-    /// Samples between updates — one millisecond at the engine's rate.
-    static constexpr int update_samples = 32;
-
-    /// The rate meets the error thirteen bits down.
-    static constexpr int rate_shift = 13;
-
-    /// The rate word for a divider index: `4096 / (2i)`, so the time constant is `4i` milliseconds.
-    ///
-    /// Index zero is the immediate case and is spelled as the table's own first entry rather than
-    /// as a division by nothing.
-    [[nodiscard]] static constexpr int rate_word(int index) noexcept
-    {
-        return index <= 0 ? 4095 : 4096 / (2 * index);
-    }
-
-    /// Starts the ramp at a value with no glide.
-    ///
-    /// A voice beginning mid-sweep starts at the level already reached rather than sliding up to
-    /// it, which is what `tvf_env_prep` does by writing the same value to the source and the
-    /// target.
-    void seed(double value) noexcept
-    {
-        current_ = value;
-        phase_ = 0;
-        seeded_ = true;
-    }
-
-    [[nodiscard]] bool is_seeded() const noexcept { return seeded_; }
-
-    /// Advances one sample toward a target and returns where it now stands.
-    [[nodiscard]] double step(double target, int rate) noexcept
-    {
-        if (!seeded_) {
-            seed(target);
-            return current_;
-        }
-        if (++phase_ >= update_samples) {
-            phase_ = 0;
-            current_ += (target - current_) * (static_cast<double>(rate) / (1 << rate_shift));
-        }
-        return current_;
-    }
-
-private:
-    double current_ = 0.0;
-    int phase_ = 0;
-    bool seeded_ = false;
-};
-
 class TvfChain {
 public:
     /// Samples between coefficient refreshes — the 100 Hz control tick.
     static constexpr int control_block_samples = 320;
-
-    /// The divider index the coefficient ramps run at by default.
-    ///
-    /// The per-partial rate word lives in a voice field this project has not tied back to a tone
-    /// table byte, so one index stands for all of them. Index one is the fastest the table offers —
-    /// a 4 ms time constant — which is the most conservative choice available: it is the smallest
-    /// departure from the unsmoothed behaviour that still removes the discontinuity.
-    static constexpr int default_ramp_index = 1;
 
     /// The envelope's peak and its five stage offsets, in cutoff units relative to that peak.
     struct Offsets {
@@ -242,14 +165,11 @@ public:
     /// The coefficients come from the cutoff's **mean over the block they will serve**, not its
     /// value at the tick: the envelope can cross several segments inside one 10 ms tick, and a
     /// single sample point costs about 1.7% of peak on a piano attack.
-    /// `ramp_index` selects the coefficient smoother's rate; a negative value disables the ramp and
-    /// restores the stepped behaviour, which is kept so the difference can be measured.
     void apply(std::span<float> signal,
                std::span<const double> cutoff15,
                int filter_type,
                int resonance_byte,
-               int block_samples = control_block_samples,
-               int ramp_index = default_ramp_index) const noexcept;
+               int block_samples = control_block_samples) const noexcept;
 
 private:
     // The env-depth region is addressed by absolute VA in the decompile. Relative to the start of
@@ -267,9 +187,6 @@ private:
 
     /// The damping coefficient before its scaling — the integer the ceiling is indexed by.
     [[nodiscard]] int damping_raw(int units, int resonance_byte, int filter_type) const noexcept;
-
-    /// The stability ceiling `f` must not exceed for a damping the ramp has reached.
-    [[nodiscard]] double f_ceiling_for(double damping) const noexcept;
 
     const EnvelopeMachine* envelope_machine_;
     std::span<const std::uint8_t> env_depth_;

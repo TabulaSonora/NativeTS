@@ -261,9 +261,6 @@ void PartialVoice::render(std::span<float> destination,
         auto value = static_cast<double>(reader_.next(slot_ratio_));
 
         if (tap_ != FilterTap::bypass) {
-            const int rate = CoefficientRamp::rate_word(TvfChain::default_ramp_index);
-            frequency_ = frequency_ramp_.step(frequency_target_, rate);
-            damping_ = damping_ramp_.step(damping_target_, rate);
             value = filter_.process(value, frequency_, damping_, tap_);
         }
 
@@ -378,10 +375,8 @@ void PartialVoice::control(double bend_milli_semitones,
 
         const int units = tvf_->cutoff_units(total / control_block, resonance_byte_);
         const auto coefficients = tvf_->coefficients(units, resonance_byte_, filter_type_);
-        // The targets. The coefficients themselves reach the filter through the anti-zipper ramps,
-        // stepped per sample below, so that this path and the offline one smooth alike.
-        frequency_target_ = coefficients.frequency;
-        damping_target_ = coefficients.damping;
+        frequency_ = coefficients.frequency;
+        damping_ = coefficients.damping;
     }
 }
 
