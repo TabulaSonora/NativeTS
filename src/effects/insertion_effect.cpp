@@ -110,6 +110,11 @@ constexpr std::array<int, 19> od2_bank_registers_b{
 /// The second drive curve has two variants here, picked by the chain's OD type rather than fixed:
 /// `0x18198E3C0` is Overdrive's, `0x18198E480` the other one.
 constexpr std::int64_t od2_drive_alt_offset = file_offset(0x18198E480);
+// Rotary (`fx_param_apply_57bc0`). Its own three curves on top of the shared gain and level ones.
+constexpr std::int64_t rotary_rate_offset = file_offset(0x18198CA60);   // u16 -> 0x139, 0xBE
+constexpr std::int64_t rotary_spread_offset = file_offset(0x18198F040); // u8  -> 0xF2, 0x126
+constexpr std::int64_t rotary_speed_offset = file_offset(0x18198B7E0);  // u16 -> 0xB6/0xBA, 0x131/0x135
+
 /// The two chains' amp-simulator register banks (`chorus_load_algo_regs` takes the bank).
 constexpr std::int64_t od2_amp_bank_a_offset = file_offset(0x181896E60);
 constexpr std::int64_t od2_amp_bank_b_offset = file_offset(0x181896E88);
@@ -800,11 +805,228 @@ void od_od2_sample(float in_left,
     out_left = c[0x176] * left + 1e-08F;
 }
 
+/// `dsp_phase_wrap` @ 0x180005C20: fold a float into [-1, 1) by repeated ±2, after the same
+/// 1e-08 nudge every node in this engine applies.
+[[nodiscard]] inline float phase_wrap(float x) noexcept
+{
+    x += 1e-08F;
+    while (x < -1.0F) {
+        x += 2.0F;
+    }
+    while (x >= 1.0F) {
+        x -= 2.0F;
+    }
+    return x;
+}
+
+/// `dsp_wavetable_lookup` @ 0x180005C80: read the delay buffer as a table at a fractional
+/// position. The phase is scaled by 2^27 into an int, and the index and fraction come out of that
+/// by shifting rather than by float arithmetic — which is why a negative phase clamps to zero
+/// rather than wrapping, and why the fraction is a tenth of a bit's worth of resolution.
+struct TableTap {
+    float fraction;
+    float sample;
+    float next;
+};
+
+[[nodiscard]] inline TableTap wavetable_tap(float phase, Tape& table) noexcept
+{
+    std::int32_t scaled = 0;
+    if (phase >= 0.0F) {
+        if (phase >= 16.0F) {
+            scaled = 0x7FFFFFFF;
+        } else {
+            scaled = static_cast<std::int32_t>(phase * 1.3421773e+08F);
+        }
+    } else {
+        scaled = 0;
+    }
+    const std::int32_t shifted = (scaled >> 4) & 0x0FFFFFFF;
+    const int index = shifted >> 10;
+    return TableTap{
+        .fraction = static_cast<float>((scaled >> 4) & 0x3FF) * 0.0009765625F,
+        .sample = table.tap(index),
+        .next = table.tap(index + 1),
+    };
+}
+
+/// `fx_algo_rotary` @ 0x1800382F0: the rotating speaker. Horn and drum are written into the delay
+/// buffer at two fixed points and read back by a *rotating* tap — a phase accumulator per rotor,
+/// wrapped into [-1, 1), turned into a table position, and interpolated. Each rotor also has its
+/// own tremolo, taken from the same phase, so a rotor modulates level and delay together, which is
+/// what a Leslie does.
+void rotary_sample(float in_left,
+                   float in_right,
+                   float& out_left,
+                   float& out_right,
+                   Tape& a,
+                   Tape& b,
+                   const float* c) noexcept
+{
+    a.at(0x1F8) = in_right;
+    float f4 = c[0] * a.at(0x1E0) + 1e-08F;
+    float f7 = c[1] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1D4) = f7;
+    f4 = f4 * c[3] + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1F8) = c[4] * f7 + 1e-08F;
+    out_right = c[6] * f4 + 1e-08F;
+
+    float f5 = a.at(0x1FC) * c[0x0A] + c[0x0B] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f5;
+    f4 = c[0x0E] * f5 + 1e-08F;
+    a.at(0x1D4) = f4;
+    f4 = f4 * 1e-05F + c[0x10] * a.at(0x20) + f4 * c[0x12] + 1e-08F;
+    a.at(0x1D4) = f4;
+    f7 = c[0x17] * f4 + 1e-08F;
+    a.at(0x80) = f7;
+    a.at(0x1C) = c[0x14] * a.at(0x20) + f4 * 1e-05F + f4 * c[0x16] + 1e-08F;
+
+    // The horn feed: a five-pole shelf into the buffer's head.
+    f5 = (c[0x1B] + 1e-05F) * a.at(0x80) + a.at(0x84) * 1e-05F + a.at(0x84) * c[0x1D]
+         + a.at(0x88) * 1e-05F + a.at(0x88) * c[0x1F] + a.at(0x8C) * 1e-05F + a.at(0x8C) * c[0x21]
+         + a.at(0x90) * 1e-05F + a.at(0x90) * c[0x23] + 1e-08F;
+    a.at(0x1D4) = f5;
+    a.at(0x88) = f5;
+    b.tap(0) = c[0x26] * f5 + 1e-08F;
+
+    // The drum feed, into the far half of the buffer.
+    a.at(0x94) = f7;
+    f5 = (c[0x2B] + 1e-05F) * a.at(0x94) + a.at(0x98) * 1e-05F + a.at(0x98) * c[0x2D]
+         + a.at(0x9C) * 1e-05F + a.at(0x9C) * c[0x2F] + 1e-08F;
+    a.at(0x1D4) = f5;
+    a.at(0x98) = f5;
+    b.tap(0x4000) = c[0x32] * f5 + 1e-08F;
+
+    // ---- rotor one -----------------------------------------------------------------------------
+    float f6 = a.at(0x104) * c[0x38] + c[0x37] * 0.5F + 1e-05F + c[0x3B] * 0.5F + 1e-08F;
+    a.at(0x1D4) = f6;
+    f6 = (c[0x3F] + 1e-05F) * f6 + 1e-08F;
+    a.at(0x1D4) = f6;
+    float rate = c[0x42] * f6 + a.at(0x104) * c[0x43] + 1e-08F;
+    a.at(0x100) = rate;
+    a.at(0x40) = phase_wrap(c[0x48] * a.at(0x44) + 4.8828e-09F + (rate * 0.00195312F));
+
+    float tremolo = c[0x4D] * a.at(0x40);
+    if (tremolo <= 0.0F) {
+        tremolo = -tremolo;
+    }
+    f6 = tremolo + 1e-08F;
+    a.at(0x1D4) = f6;
+    f6 = f6 * f6 + f6 * 1e-05F + 1e-08F;
+    a.at(0x1D4) = f6;
+    TableTap tap =
+        wavetable_tap(phase_wrap((c[0x56] + 1e-05F) * f6 + c[0x58] * 0.5F + c[0x59] * 0.5F), b);
+    a.at(0x1EC) = tap.next;
+    a.at(0x1E8) = tap.sample;
+    float wet = (tap.sample * c[0x6F]) + (tap.fraction * tap.next) - (tap.fraction * tap.sample);
+    float pan = c[0x71] * phase_wrap(c[0x6C] * a.at(0x40) + c[0x6D] * 0.5F);
+    a.at(0x1D4) = pan;
+    if (pan <= 0.0F) {
+        pan = -pan;
+    }
+    wet += 1e-08F;
+    a.at(0x1D4) = wet;
+    f5 = b.tap(0x7B);
+    a.at(0x1E8) = f5;
+    float depth = c[0x72] * 0.5F + pan + 1e-08F;
+    f6 = c[0x75] * f5 + wet * c[0x74] + 1e-08F;
+    a.at(0x1D4) = f6;
+    a.at(0xC4) = f6 * depth + f6 * 1e-05F + 1e-08F;
+
+    // ---- rotor two, the same shape on its own phase ---------------------------------------------
+    float pan2 = c[0x81] * phase_wrap(c[0x7D] * a.at(0x40) + c[0x7E] * 0.5F);
+    a.at(0x1D4) = pan2;
+    if (pan2 <= 0.0F) {
+        pan2 = -pan2;
+    }
+    f6 = pan2 + 1e-08F;
+    a.at(0x1D4) = f6;
+    f6 = f6 * f6 + f6 * 1e-05F + 1e-08F;
+    a.at(0x1D4) = f6;
+    tap = wavetable_tap(phase_wrap((c[0x8A] + 1e-05F) * f6 + c[0x8C] * 0.5F + c[0x8D] * 0.5F), b);
+    a.at(0x1EC) = tap.next;
+    a.at(0x1E8) = tap.sample;
+    float wet2 = (tap.sample * c[0xA3]) + (tap.fraction * tap.next) - (tap.fraction * tap.sample);
+    float pan3 = c[0xA5] * phase_wrap(c[0xA0] * a.at(0x40) + c[0xA1] * 0.5F);
+    a.at(0x1D4) = pan3;
+    if (pan3 <= 0.0F) {
+        pan3 = -pan3;
+    }
+    wet2 += 1e-08F;
+    a.at(0x1D4) = wet2;
+    a.at(0x1E8) = b.tap(0x385);
+    const float depth2 = c[0xA6] * 0.5F + pan3 + 1e-08F;
+    f6 = wet2 * c[0xA8] + c[0xA9] * a.at(0x1E8) + 1e-08F;
+    a.at(0x1D4) = f6;
+    a.at(0xC8) = f6 * depth2 + f6 * 1e-05F + 1e-08F;
+
+    // ---- the drum rotor ------------------------------------------------------------------------
+    f6 = a.at(0x10C) * c[0xB3] + c[0xB2] * 0.5F + 1e-05F + c[0xB6] * 0.5F + 1e-08F;
+    a.at(0x1D4) = f6;
+    f6 = (c[0xBA] + 1e-05F) * f6 + 1e-08F;
+    a.at(0x1D4) = f6;
+    const float rate2 = c[0xBD] * f6 + a.at(0x10C) * c[0xBE] + 1e-08F;
+    a.at(0x108) = rate2;
+    a.at(0x48) = phase_wrap(c[0xC3] * a.at(0x4C) + 4.8828e-09F + (rate2 * 0.00195312F));
+    float trem2 = c[0xC8] * a.at(0x48);
+    if (trem2 <= 0.0F) {
+        trem2 = -trem2;
+    }
+    a.at(0x1D4) = trem2 + 1e-08F;
+    tap = wavetable_tap(
+        phase_wrap((c[0xCC] + 1e-05F) * (trem2 + 1e-08F) + c[0xCE] * 0.5F + c[0xCF] * 0.5F), b);
+    const float shelf = a.at(0x188);
+    a.at(0x1EC) = tap.next;
+    a.at(0x1E8) = tap.sample;
+    a.at(0xD4) = (tap.sample * c[0xE5]) + (tap.fraction * tap.next) - (tap.fraction * tap.sample)
+                 + 1e-08F;
+    a.at(0x1E8) = b.tap(0x4148);
+    a.at(0xCC) = c[0xEB] * a.at(0x1E8) + 1e-08F;
+    a.at(0x1E8) = b.tap(0x44A4);
+    f7 = c[0xF1] * a.at(0x1E8) + 1e-08F;
+    a.at(0xD0) = f7;
+
+    // ---- the two output shelves ----------------------------------------------------------------
+    a.at(0x180) = a.at(0xC4) * c[0xF5] + a.at(0xC8) * c[0xF6] + a.at(0xCC) * c[0xF7]
+                  + f7 * c[0xF8] + a.at(0xD4) * c[0xF9] + 1e-08F;
+    const float shelf_r = a.at(0x198);
+    float f8 = (c[0xFD] + 1e-05F) * a.at(0x180) + a.at(0x184) * 1e-05F + a.at(0x184) * c[0xFF]
+               + shelf * 1e-05F + shelf * c[0x101] + 1e-08F;
+    a.at(0x184) = f8;
+    f6 = shelf * c[0x103] + shelf * 1e-05F + f8 * 1e-05F + f8 * c[0x105] + a.at(0x18C) * 1e-05F
+         + a.at(0x18C) * c[0x107] + 1e-08F;
+    a.at(0x188) = f6;
+    a.at(0x1E4) = c[0x10A] * f6 + 1e-08F;
+
+    a.at(0x190) = a.at(0xC4) * c[0x10E] + a.at(0xC8) * c[0x10F] + a.at(0xCC) * c[0x110]
+                  + f7 * c[0x111] + a.at(0xD4) * c[0x112] + 1e-08F;
+    f5 = (c[0x116] + 1e-05F) * a.at(0x190) + a.at(0x194) * 1e-05F + a.at(0x194) * c[0x118]
+         + shelf_r * 1e-05F + shelf_r * c[0x11A] + 1e-08F;
+    a.at(0x194) = f5;
+    f6 = (c[0x11C] + 1e-05F) * shelf_r + f5 * 1e-05F + f5 * c[0x11E] + a.at(0x19C) * 1e-05F
+         + a.at(0x19C) * c[0x120] + 1e-08F;
+    a.at(0x198) = f6;
+    a.at(0x1DC) = c[0x123] * f6 + 1e-08F;
+
+    a.at(0x1F8) = in_left;
+    float left = c[0x170] * a.at(0x1E4) + 1e-08F;
+    const float left_in = c[0x171] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1D4) = left_in;
+    left = c[0x173] * left + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1F8) = c[0x174] * left_in + 1e-08F;
+    out_left = c[0x176] * left + 1e-08F;
+}
+
 /// Which transcription serves a dispatch index.
 enum class Processor {
     thru, ///< dispatch 0, and dispatch 1's cleared "no effect" state
     overdrive, ///< dispatch 3 and 4 — one dataflow, two presets
     od_od2, ///< dispatch 42 — two overdrive chains in parallel
+    rotary, ///< dispatch 9 — the rotating speaker
     efx_reverb, ///< dispatch 0x19, with the inverted output routing
     passthrough, ///< not transcribed yet: signal passes unchanged
 };
@@ -822,6 +1044,8 @@ enum class Processor {
         return Processor::efx_reverb;
     case 42:
         return Processor::od_od2;
+    case 9:
+        return Processor::rotary;
     default:
         return Processor::passthrough;
     }
@@ -859,6 +1083,10 @@ struct InsertionEffect::Impl {
     std::array<std::uint8_t, 128> od2_drive_alt{};
     std::array<std::uint16_t, amp_bank_register_count> od2_amp_bank_a{};
     std::array<std::uint16_t, amp_bank_register_count> od2_amp_bank_b{};
+    std::array<std::uint16_t, 128> rotary_rate{};
+    std::array<std::uint8_t, 128> rotary_spread{};
+    std::array<std::uint16_t, 128> rotary_speed{};
+
     std::array<std::uint8_t, 2> od2_type_latch{};
     std::array<std::uint8_t, 2> od2_amp_type_latch{};
     std::array<std::uint8_t, 2> od2_amp_switch_latch{};
@@ -929,6 +1157,7 @@ struct InsertionEffect::Impl {
                           std::uint8_t type,
                           std::uint8_t simulator);
     void apply_od_od2();
+    void apply_rotary(bool on_select);
     void od2_chain(int chain, int type_param, int drive_param, int control_offset);
     void apply_efx_reverb();
     void reverb_character_program();
@@ -1082,6 +1311,9 @@ void InsertionEffect::Impl::load_tables(const RomImage& rom)
         read_u8s(file_offset(od2_bank_tables[i]), od2_bank[i]);
     }
     read_u8s(od2_drive_alt_offset, od2_drive_alt);
+    read_u16s(rotary_rate_offset, rotary_rate);
+    read_u8s(rotary_spread_offset, rotary_spread);
+    read_u16s(rotary_speed_offset, rotary_speed);
     read_u16s(od2_amp_bank_a_offset, od2_amp_bank_a);
     read_u16s(od2_amp_bank_b_offset, od2_amp_bank_b);
 
@@ -1179,6 +1411,9 @@ void InsertionEffect::Impl::apply(bool on_select)
         break;
     case Processor::od_od2:
         apply_od_od2();
+        break;
+    case Processor::rotary:
+        apply_rotary(on_select);
         break;
     case Processor::efx_reverb:
         apply_efx_reverb();
@@ -1320,6 +1555,89 @@ void InsertionEffect::Impl::amp_bank_program(
     registers.write16(r[2], value(14));
     registers.write_slew(r[0], amp_switch_a[sw]);
     registers.write_slew(r[1], amp_switch_b[sw]);
+}
+
+/// `fx_param_apply_57bc0`, the Rotary handler. Parameters 0/1 are the two rotors' slow and fast
+/// speeds and 4/5 their fast counterparts; 10 selects which pair is live, so the *speed switch*
+/// picks between two stored rates rather than sweeping one.
+void InsertionEffect::Impl::apply_rotary(bool on_select)
+{
+    // Selecting the type poisons these two shadow bytes rather than leaving them at the defaults
+    // just copied in, which is what makes both rotor rates re-apply on a fresh selection even
+    // when the new defaults happen to match the latched values.
+    if (on_select) {
+        shadow[2] = 0xFF;
+        shadow[6] = 0xFF;
+    }
+
+    apply_common_tail();
+
+    if (changed(0x10)) {
+        const std::size_t v = params[0x10];
+        for (const int base : {0x17C, 0x195}) {
+            registers.write16(base, low_gain_f[v]);
+            registers.write16(base + 2, low_gain_d[v]);
+            registers.write16(base + 4, low_gain_h[v]);
+        }
+        shadow[0x10] = params[0x10];
+    }
+    if (changed(0x11)) {
+        registers.write_slew(0x18A, 0);
+        registers.write_slew(0x1A3, 0);
+        const std::size_t v = params[0x11];
+        registers.write16(0x184, high_gain_f[v]);
+        registers.write16(0x182, high_gain_d[v]);
+        registers.write16(0x186, high_gain_h[v]);
+        registers.write16(0x19D, high_gain_f[v]);
+        registers.write16(0x19B, high_gain_d[v]);
+        registers.write16(0x19F, high_gain_h[v]);
+        registers.write_slew(0x18A, 0x20);
+        registers.write_slew(0x1A3, 0x20);
+        shadow[0x11] = params[0x11];
+    }
+
+    // The two rotors' rate registers and their depths.
+    if (changed(2)) {
+        registers.write16(0x139, rotary_rate[params[2]]);
+        shadow[2] = params[2];
+    }
+    if (changed(3)) {
+        registers.write_slew(0xB2, level_curve[params[3]]);
+        shadow[3] = params[3];
+    }
+    if (changed(6)) {
+        registers.write16(0xBE, rotary_rate[params[6]]);
+        shadow[6] = params[6];
+    }
+    if (changed(7)) {
+        registers.write_slew(0xA6, level_curve[params[7]]);
+        shadow[7] = params[7];
+    }
+    if (changed(8)) {
+        registers.write_slew(0xF1, level_curve[params[8]]);
+        registers.write_slew(0x125, level_curve[params[8]]);
+        registers.write_slew(0xF2, rotary_spread[params[8]]);
+        registers.write_slew(0x126, rotary_spread[params[8]]);
+        shadow[8] = params[8];
+    }
+
+    // The speed switch, which also runs in the control-only mode. Below the midpoint the slow
+    // pair is live, at or above it the fast pair -- and the two rotors take their speed from
+    // different parameters, which is why the horn and the drum change over together but not by
+    // the same amount.
+    const int selected = std::clamp(static_cast<int>(params[10]), 0, 0x7F);
+    const std::size_t horn = selected < 0x40 ? params[4] : params[5];
+    const std::size_t drum = selected < 0x40 ? params[0] : params[1];
+    registers.write16(0xB6, rotary_speed[horn]);
+    registers.write16(0xBA, rotary_speed[horn]);
+    registers.write16(0x131, rotary_speed[drum]);
+    registers.write16(0x135, rotary_speed[drum]);
+    shadow[10] = params[10];
+
+    const auto level = static_cast<std::size_t>(std::clamp<int>(params[0x13], 0, 0x7F));
+    registers.write_slew(0x80, level_curve[level]);
+    registers.write_slew(0x1F0, level_curve[level]);
+    shadow[0x13] = params[0x13];
 }
 
 /// `fx_param_apply_51be0`, the OD / OD2 handler. Two chains, laid out identically in the GS
@@ -1726,6 +2044,14 @@ void InsertionEffect::process(std::span<const float> in_left,
                         right,
                         impl.tape_a,
                         coef);
+        } else if (impl.processor == Processor::rotary) {
+            rotary_sample(in_left[n] + in_left[n],
+                          in_right[n] + in_right[n],
+                          left,
+                          right,
+                          impl.tape_a,
+                          impl.tape_b,
+                          coef);
         } else if (impl.processor == Processor::od_od2) {
             od_od2_sample(in_left[n] + in_left[n],
                           in_right[n] + in_right[n],

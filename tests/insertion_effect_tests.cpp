@@ -294,6 +294,46 @@ TEST_CASE("OD / OD2 runs both chains", "[efx][sccore]")
     CHECK(rms(std::span<const float>{quiet_left}.subspan(4096)) < base);
 }
 
+TEST_CASE("Rotary modulates rather than merely passing", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x01, 0x22);
+    CHECK(efx.current().name == "Rotary");
+    CHECK(efx.implemented());
+
+    // Four seconds of steady tone. A rotor is an amplitude and delay sweep, so the test is that
+    // the output is *not* steady -- a transcription that dropped the rotating tap would pass a
+    // level check and fail this.
+    const std::vector<float> input = sine(32000 * 4, 0.25);
+    std::vector<float> left(input.size());
+    std::vector<float> right(input.size());
+    efx.process(input, input, left, right);
+
+    const auto window = [&](std::size_t from) {
+        return rms(std::span<const float>{left}.subspan(from, 3200));
+    };
+    double lowest = 1.0;
+    double highest = 0.0;
+    for (std::size_t at = 16000; at + 3200 < left.size(); at += 3200) {
+        lowest = std::min(lowest, window(at));
+        highest = std::max(highest, window(at));
+    }
+    CHECK(highest > 0.0);
+    // The sweep has to be visible in the envelope but must not be gating the signal off.
+    CHECK(highest / lowest > 1.02);
+    CHECK(lowest / highest > 0.2);
+
+    // Both rotors' speed switch is one parameter (0x0D), and moving it has to change the result.
+    efx.select_type(0x01, 0x22);
+    efx.set_parameter(0x0D, 0x7F);
+    std::vector<float> fast_left(input.size());
+    std::vector<float> fast_right(input.size());
+    efx.process(input, input, fast_left, fast_right);
+    CHECK(rms(std::span<const float>{fast_left}.subspan(16000))
+          != rms(std::span<const float>{left}.subspan(16000)));
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();
