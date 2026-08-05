@@ -1290,13 +1290,17 @@ bool InsertionEffect::implemented() const
 // wet on the reverb bus for the same byte, where this engine put 1.144 — so the raw fraction is
 // scaled to bring the two into the engine's ratio.
 //
-// It is deliberately a ratio against the part send rather than a constant tuned to match the DLL
-// outright, because the shared reverb path does not match the engine on its own: isolated by
-// subtracting a send-zero render, this engine's reverb wet starts ~14% louder and decays several
-// times faster than the module's. A ratio between two paths through the same network is immune to
-// that -- it measured flat across the whole send sweep, which an absolute constant did not -- and
-// it keeps the EFX send correct relative to the part send, so correcting the network later
-// corrects both instead of breaking this.
+// It is a ratio against the part send rather than a constant fitted to render levels, because a
+// ratio between two paths through the same network cancels everything the two share. That matters:
+// the wet level measured off a rendered note also carries the dry signal that fed the reverb, which
+// differs a little between engines and varies with the patch (+-11% across four), so an absolute
+// constant fitted that way would be fitting the voice path as much as the send. The ratio measured
+// flat across the whole send sweep where absolute levels did not, which is the sign it is the right
+// quantity.
+//
+// The network itself is not in question: its impulse response, taken from the live engine by
+// calling the module's own reverb processor (`scdec revir`), matches this one to 1.0000 in every
+// window of a 32000-sample response, peaks agreeing to five figures.
 double InsertionEffect::reverb_send() const noexcept
 {
     constexpr double bus_conversion = 0.857;

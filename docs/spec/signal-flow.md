@@ -247,11 +247,20 @@ is the only place the host sample rate exists; everything upstream is the 32 kHz
 - The dry path shows measurably zero DC in real renders, but no DC blocker was found on it — the
   three blocker instances all sit on effect inputs. Placement of the dry-path DC removal is an open
   question: host wrapper, mis-decompiled region, or misread routing.
-- Insertion-EFX internal routing is now pinned at the ends and calibrated in the middle: parts
-  with `part+0x452` set detour to bus 62 with their sends nulled, and the block's return gain was
-  calibrated against live renders (a Thru-routed part is level-transparent) rather than traced
-  through the send matrix — the ×4 between the algorithm's halved output and the dry mix is a
-  measured fact, decomposed only as far as the 2.0 ramp target the apply handlers write.
+- Insertion-EFX internal routing is pinned end to end. Parts with `part+0x452` set detour to bus
+  62 with their sends nulled; the block has no make-up gain (the ×4 an earlier revision fitted on
+  the return is in the registers — the startup rows give the routing pair at `0x83`/`0x1F3` the
+  wide scale, so routing byte `0x7F` means ×3.97); and the block's three common sends tap its
+  **stereo sum**, which is why an EFX send is pan-dependent (measured 1.1825 hard→centre against
+  the pan table's centre sum 1.1811) where a part send, fed pre-pan, is flat. The one measured
+  rather than traced quantity is the conversion from an engine bus value into this engine's
+  per-network units, expressed for reverb as the engine's own EFX-to-part ratio (0.980).
+- The GS reverb network is verified against the live engine's own processor: `scdec revir` drives
+  `fx_reverb_process` with a controlled impulse and captures its response, which matches this
+  engine's to 1.0000 in every window of a 32000-sample capture, peaks agreeing to five figures.
+  Wet levels compared off *rendered notes* instead differ by up to ~11% and vary with the patch —
+  that is the dry signal feeding the reverb, not the reverb, and it is why the network should be
+  compared with an impulse and never with a note.
 - Bus numbering (58/59 dry, 60 reverb, 3 chorus, 2 delay/EFX) comes from the DC-blocker and
   accumulator analysis; treat individual bus indices as evidence-backed labels, not a verified full
   bus map.
