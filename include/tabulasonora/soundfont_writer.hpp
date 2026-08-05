@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -110,6 +111,26 @@ struct Zone {
     std::vector<Modulator> modulators;
 };
 
+/// How the sample data is stored.
+enum class Codec {
+    /// Plain 16-bit PCM in `smpl`. Every reader handles it; nothing else is exact.
+    pcm,
+    /// Per-sample FLAC streams, SF3-style. Lossless, and **spessasynth only** — canonical SF3 is
+    /// Vorbis, so no other reader recognises a `fLaC` stream here.
+    flac,
+    /// Per-sample Ogg Vorbis streams. Lossy, and what SF3 actually specifies, so it travels.
+    vorbis,
+};
+
+/// Whether this build can write a codec. The compressed ones are optional dependencies.
+[[nodiscard]] bool codec_available(Codec codec) noexcept;
+
+/// Encodes one mono sample run. Returns empty when the encoder is unavailable or fails.
+[[nodiscard]] std::vector<std::uint8_t> encode_flac(std::span<const float> samples,
+                                                    int sample_rate);
+[[nodiscard]] std::vector<std::uint8_t>
+encode_vorbis(std::span<const float> samples, int sample_rate, float quality = 0.5F);
+
 /// One sample header. Offsets are in samples into the pooled PCM.
 struct Sample {
     std::string name;
@@ -166,6 +187,7 @@ struct WriteReport {
     std::size_t pgen_count = 0;
     std::int64_t pcm_bytes = 0;
     std::int64_t file_bytes = 0;
+    Codec codec = Codec::pcm;
 
     /// Whether any index exceeded 16 bits, i.e. whether `xdta` was load-bearing rather than
     /// merely present.
@@ -184,6 +206,7 @@ struct WriteReport {
 /// input. It is written for every bank so the common case tests it.
 ///
 /// Throws `std::runtime_error` if the file cannot be written.
-WriteReport write(const std::filesystem::path& path, const Bank& bank);
+WriteReport write(const std::filesystem::path& path, const Bank& bank,
+                  Codec codec = Codec::pcm);
 
 } // namespace ts::sf2

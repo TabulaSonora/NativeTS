@@ -5,6 +5,9 @@
 #include "tabulasonora/render_options.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/rom_locator.hpp"
+#include "tabulasonora/soundfont_bank.hpp"
+#include "tabulasonora/soundfont_sflist.hpp"
+#include "tabulasonora/soundfont_writer.hpp"
 #include "tabulasonora/send_effects.hpp"
 #include "tabulasonora/sequence.hpp"
 #include "tabulasonora/sequence_player.hpp"
@@ -768,6 +771,88 @@ int scan_efx_command(const std::string& dll, const std::vector<fs::path>& files)
 
 } // namespace
 
+/// Exports the whole sound set as a SoundFont, plus the five `.sflist.json` maps beside it.
+int export_soundfont_command(const std::string& dll,
+                             const fs::path& output,
+                             ts::sf2::Codec codec,
+                             bool write_maps,
+                             bool gs_modulators)
+{
+    if (!ts::sf2::codec_available(codec)) {
+        throw std::runtime_error(
+            "This build has no encoder for that codec; configure with libFLAC or libvorbis, or "
+            "use --codec pcm.");
+    }
+
+    const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
+    const ts::TableSet tables = ts::TableSet::from_rom(rom);
+    const ts::PatchDirectory directory{tables};
+    const ts::DrumKitTable kits{rom};
+    const ts::WaveRom wave_rom{rom};
+    const ts::Interpolator interpolator{tables};
+    const ts::EnvelopeMachine machine{tables};
+    const ts::TvaChain levels{tables, machine};
+    const ts::TvfChain filters{tables, machine};
+    const ts::PitchChain pitches{tables, machine};
+    const ts::LfoEngine lfos{tables};
+    ts::Sampler sampler{wave_rom, interpolator};
+
+    std::cout << "Collecting waves...\n";
+    const std::vector<int> waves = ts::sf2::SampleSet::census(directory, kits);
+    const ts::sf2::SampleSet set = ts::sf2::SampleSet::build(directory, sampler, waves);
+    std::cout << "  " << waves.size() << " referenced, " << set.runs().size() << " runs after "
+              << set.shared_count() << " shared\n";
+
+    ts::sf2::BankOptions options;
+    options.software = "tabula-sonora";
+    options.comment = "Exported from the Sound Canvas VA wave ROM.";
+    options.gs_modulators = gs_modulators;
+
+    std::cout << "Building the bank...\n";
+    const ts::sf2::BankBuild built =
+        ts::sf2::build_bank(directory, kits, set, levels, filters, pitches, lfos, options);
+    std::cout << "  " << built.melodic_presets << " melodic + " << built.drum_presets
+              << " drum presets, " << built.bank.instruments.size() << " instruments\n";
+    std::cout << "  amplitude envelope fit: mean rms " << built.mean_fit_error() << " of peak, "
+              << built.overflowed_zones << " of " << built.fitted_zones
+              << " zones needing more segments than SF2 has\n";
+
+    std::cout << "Writing " << output << "...\n";
+    const ts::sf2::WriteReport report = ts::sf2::write(output, built.bank, codec);
+    std::cout << "  igen " << report.igen_count << ", pgen " << report.pgen_count << "; xdta is "
+              << (report.needed_xdta() ? "load-bearing" : "not needed at these counts") << "\n";
+    std::cout << "  sample data " << (report.pcm_bytes / 1048576.0) << " MB, file "
+              << (report.file_bytes / 1048576.0) << " MB\n";
+
+    if (!write_maps) {
+        return 0;
+    }
+
+    ts::sf2::SflistOptions sflist;
+    sflist.file_name = output.filename().string();
+    for (const auto& [name, selector] : ts::tone_map_choices()) {
+        ts::sf2::SflistReport sflist_report;
+        const std::string text = ts::sf2::build_sflist(
+            directory, kits, static_cast<ts::ToneMap>(selector), sflist, sflist_report);
+
+        fs::path path = output;
+        path.replace_extension();
+        path += "." + name + ".sflist.json";
+
+        std::ofstream file{path, std::ios::binary};
+        if (!file) {
+            throw std::runtime_error("Cannot write '" + path.string() + "'.");
+        }
+        file.write(text.data(), static_cast<std::streamsize>(text.size()));
+
+        std::cout << "  " << path.filename().string() << ": " << sflist_report.melodic_mappings
+                  << " melodic (" << sflist_report.fallback_mappings << " capital-tone fallback), "
+                  << sflist_report.drum_mappings << " drum\n";
+    }
+
+    return 0;
+}
+
 int main(int argc, char** argv)
 {
     CLI::App app{"A native implementation of the Roland Sound Canvas VA synth voice.",
@@ -793,6 +878,29 @@ int main(int argc, char** argv)
         app.add_subcommand("extract-tables", "Write every static table out as a .bin slice.");
     add_dll(extract);
     extract->add_option("output", output_directory, "Directory to write into")->required();
+
+    fs::path soundfont_output;
+    ts::sf2::Codec soundfont_codec = ts::sf2::Codec::pcm;
+    bool no_maps = false;
+    bool no_gs_modulators = false;
+    CLI::App* export_soundfont = app.add_subcommand(
+        "export-soundfont", "Export the whole sound set as a SoundFont plus its five map files.");
+    add_dll(export_soundfont);
+    export_soundfont->add_option("output", soundfont_output, "Output .sf2 path")->required();
+    export_soundfont
+        ->add_option("--codec", soundfont_codec,
+                     "Sample storage: pcm (exact, portable), flac (lossless, spessasynth only), "
+                     "vorbis (lossy, portable)")
+        ->transform(CLI::CheckedTransformer(
+            std::vector<std::pair<std::string, ts::sf2::Codec>>{
+                {"pcm", ts::sf2::Codec::pcm},
+                {"flac", ts::sf2::Codec::flac},
+                {"vorbis", ts::sf2::Codec::vorbis}},
+            CLI::ignore_case));
+    export_soundfont->add_flag("--no-maps", no_maps, "Write only the bank, not the .sflist.json maps");
+    export_soundfont->add_flag("--no-gs-modulators", no_gs_modulators,
+                               "Write only the reader's own default modulators into DMOD");
+
 
     int program = 0;
     int note = 60;
@@ -915,6 +1023,10 @@ int main(int argc, char** argv)
         }
         if (extract->parsed()) {
             return extract_tables_command(dll, output_directory);
+        }
+        if (export_soundfont->parsed()) {
+            return export_soundfont_command(dll, soundfont_output, soundfont_codec, !no_maps,
+                                            !no_gs_modulators);
         }
         if (render->parsed()) {
             render_options.reverb = !no_reverb;

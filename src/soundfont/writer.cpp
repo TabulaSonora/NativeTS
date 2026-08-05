@@ -2,6 +2,7 @@
 
 #include <span>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -72,10 +73,15 @@ void chunk(Buffer& into, const char* id, const Buffer& payload)
 }
 
 /// Converts a normalised float to 16-bit, with the clamp the pool may need.
+///
+/// Rounds rather than truncating, and the compressed encoders must round the same way. A cast
+/// truncates toward zero, which is a half-LSB bias away from zero on every sample -- inaudible on
+/// its own, but it also made the FLAC path differ from the PCM path by one LSB and so look lossy
+/// when it is not.
 [[nodiscard]] std::int16_t to_pcm16(float value) noexcept
 {
-    const float scaled = value * 32767.0F;
-    return static_cast<std::int16_t>(std::clamp(scaled, -32768.0F, 32767.0F));
+    return static_cast<std::int16_t>(
+        std::lround(std::clamp(value * 32767.0F, -32768.0F, 32767.0F)));
 }
 
 /// The nine pdta sub-chunks, in both their base and extended forms.
@@ -134,9 +140,10 @@ void append_zone(Pdta& pdta, const Zone& zone, bool preset)
 
 } // namespace
 
-WriteReport write(const std::filesystem::path& path, const Bank& bank)
+WriteReport write(const std::filesystem::path& path, const Bank& bank, Codec codec)
 {
     WriteReport report;
+    report.codec = codec;
     Pdta pdta;
 
     // ── inst / ibag / igen / imod ────────────────────────────────────────────
@@ -230,18 +237,71 @@ WriteReport write(const std::filesystem::path& path, const Bank& bank)
         write_modulator(pdta.ximod, Modulator{});
     }
 
-    // ── shdr ─────────────────────────────────────────────────────────────────
-    for (const Sample& sample : bank.samples) {
+    // ── sample data, and the shdr that indexes it ────────────────────────────
+    //
+    // The two storage forms index differently and the difference is not cosmetic:
+    //
+    //  * **PCM** puts sample-word offsets in `dwStart`/`dwEnd`, and the loop points are absolute —
+    //    the reader subtracts the sample start from them itself.
+    //  * **SF3** puts *byte* offsets into the compressed stream, and the loop points are already
+    //    relative to the sample, because the reader does not adjust them at all for a compressed
+    //    sample (`soundfont_reader.c:455-476`).
+    //
+    // Emitting absolute loop points into a compressed bank puts every loop past the end of its own
+    // sample.
+    const bool compressed = codec != Codec::pcm;
+    Buffer smpl;
+    std::vector<std::uint32_t> data_start(bank.samples.size(), 0);
+    std::vector<std::uint32_t> data_end(bank.samples.size(), 0);
+
+    if (compressed) {
+        for (std::size_t i = 0; i < bank.samples.size(); ++i) {
+            const Sample& sample = bank.samples[i];
+            const auto first = static_cast<std::size_t>(sample.start);
+            const auto count = static_cast<std::size_t>(sample.end - sample.start);
+            const std::span<const float> run{bank.pool.data() + first, count};
+
+            const std::vector<std::uint8_t> encoded =
+                codec == Codec::flac
+                    ? encode_flac(run, static_cast<int>(sample.sample_rate))
+                    : encode_vorbis(run, static_cast<int>(sample.sample_rate));
+            if (encoded.empty() && count > 0) {
+                throw std::runtime_error("Sample encoding failed; the codec may be unavailable.");
+            }
+
+            data_start[i] = static_cast<std::uint32_t>(smpl.size());
+            smpl.raw(encoded);
+            data_end[i] = static_cast<std::uint32_t>(smpl.size());
+        }
+    } else {
+        for (const float sample : bank.pool) {
+            smpl.u16(static_cast<std::uint16_t>(to_pcm16(sample)));
+        }
+        for (std::size_t i = 0; i < bank.samples.size(); ++i) {
+            data_start[i] = bank.samples[i].start;
+            data_end[i] = bank.samples[i].end;
+        }
+    }
+    report.pcm_bytes = static_cast<std::int64_t>(smpl.size());
+
+    for (std::size_t i = 0; i < bank.samples.size(); ++i) {
+        const Sample& sample = bank.samples[i];
         pdta.shdr.name(sample.name, 20);
-        pdta.shdr.u32(sample.start);
-        pdta.shdr.u32(sample.end);
-        pdta.shdr.u32(sample.loop_start);
-        pdta.shdr.u32(sample.loop_end);
+        pdta.shdr.u32(data_start[i]);
+        pdta.shdr.u32(data_end[i]);
+        if (compressed) {
+            pdta.shdr.u32(sample.loop_start - sample.start);
+            pdta.shdr.u32(sample.loop_end - sample.start);
+        } else {
+            pdta.shdr.u32(sample.loop_start);
+            pdta.shdr.u32(sample.loop_end);
+        }
         pdta.shdr.u32(sample.sample_rate);
         pdta.shdr.u8(sample.original_key);
         pdta.shdr.u8(static_cast<unsigned char>(sample.correction));
         pdta.shdr.u16(sample.link);
-        pdta.shdr.u16(sample.type);
+        // Bit 4 of the sample type is the SF3 compression flag.
+        pdta.shdr.u16(sample.type | (compressed ? 0x10u : 0u));
 
         // The mirror carries only the name's second half; every other field is read from the base.
         pdta.xshdr.name(sample.name, 20, 20);
@@ -325,14 +385,7 @@ WriteReport write(const std::filesystem::path& path, const Bank& bank)
     // ── sdta ─────────────────────────────────────────────────────────────────
     Buffer sdta;
     sdta.tag("sdta");
-    {
-        Buffer smpl;
-        for (const float sample : bank.pool) {
-            smpl.u16(static_cast<std::uint16_t>(to_pcm16(sample)));
-        }
-        report.pcm_bytes = static_cast<std::int64_t>(smpl.size());
-        chunk(sdta, "smpl", smpl);
-    }
+    chunk(sdta, "smpl", smpl);
 
     // ── pdta ─────────────────────────────────────────────────────────────────
     Buffer pdta_list;

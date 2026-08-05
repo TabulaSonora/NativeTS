@@ -4,6 +4,14 @@ include(${PROJECT_SOURCE_DIR}/cmake/EmbedAsset.cmake)
 
 find_package(nlohmann_json CONFIG REQUIRED)
 
+# The compressed sample codecs are optional. Without them the exporter still writes a correct
+# bank -- it just cannot write a small one -- so a missing encoder must not fail the build.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(TS_FLAC IMPORTED_TARGET flac)
+    pkg_check_modules(TS_VORBIS IMPORTED_TARGET vorbisenc vorbis ogg)
+endif()
+
 ts_embed_asset(TS_MANIFEST_SOURCE "${PROJECT_SOURCE_DIR}/assets/manifest.json" manifest_json)
 
 add_library(tabulasonora
@@ -35,6 +43,7 @@ add_library(tabulasonora
     rom/sha256.cpp
     rom/table_manifest.cpp
     soundfont/bank_builder.cpp
+    soundfont/encoders.cpp
     soundfont/envelope_fit.cpp
     soundfont/modulators.cpp
     soundfont/sample_set.cpp
@@ -91,6 +100,16 @@ target_link_libraries(tabulasonora
 if(ZLIB_FOUND)
     target_compile_definitions(tabulasonora PRIVATE TS_HAVE_ZLIB)
     target_link_libraries(tabulasonora PRIVATE ZLIB::ZLIB)
+endif()
+
+if(TS_FLAC_FOUND)
+    target_compile_definitions(tabulasonora PRIVATE TS_HAVE_FLAC)
+    target_link_libraries(tabulasonora PRIVATE PkgConfig::TS_FLAC)
+endif()
+
+if(TS_VORBIS_FOUND)
+    target_compile_definitions(tabulasonora PRIVATE TS_HAVE_VORBIS)
+    target_link_libraries(tabulasonora PRIVATE PkgConfig::TS_VORBIS)
 endif()
 
 # The generated asset source is machine-written; holding them to the project's warning level
