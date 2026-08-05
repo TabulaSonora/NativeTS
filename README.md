@@ -158,17 +158,17 @@ with nothing to build: a [player](https://tabula-sonora.kddlb.cl/) for Standard 
 [live instrument](https://tabula-sonora.kddlb.cl/live). It takes the same DLL this library does and
 reads it in the page.
 
-The `web` preset compiles the whole engine to WebAssembly with Emscripten — the toolchain file
-comes from `$EMSDK`, and vcpkg is not involved — and `web/` holds the Vue app that serves it: the
-Player and Live pages the retired Blazor deployment had, fully client-side, with the user's own
-`SCCore.dll` cached in the browser. The engine runs in a Web Worker feeding an AudioWorklet, and a
-browser WAV export is byte-identical to `tabula-sonora render --stream` of the same song. See
+The `web` preset compiles the whole engine to WebAssembly with Emscripten — it finds the toolchain
+file from `$EMSDK` or from `emcc` on `PATH`, and vcpkg is not involved — and `web/` holds the Vue app
+that serves it: the Player and Live pages the retired Blazor deployment had, fully client-side, with
+the user's own `SCCore.dll` cached in the browser. The engine runs in a Web Worker feeding an
+AudioWorklet, and a browser WAV export is byte-identical to `tabula-sonora render --stream` of the
+same song. See
 [`web/README.md`](web/README.md) and
 [the documentation's page on it](https://tabulasonora.github.io/NativeTS/web.html).
 
 ```
-cmake --preset web && cmake --build --preset web           # under the emsdk environment
-cmake --preset web-system && cmake --build --preset web-system   # distro emscripten package
+cmake --preset web && cmake --build --preset web   # emsdk, Homebrew or a distro package
 cd web && npm install && npm run build
 ```
 

@@ -97,7 +97,7 @@
       "displayName": "Emscripten web engine",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build/web",
-      "toolchainFile": "$env{EMSDK}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
+      "toolchainFile": "${sourceDir}/cmake/emscripten-toolchain.cmake",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_CXX_FLAGS": "-fwasm-exceptions",

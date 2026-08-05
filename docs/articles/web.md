@@ -11,13 +11,15 @@ describes that deployment, so it is worth having open: the
 nothing here needs building to be read against the running thing.
 
 ```sh
-cmake --preset web && cmake --build --preset web   # needs the emsdk on PATH
+cmake --preset web && cmake --build --preset web   # needs an Emscripten SDK
 cd web && npm install && npm run build
 netlify deploy --prod --dir=web/dist               # manual, replaces the live site
 ```
 
-The `web` preset takes its toolchain file from `$EMSDK` and does not involve vcpkg. The built
-module lands in `web/src/engine/generated/`, which is gitignored.
+The `web` preset finds its toolchain file itself — `$EMSDK` if set, otherwise the layouts around
+whichever `emcc` is on `PATH`, which covers Homebrew on macOS and the Linux distribution packages —
+and does not involve vcpkg. The built module lands in `web/src/engine/generated/`, which is
+gitignored.
 
 ## Three threads
 

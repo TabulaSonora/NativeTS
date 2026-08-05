@@ -18,13 +18,13 @@ pushes 256-frame blocks over a MessagePort straight to an AudioWorklet's 4-secon
 reports its queue depth every 10 ms *of audio*, and that report — not a timer — is what drives the
 pump, which is why a 30 ms lead holds. The main thread only does UI, IndexedDB and Web MIDI.
 
-The engine module comes from `apps/web` via the `web` CMake preset (Emscripten, from WSL on this
-machine) and lands in `src/engine/generated/`, which is gitignored.
+The engine module comes from `apps/web` via the `web` CMake preset (Emscripten) and lands in
+`src/engine/generated/`, which is gitignored.
 
 ## Build
 
 ```sh
-# 1. The engine (WSL; needs cmake, ninja and the emsdk on PATH)
+# 1. The engine (needs cmake, ninja and an Emscripten SDK)
 cmake --preset web && cmake --build --preset web
 
 # 2. The app
@@ -35,8 +35,25 @@ npm run build        # or npm run dev
 netlify deploy --prod --dir=web/dist
 ```
 
+Any Emscripten install will do, and the preset finds it: `cmake/emscripten-toolchain.cmake` looks at
+`$EMSDK` first, then at the layouts around whichever `emcc` is on `PATH`, then asks `em-config`. That
+covers an emsdk checkout, a Homebrew `emscripten` on macOS and the Linux distribution packages alike
+— the preset used to name the emsdk path outright, which is what confined this build to one machine.
+`-DCMAKE_TOOLCHAIN_FILE=…` still overrides the lot. vcpkg is not involved; the one dependency,
+nlohmann_json, is fetched during configure, so the build needs the network the first time.
+
 ## Verification
 
 `apps/web/test/smoke.mjs` drives the module under node: full-hash ROM load, catalog sweeps, a
 real-time render, and a WAV export to byte-compare against `tabula-sonora render --stream` — the
 same file, not a similar one.
+
+```sh
+node apps/web/test/smoke.mjs --rom SCCore.dll --midi testdata/canyon.mid --map 4 --out web.wav
+tabula-sonora render --dll SCCore.dll --map 4 --stream testdata/canyon.mid native.wav
+cmp web.wav native.wav
+```
+
+Build the native side from the same commit before believing a mismatch: the engine changes often
+enough that a stale `build/release` will differ from a fresh WASM build for reasons that have
+nothing to do with Emscripten.
