@@ -13,6 +13,7 @@
 #include "tabulasonora/tvf_chain.hpp"
 #include "tabulasonora/wave_descriptor.hpp"
 
+#include <array>
 #include <optional>
 #include <span>
 #include <utility>
@@ -156,6 +157,18 @@ public:
     /// The stereo gains for this voice, at the pan position the slew has reached.
     [[nodiscard]] std::pair<double, double> pan_gains() const noexcept;
 
+    /// Slews the three send levels toward the part's, once a control tick.
+    ///
+    /// Same ordering requirement as `slew_pan`, and the same shape of smoother -- `voice_pan_smooth`
+    /// @`180083be0` is the sends' equivalent of `voice_expr_smooth`. It moves the gain word by
+    /// 8 of 1024 a tick, so a full-scale send change takes 40 ticks, 400 ms.
+    void slew_sends(int reverb, int chorus, int delay) noexcept;
+
+    /// The send levels in force, on the controller's own 0-127 scale but continuous.
+    [[nodiscard]] double reverb_send() const noexcept { return sends_[0]; }
+    [[nodiscard]] double chorus_send() const noexcept { return sends_[1]; }
+    [[nodiscard]] double delay_send() const noexcept { return sends_[2]; }
+
     /// Renders one block.
     ///
     /// A block never straddles a control tick: a voice starts on the render-block grid and the tick
@@ -251,6 +264,20 @@ private:
     int pan_position_ = PanLaw::centre;
     /// Whether the position has been seeded; a voice starts *at* its pan, it does not glide in.
     bool pan_seeded_ = false;
+
+    /// The send levels in force, chasing the part's rather than jumping to them.
+    ///
+    /// Held on the controller's 0-127 scale rather than as gains, because all three laws are
+    /// linear in the controller and the engine's step is a fixed distance -- so one rate covers
+    /// them whatever each effect's full-scale gain happens to be.
+    ///
+    /// Measured for the *reverb* send: `scdec sendramp` puts CC#91 0 -> 127 at 40 steps of 8/1024
+    /// of gain, one every 320 samples, 390 ms end to end. Chorus and delay go through the same
+    /// function in the decompile and are given the same rate here, but neither was isolated in
+    /// memory -- a CC#93 or CC#94 change moves no stable float in the mix scratch, so where they
+    /// reach the bus is not yet pinned. Treat those two as inference.
+    std::array<double, 3> sends_{};
+    bool sends_seeded_ = false;
     double level_gain_ = 1.0;
 
     /// The part-volume anti-zipper ramp — `voice_ctrl_ramp_b`'s state, one per voice.

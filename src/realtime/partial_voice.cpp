@@ -14,6 +14,10 @@ constexpr int control_block = NoteRenderer::control_block;
 /// Pan units the position may move in one control tick.
 constexpr int pan_slew_per_tick = 2;
 
+/// Control ticks a full-scale send change takes: the engine steps the gain word by 8 of 1024.
+constexpr double send_slew_ticks = 40.0;
+constexpr double send_slew_per_tick = 127.0 / send_slew_ticks;
+
 } // namespace
 
 void PartialVoice::start(VoiceSetup&& setup)
@@ -38,6 +42,7 @@ void PartialVoice::start(VoiceSetup&& setup)
     pan_follows_part_ = setup.pan_follows_part;
     random_pan_ = setup.random_pan.value_or(-1);
     pan_seeded_ = false;
+    sends_seeded_ = false;
 
     volume_ramp_.seed(ControlRamp::target_of(setup.volume_word),
                       ControlRamp::volume_rate_word,
@@ -165,6 +170,29 @@ void PartialVoice::slew_pan(int part_pan) noexcept
 std::pair<double, double> PartialVoice::pan_gains() const noexcept
 {
     return pan_law_->gains(pan_position_);
+}
+
+void PartialVoice::slew_sends(int reverb, int chorus, int delay) noexcept
+{
+    const std::array<double, 3> targets{static_cast<double>(reverb),
+                                        static_cast<double>(chorus),
+                                        static_cast<double>(delay)};
+
+    // As with the pan, a voice starts at the level rather than fading its sends up to it.
+    if (!sends_seeded_) {
+        sends_ = targets;
+        sends_seeded_ = true;
+        return;
+    }
+
+    if (sample_ % control_block != 0) {
+        return;
+    }
+
+    for (std::size_t i = 0; i < sends_.size(); ++i) {
+        sends_[i] +=
+            std::clamp(targets[i] - sends_[i], -send_slew_per_tick, send_slew_per_tick);
+    }
 }
 
 double PartialVoice::choke_gain(std::int64_t since) noexcept

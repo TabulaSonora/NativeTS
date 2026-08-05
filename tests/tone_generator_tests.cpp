@@ -1251,3 +1251,73 @@ TEST_CASE("a pan change sweeps rather than snapping", "[stream][sccore]")
     CHECK(milliseconds >= 250);
     CHECK(milliseconds <= 450);
 }
+
+TEST_CASE("a send level slews rather than switching", "[stream][sccore]")
+{
+    // `voice_pan_smooth` @`180083be0` is the sends' equivalent of the pan slew: it steps the send's
+    // gain word by 8 of 1024 a control tick, so a full-scale change takes 40 ticks -- 400 ms.
+    // Measured on the reverb send with `scdec sendramp`: CC#91 0 -> 127 is 40 steps of 8/1024, one
+    // every 320 samples, 390 ms end to end.
+    //
+    // The wet is isolated by differencing against a generator with the reverb switched off. Nothing
+    // else differs between the two, so what is left is exactly the reverb's contribution -- the dry
+    // path cancels to the last bit, which is what makes this measurable at all.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    ToneGeneratorOptions dry_options;
+    dry_options.reverb = false;
+    ToneGenerator wet{notes};
+    ToneGenerator dry{notes, dry_options};
+
+    const auto setup = [](ToneGenerator& g) {
+        g.send_channel(0xB0, 7, 127);
+        g.send_channel(0xB0, 91, 0);
+        g.send_channel(0xB0, 93, 0);
+        g.send_channel(0x90, 72, 110);
+    };
+    setup(wet);
+    setup(dry);
+
+    constexpr int window = 1600; // 50 ms
+    std::vector<float> wl(window);
+    std::vector<float> wr(window);
+    std::vector<float> dl(window);
+    std::vector<float> dr(window);
+
+    const auto wet_rms = [&] {
+        wet.render(wl, wr);
+        dry.render(dl, dr);
+        double sum = 0.0;
+        for (int i = 0; i < window; ++i) {
+            const double d = static_cast<double>(wl[i]) - dl[i];
+            sum += d * d;
+        }
+        return std::sqrt(sum / window);
+    };
+
+    // Send at zero: the two renders are identical, so there is nothing to hear.
+    for (int i = 0; i < 4; ++i) {
+        CHECK(wet_rms() == 0.0);
+    }
+
+    wet.send_channel(0xB0, 91, 127);
+    dry.send_channel(0xB0, 91, 127);
+
+    std::vector<double> growth;
+    for (int i = 0; i < 20; ++i) {
+        growth.push_back(wet_rms());
+    }
+
+    // The reverb's own build-up is in here too, so this does not pin the slew on its own -- what it
+    // pins is that the send is not a switch. A send applied instantly puts the bus at full level
+    // within one block, and the wet would be at its settled value inside the first window or two.
+    const double settled = *std::max_element(growth.begin(), growth.end());
+    REQUIRE(settled > 0.0);
+    CHECK(growth[0] < settled * 0.35);
+    CHECK(growth[1] < settled * 0.6);
+
+    // And it does arrive: by 500 ms, comfortably past the 400 ms the slew needs, it is there.
+    CHECK(*std::max_element(growth.begin() + 10, growth.end()) > settled * 0.9);
+}

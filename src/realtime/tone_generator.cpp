@@ -1740,6 +1740,7 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // runs whether or not the part is audible, so muting cannot leave it stranded mid-glide.
     voice.volume_gains(part.volume_word(), volume_ramp_mask, volume_gains);
     voice.slew_pan(part.pan);
+    voice.slew_sends(part.reverb_send, part.chorus_send, part.delay_send);
 
     voice.render(block, pitch_offset, matrix);
 
@@ -1778,12 +1779,17 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
 
     // Sends are fed from the pre-pan mono and are post-fader, so the wet scales with volume and
     // expression but not with pan -- matching the engine's mono send bus.
-    const double to_reverb =
-        !efx_part && reverb && part.reverb_send > 0 ? Reverb::send_gain(part.reverb_send) : 0.0;
-    const double to_chorus =
-        !efx_part && chorus && part.chorus_send > 0 ? Chorus::send_gain(part.chorus_send) : 0.0;
-    const double to_delay =
-        !efx_part && delay && part.delay_send > 0 ? SystemDelay::send_gain(part.delay_send) : 0.0;
+    // Read off the voice's slewed levels, not the part's targets: a send that has just been turned
+    // down is still feeding the bus on its way there, and one just turned up is not yet at full.
+    const double to_reverb = !efx_part && reverb && voice.reverb_send() > 0.0
+                                 ? Reverb::send_gain(voice.reverb_send())
+                                 : 0.0;
+    const double to_chorus = !efx_part && chorus && voice.chorus_send() > 0.0
+                                 ? Chorus::send_gain(voice.chorus_send())
+                                 : 0.0;
+    const double to_delay = !efx_part && delay && voice.delay_send() > 0.0
+                                ? SystemDelay::send_gain(voice.delay_send())
+                                : 0.0;
 
     // The voice gain stays a separate multiply from the pan and send levels: collapsing them would
     // be the cheaper kernel and a silently different render, since float multiplication is no more
