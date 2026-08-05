@@ -231,6 +231,7 @@ BankBuild build_bank(const PatchDirectory& directory,
             instrument.name = tidy(record->name()) + "#" + std::to_string(partial_index);
             int first_key = 60;
             bool have_first_key = false;
+            int velocity_filter_depth = 0;
 
             const auto [velocity_low, velocity_high] = partial.velocity_window();
             const int tone_level = directory.tone_level(tone_number);
@@ -259,6 +260,16 @@ BankBuild build_bank(const PatchDirectory& directory,
                 // its peak depends on the zone's own level and SF2 normalises the envelope to that
                 // peak. Emitting one shape per partial and a separate attenuation would double
                 // count wherever the peak segment sits below the base level.
+                // The *level* is anchored at the top of the velocity window, because that is the
+                // SF2 convention: the default velocity modulator contributes nothing at 127 and
+                // attenuates downward from there, so the generator has to hold the loudest case.
+                //
+                // The *shapes* are not, and anchoring them there was wrong. The filter envelope's
+                // depth is strongly velocity-dependent -- Piano 1's first partial sweeps to 1480 Hz
+                // at velocity 80, 2369 at 100 and 5333 at 127 -- so baking at the window top made
+                // the whole bank play as though every note were struck fortissimo. Measured against
+                // the engine that was +15.0 dB at 2.5-6 kHz and +7.2 above it.
+                const int reference_velocity = std::clamp(100, velocity_low, velocity_high);
                 const int zone_level =
                     directory.zone_level(partial.multisample(), zone.key_low, partial.key_center());
                 const SegmentEnvelope amplitude =
@@ -294,7 +305,7 @@ BankBuild build_bank(const PatchDirectory& directory,
                 ModulationFit shape;
                 if (filter_on) {
                     const TvfChain::Envelope cutoff = filters.create_envelope(
-                        partial, velocity_high, zone.key_low, options.sample_rate);
+                        partial, reference_velocity, zone.key_low, options.sample_rate);
 
                     std::vector<double> targets(cutoff.offsets.targets().begin(),
                                                 cutoff.offsets.targets().end());
@@ -332,9 +343,49 @@ BankBuild build_bank(const PatchDirectory& directory,
                         const int depth = static_cast<int>(std::lround(
                             std::clamp(1200.0 * std::log2(std::max(1e-6, high_hz / low_hz)),
                                        -12000.0, 12000.0)));
-                        if (depth != 0) {
+                        // The depth at the reference velocity, plus a modulator carrying the rest
+                        // of the velocity law. SF2 allows velocity to reach `modEnvToFilterFc`, so
+                        // this is expressible rather than approximated away -- fitted through the
+                        // window's two edges, which is a straight line where the engine's response
+                        // is a curve, but is right at both ends and close in between (Piano 1 at
+                        // velocity 100 wants 3237 cents and this gives 3367).
+                        const auto depth_at = [&](int velocity) {
+                            const TvfChain::Envelope at = filters.create_envelope(
+                                partial, velocity, zone.key_low, options.sample_rate);
+                            std::vector<double> edge_targets(at.offsets.targets().begin(),
+                                                             at.offsets.targets().end());
+                            const double top = *std::max_element(edge_targets.begin(),
+                                                                 edge_targets.end());
+                            const double bottom = std::min(0.0,
+                                *std::min_element(edge_targets.begin(), edge_targets.end()));
+                            const double a = filters.cutoff_hz(
+                                std::clamp(at.base_cutoff + bottom, 1.0, 32767.0), resonance,
+                                options.sample_rate);
+                            const double b = filters.cutoff_hz(
+                                std::clamp(at.base_cutoff + top, 1.0, 32767.0), resonance,
+                                options.sample_rate);
+                            return 1200.0 * std::log2(std::max(1e-6, b / a));
+                        };
+
+                        int emitted = depth;
+                        if (velocity_high > velocity_low) {
+                            const double at_low = depth_at(velocity_low);
+                            const double at_high = depth_at(velocity_high);
+                            const double slope = ((at_high - at_low) * 127.0)
+                                                 / (velocity_high - velocity_low);
+                            const double base = at_low - ((slope * velocity_low) / 127.0);
+                            emitted = static_cast<int>(
+                                std::lround(std::clamp(base, -12000.0, 12000.0)));
+                            const int amount = static_cast<int>(
+                                std::lround(std::clamp(slope, -12000.0, 12000.0)));
+                            if (amount != 0) {
+                                velocity_filter_depth = amount;
+                            }
+                        }
+
+                        if (emitted != 0) {
                             out.generators.push_back(
-                                Generator::value(Gen::mod_env_to_filter_fc, depth));
+                                Generator::value(Gen::mod_env_to_filter_fc, emitted));
                         }
                         ++built.filter_envelopes;
                         built.filter_fit_sum += shape.rms_error;
@@ -343,7 +394,7 @@ BankBuild build_bank(const PatchDirectory& directory,
 
                 // The pitch envelope. Its depth is in milli-semitones, which is a tenth of a cent.
                 const std::optional<PitchEnvelope> pitch =
-                    pitches.envelope_offsets(partial, zone.key_low, velocity_high);
+                    pitches.envelope_offsets(partial, zone.key_low, reference_velocity);
                 if (pitch) {
                     std::vector<double> targets(pitch->targets.begin(), pitch->targets.end());
                     std::vector<double> ends;
@@ -540,6 +591,16 @@ BankBuild build_bank(const PatchDirectory& directory,
                         ++built.inverted_velocity_partials;
                     }
                 }
+            }
+
+            // Velocity onto the filter envelope's depth, which is where the engine's law lives and
+            // where a single baked number cannot follow it.
+            if (velocity_filter_depth != 0) {
+                global.modulators.push_back(
+                    Modulator{modulator_source(0, false, false, false, 2),
+                              Gen::mod_env_to_filter_fc,
+                              static_cast<std::int16_t>(velocity_filter_depth), 0, 0});
+                ++built.velocity_filter_partials;
             }
 
             // Half-damper. Only the 57 piano tones respond to a partly-pressed pedal at all; every

@@ -68,6 +68,7 @@ struct BankBuild {
     /// backwards.
     int inverted_velocity_partials = 0;
     int half_damper_instruments = 0;
+    int velocity_filter_partials = 0;
     int env_modifier_partials = 0;
 
     [[nodiscard]] double mean_fit_error() const noexcept
