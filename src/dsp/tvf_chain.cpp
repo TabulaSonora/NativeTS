@@ -106,6 +106,16 @@ TvfChain::damping_coefficient(int units, int resonance_byte_value, int filter_ty
     return damping_raw(units, resonance_byte_value, filter_type) / static_cast<double>(0x20000);
 }
 
+double TvfChain::f_ceiling_for(double damping) const noexcept
+{
+    // The ceiling table is indexed by the damping's own integer form, eight bits down. The ramp
+    // carries the scaled value, so it is scaled back rather than tracked twice.
+    const auto raw = static_cast<int>(damping * static_cast<double>(0x20000));
+    const auto index = static_cast<std::size_t>(
+        std::clamp(raw >> 8, 0, static_cast<int>(f_ceiling_.size()) - 1));
+    return static_cast<double>(f_ceiling_[index]);
+}
+
 TvfChain::Coefficients
 TvfChain::coefficients(int units, int resonance_byte_value, int filter_type) const noexcept
 {
@@ -309,7 +319,8 @@ void TvfChain::apply(std::span<float> signal,
                      std::span<const double> cutoff15,
                      int filter_type,
                      int resonance_byte_value,
-                     int block_samples) const noexcept
+                     int block_samples,
+                     int ramp_index) const noexcept
 {
     const FilterTap selected = tap(filter_type);
     if (selected == FilterTap::bypass) {
@@ -317,6 +328,10 @@ void TvfChain::apply(std::span<float> signal,
     }
 
     StateVariableFilter filter;
+    CoefficientRamp frequency_ramp;
+    CoefficientRamp damping_ramp;
+    const int rate = CoefficientRamp::rate_word(ramp_index);
+    const bool smooth = ramp_index >= 0;
 
     for (std::size_t start = 0; start < signal.size();
          start += static_cast<std::size_t>(block_samples)) {
@@ -336,10 +351,21 @@ void TvfChain::apply(std::span<float> signal,
         const auto [f, q] = coefficients(units, resonance_byte_value, filter_type);
 
         for (std::size_t n = start; n < end; ++n) {
+            double frequency = f;
+            double damping = q;
+            if (smooth) {
+                // Independent ramps, then the stability clamp against the damping the ramp has
+                // actually reached -- not against the target's, which during a move is a different
+                // number.
+                frequency = frequency_ramp.step(f, rate);
+                damping = damping_ramp.step(q, rate);
+                frequency = std::min(frequency, f_ceiling_for(damping));
+            }
+
             // The filter runs in double and the signal is float; the widening and the single
             // narrowing back are both deliberate, so they are spelled out.
-            signal[n] =
-                static_cast<float>(filter.process(static_cast<double>(signal[n]), f, q, selected));
+            signal[n] = static_cast<float>(
+                filter.process(static_cast<double>(signal[n]), frequency, damping, selected));
         }
     }
 }
