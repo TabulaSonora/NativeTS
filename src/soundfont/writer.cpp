@@ -295,10 +295,12 @@ WriteReport write(const std::filesystem::path& path, const Bank& bank)
 
     if (!bank.default_modulators.empty()) {
         Buffer dmod;
+        // No terminal record here, unlike pmod and imod: the reader takes DMOD's modulator count
+        // as the chunk size divided by ten, so a terminal would be read as one more modulator --
+        // a live one, pointing at generator zero.
         for (const Modulator& modulator : bank.default_modulators) {
             write_modulator(dmod, modulator);
         }
-        write_modulator(dmod, Modulator{}); // terminal
         chunk(info, "DMOD", dmod);
     }
 

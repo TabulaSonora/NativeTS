@@ -1,5 +1,6 @@
 #include "tabulasonora/soundfont_bank.hpp"
 
+#include "tabulasonora/lfo_engine.hpp"
 #include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/soundfont_envelopes.hpp"
 #include "tabulasonora/tvf_chain.hpp"
@@ -36,6 +37,27 @@ constexpr int inter_sample_gap = 46;
     }
     const double cb = -200.0 * std::log10(gain);
     return static_cast<int>(std::lround(std::clamp(cb, 0.0, 1440.0)));
+}
+
+/// The LFO's rate in Hz.
+///
+/// The configured increment steps a 16-bit phase once per control tick, and the control tick is
+/// 100 Hz, so a full cycle is `0x10000 / increment` ticks.
+[[nodiscard]] double lfo_hz(int increment) noexcept
+{
+    return (static_cast<double>(increment) * 100.0) / 65536.0;
+}
+
+/// The LFO's delay in seconds, or a negative value when it never starts.
+///
+/// The delay accumulator steps by `delay_rate` per tick and the LFO begins when it wraps. A rate of
+/// zero is not "no delay" -- it is an LFO that never arrives, which the engine treats as off.
+[[nodiscard]] double lfo_delay_seconds(int delay_rate) noexcept
+{
+    if (delay_rate <= 0) {
+        return -1.0;
+    }
+    return 65536.0 / (static_cast<double>(delay_rate) * 100.0);
 }
 
 /// Absolute cents for a frequency, which is what `initialFilterFc` holds.
@@ -133,6 +155,7 @@ BankBuild build_bank(const PatchDirectory& directory,
                      const TvaChain& levels,
                      const TvfChain& filters,
                      const PitchChain& pitches,
+                     const LfoEngine& lfos,
                      const BankOptions& options)
 {
     BankBuild built;
@@ -140,6 +163,7 @@ BankBuild build_bank(const PatchDirectory& directory,
     bank.name = options.name;
     bank.software = options.software;
     bank.comment = options.comment;
+    bank.default_modulators = default_modulators(options.gs_modulators);
 
     // ── samples ──────────────────────────────────────────────────────────────
     //
@@ -349,6 +373,99 @@ BankBuild build_bank(const PatchDirectory& directory,
                 if (shape.active) {
                     emit_mod_dahdsr(out.generators, shape.envelope);
                 }
+
+                // ── the two LFOs ─────────────────────────────────────────────
+                //
+                // LFO1 is tone-common and takes the part's vibrato modifiers, so it is the vibrato
+                // LFO; LFO2 is per-partial and becomes the modulation LFO. Both destinations are
+                // reachable for both, but only because of the extended generators: standard SF2
+                // gives the vibrato LFO pitch alone, so on a conforming reader LFO1 degrades to
+                // vibrato and its filter and amplitude depths are dropped.
+                const auto [lfo1, lfo2] = lfos.configure(tone_number, partial);
+
+                const auto emit_lfo = [&](const LfoConfig& config, bool vibrato) {
+                    const double delay = lfo_delay_seconds(config.delay_rate);
+                    if (delay < 0.0 || config.increment <= 0) {
+                        return;
+                    }
+                    const bool moves = config.pitch_depth != 0 || config.tvf_depth != 0
+                                       || config.tva_depth != 0;
+                    if (!moves) {
+                        return;
+                    }
+
+                    if (LfoEngine::is_random(config.waveform)) {
+                        // Waveforms 1 to 3 redraw when the phase wraps rather than being functions
+                        // of it. SF2's LFOs are triangles and cannot be anything else, so these are
+                        // emitted as triangles and counted as a known loss.
+                        ++built.random_lfos;
+                    }
+
+                    out.generators.push_back(Generator::value(
+                        vibrato ? Gen::freq_vib_lfo : Gen::freq_mod_lfo,
+                        absolute_cents(lfo_hz(config.increment))));
+                    out.generators.push_back(Generator::value(
+                        vibrato ? Gen::delay_vib_lfo : Gen::delay_mod_lfo, to_timecents(delay)));
+
+                    if (config.pitch_depth != 0) {
+                        // Milli-semitones to cents.
+                        const int cents = static_cast<int>(
+                            std::lround(std::clamp(config.pitch_depth / 10.0, -12000.0, 12000.0)));
+                        if (cents != 0) {
+                            out.generators.push_back(Generator::value(
+                                vibrato ? Gen::vib_lfo_to_pitch : Gen::mod_lfo_to_pitch, cents));
+                        }
+                    }
+
+                    if (config.tvf_depth != 0 && filter_on) {
+                        const double centre = filters.cutoff_hz(
+                            std::clamp(static_cast<double>(partial.cutoff_base() * 0x100), 1.0,
+                                       32767.0),
+                            resonance, options.sample_rate);
+                        const double swung = filters.cutoff_hz(
+                            std::clamp(static_cast<double>((partial.cutoff_base() * 0x100)
+                                                           + config.tvf_depth),
+                                       1.0, 32767.0),
+                            resonance, options.sample_rate);
+                        const int cents = static_cast<int>(std::lround(std::clamp(
+                            1200.0 * std::log2(std::max(1e-6, swung / centre)), -12000.0,
+                            12000.0)));
+                        if (cents != 0) {
+                            out.generators.push_back(Generator::value(
+                                vibrato ? Gen::vib_lfo_to_filter_fc : Gen::mod_lfo_to_filter_fc,
+                                cents));
+                        }
+                    }
+
+                    if (config.tva_depth != 0) {
+                        // The engine's amplitude depth is a fraction of 0x7f00 applied
+                        // multiplicatively. The modulation LFO has a centibel destination in
+                        // standard SF2; the vibrato LFO only has the extended tenths-of-a-percent
+                        // one, which is unipolar where the engine's swing is not, so it takes twice
+                        // the fraction to cover the same peak-to-peak.
+                        const double fraction =
+                            std::abs(static_cast<double>(config.tva_depth)) / 32512.0;
+                        if (vibrato) {
+                            const int depth = static_cast<int>(
+                                std::lround(std::clamp(fraction * 2000.0, 0.0, 1000.0)));
+                            if (depth > 0) {
+                                out.generators.push_back(Generator::value(
+                                    Gen::vib_lfo_amplitude_depth, depth));
+                            }
+                        } else {
+                            const int centibels = static_cast<int>(std::lround(
+                                std::clamp(200.0 * std::log10(1.0 + fraction), 0.0, 960.0)));
+                            if (centibels > 0) {
+                                out.generators.push_back(
+                                    Generator::value(Gen::mod_lfo_to_volume, centibels));
+                            }
+                        }
+                    }
+                    ++built.lfos_emitted;
+                };
+
+                emit_lfo(lfo1, /*vibrato=*/true);
+                emit_lfo(lfo2, /*vibrato=*/false);
 
                 if (partial.pan() != 0x40) {
                     // SF2 pan is tenths of a percent either side of centre; the partial's is a

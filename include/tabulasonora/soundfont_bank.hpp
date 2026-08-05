@@ -4,11 +4,13 @@
 #include "tabulasonora/patch_directory.hpp"
 #include "tabulasonora/soundfont_samples.hpp"
 #include "tabulasonora/soundfont_writer.hpp"
+#include "tabulasonora/lfo_engine.hpp"
 #include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/tva_chain.hpp"
 #include "tabulasonora/tvf_chain.hpp"
 
 #include <string>
+#include <vector>
 
 namespace ts::sf2 {
 
@@ -21,6 +23,8 @@ struct BankOptions {
     int sample_rate = 32000;
     /// How long a note the envelope fit is scored over, in seconds.
     double fit_hold_seconds = 1.0;
+    /// Whether the `DMOD` chunk carries the GS-specific modulators as well as the reader's own.
+    bool gs_modulators = true;
 };
 
 /// A built bank and the counts worth reporting about it.
@@ -49,6 +53,14 @@ struct BankBuild {
     double filter_fit_sum = 0.0;
     double pitch_fit_sum = 0.0;
 
+    /// LFOs emitted, and how many of them had a waveform SF2 cannot hold.
+    ///
+    /// SF2's LFOs are triangles. Waveform selectors 1 to 3 are the random shapes, which redraw when
+    /// the phase wraps rather than being functions of it, so they are emitted as triangles and
+    /// counted here rather than silently approximated.
+    int lfos_emitted = 0;
+    int random_lfos = 0;
+
     [[nodiscard]] double mean_fit_error() const noexcept
     {
         return fitted_zones > 0 ? fit_error_sum / fitted_zones : 0.0;
@@ -69,12 +81,20 @@ struct BankBuild {
 /// sees every page collapsed onto bank 0.
 ///
 /// `levels` supplies the amplitude chain the static attenuation is taken from.
+/// The bank's `DMOD` chunk: the reader's own default modulators plus the GS-specific ones.
+///
+/// `DMOD` **replaces** the built-in set rather than extending it, so the built-ins are transcribed
+/// here rather than assumed. Passing `false` gives exactly the reader's own set, which is useful
+/// for telling a modulator problem apart from a generator one.
+[[nodiscard]] std::vector<Modulator> default_modulators(bool general_sound_extensions = true);
+
 [[nodiscard]] BankBuild build_bank(const PatchDirectory& directory,
                                    const DrumKitTable& kits,
                                    const SampleSet& set,
                                    const TvaChain& levels,
                                    const TvfChain& filters,
                                    const PitchChain& pitches,
+                                   const LfoEngine& lfos,
                                    const BankOptions& options = {});
 
 } // namespace ts::sf2

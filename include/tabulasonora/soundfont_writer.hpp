@@ -62,8 +62,11 @@ enum class Gen : std::uint16_t {
     /// They give the vibrato LFO the amplitude and filter destinations standard SF2 denies it,
     /// which is what lets the tone-common LFO1 be represented at all. A conforming reader stops at
     /// 60 and ignores these, so nothing that depends on them may be load-bearing.
+    vib_lfo_rate = 62,
     vib_lfo_amplitude_depth = 63,
     vib_lfo_to_filter_fc = 64,
+    mod_lfo_rate = 65,
+    mod_lfo_amplitude_depth = 66,
 };
 
 /// `sampleModes` values. SF2 has no ping-pong and no reverse; both are baked into the sample data.
