@@ -4,7 +4,9 @@
 #include "tabulasonora/patch_directory.hpp"
 #include "tabulasonora/soundfont_samples.hpp"
 #include "tabulasonora/soundfont_writer.hpp"
+#include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/tva_chain.hpp"
+#include "tabulasonora/tvf_chain.hpp"
 
 #include <string>
 
@@ -37,6 +39,16 @@ struct BankBuild {
     int fitted_zones = 0;
     int overflowed_zones = 0;
 
+    /// How the one modulation envelope was spent.
+    ///
+    /// `shared_mod_envelopes` is the population where the filter and the pitch envelope both wanted
+    /// it and the filter won -- the collision the format cannot resolve.
+    int filter_envelopes = 0;
+    int pitch_envelopes = 0;
+    int shared_mod_envelopes = 0;
+    double filter_fit_sum = 0.0;
+    double pitch_fit_sum = 0.0;
+
     [[nodiscard]] double mean_fit_error() const noexcept
     {
         return fitted_zones > 0 ? fit_error_sum / fitted_zones : 0.0;
@@ -61,6 +73,8 @@ struct BankBuild {
                                    const DrumKitTable& kits,
                                    const SampleSet& set,
                                    const TvaChain& levels,
+                                   const TvfChain& filters,
+                                   const PitchChain& pitches,
                                    const BankOptions& options = {});
 
 } // namespace ts::sf2

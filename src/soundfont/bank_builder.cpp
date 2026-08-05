@@ -1,6 +1,8 @@
 #include "tabulasonora/soundfont_bank.hpp"
 
+#include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/soundfont_envelopes.hpp"
+#include "tabulasonora/tvf_chain.hpp"
 #include "tabulasonora/tone.hpp"
 
 #include <algorithm>
@@ -34,6 +36,41 @@ constexpr int inter_sample_gap = 46;
     }
     const double cb = -200.0 * std::log10(gain);
     return static_cast<int>(std::lround(std::clamp(cb, 0.0, 1440.0)));
+}
+
+/// Absolute cents for a frequency, which is what `initialFilterFc` holds.
+///
+/// 8.176 Hz is SF2's reference, the frequency of MIDI note 0.
+[[nodiscard]] int absolute_cents(double hz) noexcept
+{
+    if (!(hz > 0.0)) {
+        return 1500;
+    }
+    return static_cast<int>(
+        std::lround(std::clamp(1200.0 * std::log2(hz / 8.176), 1500.0, 13500.0)));
+}
+
+/// Writes a fitted modulation envelope as its generators, omitting SF2 defaults.
+void emit_mod_dahdsr(std::vector<Generator>& into, const Dahdsr& envelope)
+{
+    if (envelope.delay > min_timecents) {
+        into.push_back(Generator::value(Gen::delay_mod_env, envelope.delay));
+    }
+    if (envelope.attack > min_timecents) {
+        into.push_back(Generator::value(Gen::attack_mod_env, envelope.attack));
+    }
+    if (envelope.hold > min_timecents) {
+        into.push_back(Generator::value(Gen::hold_mod_env, envelope.hold));
+    }
+    if (envelope.decay > min_timecents) {
+        into.push_back(Generator::value(Gen::decay_mod_env, envelope.decay));
+    }
+    if (envelope.sustain != 0) {
+        into.push_back(Generator::value(Gen::sustain_mod_env, envelope.sustain));
+    }
+    if (envelope.release > min_timecents) {
+        into.push_back(Generator::value(Gen::release_mod_env, envelope.release));
+    }
 }
 
 /// Writes a fitted DAHDSR as its six generators, omitting any left at the SF2 default.
@@ -94,6 +131,8 @@ BankBuild build_bank(const PatchDirectory& directory,
                      const DrumKitTable& kits,
                      const SampleSet& set,
                      const TvaChain& levels,
+                     const TvfChain& filters,
+                     const PitchChain& pitches,
                      const BankOptions& options)
 {
     BankBuild built;
@@ -210,6 +249,106 @@ BankBuild build_bank(const PatchDirectory& directory,
                     Generator::value(Gen::initial_attenuation, centibels(fit.peak)));
 
                 emit_dahdsr(out.generators, fit.envelope);
+
+                // ── the filter, and the one modulation envelope both it and pitch must share ──
+                //
+                // 81% of partials move the filter and 17% move the pitch, and SF2 has a single
+                // modEnv reaching both. Where only one is active it gets the envelope outright.
+                // Where both are -- 14% of partials -- the filter takes the shape, because it
+                // carries the sustained gesture while the pitch envelope is usually a short
+                // attack transient, and the pitch depth then rides the filter's timing.
+                const int resonance = TvfChain::resonance_byte(partial);
+                const bool filter_on = filters.tap(partial.filter_type()) != FilterTap::bypass;
+
+                ModulationFit shape;
+                if (filter_on) {
+                    const TvfChain::Envelope cutoff = filters.create_envelope(
+                        partial, velocity_high, zone.key_low, options.sample_rate);
+
+                    std::vector<double> targets(cutoff.offsets.targets().begin(),
+                                                cutoff.offsets.targets().end());
+                    std::vector<double> ends;
+                    ends.reserve(targets.size());
+                    for (const auto end : cutoff.offsets.segment_ends()) {
+                        ends.push_back(static_cast<double>(end) / options.sample_rate);
+                    }
+
+                    shape = fit_modulation(
+                        targets, ends, 0.0, targets.back(),
+                        static_cast<double>(cutoff.offsets.release_samples()) / options.sample_rate,
+                        options.fit_hold_seconds);
+
+                    const double low_hz = filters.cutoff_hz(
+                        std::clamp(cutoff.base_cutoff + shape.low, 0.0, 32767.0), resonance,
+                        options.sample_rate);
+                    out.generators.push_back(
+                        Generator::value(Gen::initial_filter_fc, absolute_cents(low_hz)));
+
+                    // Reciprocal-Q: the neutral resonance byte 0x40 is exactly 1.0, and smaller
+                    // bytes are more resonant. SF2 wants the peak height in centibels.
+                    const double q = 64.0 / std::max(1, resonance);
+                    const int q_cb = static_cast<int>(
+                        std::lround(std::clamp(200.0 * std::log10(std::max(1.0, q)), 0.0, 960.0)));
+                    if (q_cb > 0) {
+                        out.generators.push_back(
+                            Generator::value(Gen::initial_filter_q, q_cb));
+                    }
+
+                    if (shape.active) {
+                        const double high_hz = filters.cutoff_hz(
+                            std::clamp(cutoff.base_cutoff + shape.high, 0.0, 32767.0), resonance,
+                            options.sample_rate);
+                        const int depth = static_cast<int>(std::lround(
+                            std::clamp(1200.0 * std::log2(std::max(1e-6, high_hz / low_hz)),
+                                       -12000.0, 12000.0)));
+                        if (depth != 0) {
+                            out.generators.push_back(
+                                Generator::value(Gen::mod_env_to_filter_fc, depth));
+                        }
+                        ++built.filter_envelopes;
+                        built.filter_fit_sum += shape.rms_error;
+                    }
+                }
+
+                // The pitch envelope. Its depth is in milli-semitones, which is a tenth of a cent.
+                const std::optional<PitchEnvelope> pitch =
+                    pitches.envelope_offsets(partial, zone.key_low, velocity_high);
+                if (pitch) {
+                    std::vector<double> targets(pitch->targets.begin(), pitch->targets.end());
+                    std::vector<double> ends;
+                    double accumulated = 0.0;
+                    for (const double milliseconds : pitch->times) {
+                        accumulated += milliseconds / 1000.0;
+                        ends.push_back(accumulated);
+                    }
+
+                    const ModulationFit pitch_shape =
+                        fit_modulation(targets, ends, pitch->start, pitch->release,
+                                       pitch->release_ms / 1000.0, options.fit_hold_seconds);
+
+                    if (pitch_shape.active) {
+                        // Milli-semitones to cents: a semitone is 100 cents, so a milli-semitone
+                        // is a tenth of one.
+                        const int depth = static_cast<int>(
+                            std::lround(std::clamp(pitch_shape.span() / 10.0, -12000.0, 12000.0)));
+                        if (depth != 0) {
+                            out.generators.push_back(
+                                Generator::value(Gen::mod_env_to_pitch, depth));
+                        }
+                        ++built.pitch_envelopes;
+                        built.pitch_fit_sum += pitch_shape.rms_error;
+
+                        if (!shape.active) {
+                            shape = pitch_shape;
+                        } else {
+                            ++built.shared_mod_envelopes;
+                        }
+                    }
+                }
+
+                if (shape.active) {
+                    emit_mod_dahdsr(out.generators, shape.envelope);
+                }
 
                 if (partial.pan() != 0x40) {
                     // SF2 pan is tenths of a percent either side of centre; the partial's is a

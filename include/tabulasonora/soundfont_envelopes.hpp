@@ -2,6 +2,8 @@
 
 #include "tabulasonora/segment_envelope.hpp"
 
+#include <span>
+
 namespace ts::sf2 {
 
 /// SF2's centibel silence floor, as the target reader defines it.
@@ -99,5 +101,51 @@ struct VolumeFit {
                                    int sample_rate,
                                    double hold_seconds,
                                    double delay_seconds = 0.0);
+
+/// A fitted modulation envelope, normalised to [0, 1] with its span reported separately.
+///
+/// The modulation envelope is a different animal from the volume one and the differences are all
+/// load-bearing. Its sustain generator is a *decrease* in 0.1% units rather than an attenuation in
+/// centibels; it is linear in level throughout rather than in centibels; and its attack is a convex
+/// curve rather than a straight line. Its decay and release generators are still scaled — decay by
+/// how far it falls, release by the level it starts from — but by level fractions, not by
+/// centibels.
+struct ModulationFit {
+    Dahdsr envelope;
+
+    /// The trajectory's lowest and highest values, in whatever unit the source used.
+    ///
+    /// The SF2 envelope runs 0 to 1 over this span, so a caller turns `high - low` into the depth
+    /// generator and `low` into the static value the depth is added to.
+    double low = 0.0;
+    double high = 0.0;
+
+    /// Whether the envelope does anything at all.
+    bool active = false;
+
+    double worst_error = 0.0;
+    double rms_error = 0.0;
+    int moving_segments = 0;
+
+    [[nodiscard]] double span() const noexcept { return high - low; }
+};
+
+/// Evaluates a modulation envelope the way the target reader does, returning level in [0, 1].
+[[nodiscard]] double evaluate_modulation(const Dahdsr& envelope,
+                                         double seconds,
+                                         double note_off) noexcept;
+
+/// Fits an arbitrary four-segment trajectory onto SF2's modulation envelope.
+///
+/// `targets` and `ends_seconds` are the segment destinations and their cumulative end times;
+/// `start` is the value at note-on, which for the filter envelope is its peak rather than zero —
+/// the engine's filter envelope opens instantly and falls, where SF2's rises from nothing. That
+/// case comes out as a zero-length attack, which is what it should be.
+[[nodiscard]] ModulationFit fit_modulation(std::span<const double> targets,
+                                           std::span<const double> ends_seconds,
+                                           double start,
+                                           double release_target,
+                                           double release_seconds,
+                                           double hold_seconds);
 
 } // namespace ts::sf2
