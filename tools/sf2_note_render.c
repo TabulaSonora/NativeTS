@@ -15,7 +15,7 @@
  *
  *   sf2_note_render <bank.sf2> <out.f32> --program N --note N --velocity N --hold S
  *                   [--bank-msb N] [--bank-lsb N] [--drum] [--sflist list.json]
- *                   [--rate HZ] [--tail S]
+ *                   [--rate HZ] [--tail S] [--cc N V]...
  */
 
 #include "spessasynth/sflist/sflist.h"
@@ -60,6 +60,7 @@ int main(int argc, char **argv) {
 	unsigned rate = 32000;
 	const char *sflist_path = NULL;
 	const char *base_path = ".";
+	int cc_number[16], cc_value[16], cc_count = 0;
 
 	for(int i = 3; i < argc; i++) {
 		if(!strcmp(argv[i], "--program") && i + 1 < argc) program = atoi(argv[++i]);
@@ -72,6 +73,11 @@ int main(int argc, char **argv) {
 		else if(!strcmp(argv[i], "--rate") && i + 1 < argc) rate = (unsigned)atoi(argv[++i]);
 		else if(!strcmp(argv[i], "--sflist") && i + 1 < argc) sflist_path = argv[++i];
 		else if(!strcmp(argv[i], "--base") && i + 1 < argc) base_path = argv[++i];
+		else if(!strcmp(argv[i], "--cc") && i + 2 < argc && cc_count < 16) {
+			cc_number[cc_count] = atoi(argv[++i]);
+			cc_value[cc_count] = atoi(argv[++i]);
+			++cc_count;
+		}
 		else if(!strcmp(argv[i], "--drum")) drum = 1;
 		else { fprintf(stderr, "unknown option '%s'\n", argv[i]); return 2; }
 	}
@@ -110,6 +116,9 @@ int main(int argc, char **argv) {
 	ss_processor_control_change(proc, channel, 0, bank_msb, 0.0);
 	ss_processor_control_change(proc, channel, 32, bank_lsb, 0.0);
 	ss_processor_program_change(proc, channel, program, 0.0);
+	/* Controllers after the program change, so a bank select is not undone by one. */
+	for(int i = 0; i < cc_count; i++)
+		ss_processor_control_change(proc, channel, cc_number[i], cc_value[i], 0.0);
 
 	/* Report what the program change actually resolved to, so a silent render is distinguishable
 	 * from a wrong one. */
