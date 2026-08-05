@@ -11,6 +11,9 @@ namespace {
 /// Samples per control tick — the grid coefficients refresh on.
 constexpr int control_block = NoteRenderer::control_block;
 
+/// Pan units the position may move in one control tick.
+constexpr int pan_slew_per_tick = 2;
+
 } // namespace
 
 void PartialVoice::start(VoiceSetup&& setup)
@@ -34,6 +37,7 @@ void PartialVoice::start(VoiceSetup&& setup)
     pan_ = setup.pan;
     pan_follows_part_ = setup.pan_follows_part;
     random_pan_ = setup.random_pan.value_or(-1);
+    pan_seeded_ = false;
 
     volume_ramp_.seed(ControlRamp::target_of(setup.volume_word),
                       ControlRamp::volume_rate_word,
@@ -128,12 +132,39 @@ void PartialVoice::kill() noexcept
     lfo2_.reset();
 }
 
-std::pair<double, double> PartialVoice::pan_gains(int part_pan) const noexcept
+int PartialVoice::pan_target(int part_pan) const noexcept
 {
+    // A random pan is resolved once for the strike and is not a moving target, so it never slews.
     if (random_pan_ >= 0) {
-        return pan_law_->gains(random_pan_);
+        return random_pan_;
     }
-    return pan_law_->gains(pan_follows_part_ ? pan_ + (part_pan - PanLaw::centre) : pan_);
+    return std::clamp(pan_follows_part_ ? pan_ + (part_pan - PanLaw::centre) : pan_, 0, 127);
+}
+
+void PartialVoice::slew_pan(int part_pan) noexcept
+{
+    const int target = pan_target(part_pan);
+
+    // The first call lands on the target outright: a note struck while a pan sweep is in flight
+    // starts where the sweep has got to, it does not set off from the centre to catch up.
+    if (!pan_seeded_) {
+        pan_position_ = target;
+        pan_seeded_ = true;
+        return;
+    }
+
+    if (sample_ % control_block != 0) {
+        return;
+    }
+
+    // Two units a tick, and the last one exactly: an error of one moves by one, so the position
+    // arrives on the target rather than oscillating either side of it.
+    pan_position_ += std::clamp(target - pan_position_, -pan_slew_per_tick, pan_slew_per_tick);
+}
+
+std::pair<double, double> PartialVoice::pan_gains() const noexcept
+{
+    return pan_law_->gains(pan_position_);
 }
 
 double PartialVoice::choke_gain(std::int64_t since) noexcept

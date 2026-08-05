@@ -1185,3 +1185,69 @@ TEST_CASE("the assignable controllers reach the matrix", "[stream][sccore]")
         CHECK(loudness(0x00, 127) < neutral * 0.75);
     }
 }
+
+TEST_CASE("a pan change sweeps rather than snapping", "[stream][sccore]")
+{
+    // `voice_expr_smooth` @`180083db0` slews the pan *position* by at most two of 127 a control
+    // tick, so CC#10 moved under a sounding note takes hundreds of milliseconds to arrive. Measured
+    // with `scdec panramp`: CC#10 64 -> 127 is 32 steps of two, one every 320 samples, 310 ms end
+    // to end. Rendering the same jump through the oracle agrees -- the two balance trajectories
+    // track within 0.03 the whole way across.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    generator.send_channel(0xB0, 7, 127);
+    // Dry: the sends are not panned, and their tail is enough to keep the balance off its rails.
+    generator.send_channel(0xB0, 91, 0);
+    generator.send_channel(0xB0, 93, 0);
+    generator.send_channel(0xB0, 10, PanLaw::centre);
+    generator.send_channel(0x90, 96, 110);
+
+    constexpr int window = 1024; // 32 ms
+    std::vector<float> left(window);
+    std::vector<float> right(window);
+
+    // Right's share of the energy: 0.5 centred, 1.0 hard right. Reading the balance rather than a
+    // level keeps the note's own envelope out of it.
+    const auto balance = [&] {
+        generator.render(left, right);
+        double el = 0.0;
+        double er = 0.0;
+        for (int i = 0; i < window; ++i) {
+            el += static_cast<double>(left[i]) * left[i];
+            er += static_cast<double>(right[i]) * right[i];
+        }
+        return el + er > 1e-14 ? er / (el + er) : 0.5;
+    };
+
+    for (int i = 0; i < 6; ++i) {
+        (void)balance(); // settle the attack
+    }
+    CHECK_THAT(balance(), WithinAbs(0.5, 0.05));
+
+    generator.send_channel(0xB0, 10, 127);
+
+    std::vector<double> sweep;
+    for (int i = 0; i < 16; ++i) {
+        sweep.push_back(balance());
+    }
+
+    // The first window is barely moved. This is the assertion an unpanned-instantly engine fails:
+    // without the slew it would already read 1.0 here.
+    CHECK(sweep.front() < 0.7);
+
+    // Monotone the whole way -- the position steps toward the target and never past it.
+    for (std::size_t i = 1; i < sweep.size(); ++i) {
+        CHECK(sweep[i] >= sweep[i - 1] - 1e-9);
+    }
+
+    // Arrival somewhere between 250 and 450 ms, against the oracle's 310. The window is 32 ms wide
+    // and lags by about half of one, so this is not tighter than the measurement supports.
+    const auto arrived = std::find_if(sweep.begin(), sweep.end(), [](double b) { return b > 0.999; });
+    REQUIRE(arrived != sweep.end());
+    const auto milliseconds = (arrived - sweep.begin() + 1) * window / 32;
+    CHECK(milliseconds >= 250);
+    CHECK(milliseconds <= 450);
+}

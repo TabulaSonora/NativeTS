@@ -1739,6 +1739,7 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // Ahead of `render`, which advances the sample clock the retarget tick is found from. The ramp
     // runs whether or not the part is audible, so muting cannot leave it stranded mid-glide.
     voice.volume_gains(part.volume_word(), volume_ramp_mask, volume_gains);
+    voice.slew_pan(part.pan);
 
     voice.render(block, pitch_offset, matrix);
 
@@ -1753,7 +1754,7 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
         return;
     }
 
-    const auto [pan_left, pan_right] = voice.pan_gains(part.pan);
+    const auto [pan_left, pan_right] = voice.pan_gains();
 
     // The part fader is a *buffer* now, not a scalar: `voice_ctrl_ramp_b` glides it toward each new
     // CC#7/CC#11 value over about 6 ms instead of stepping it, which is what keeps a volume slide

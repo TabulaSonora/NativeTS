@@ -147,8 +147,14 @@ public:
     /// Silences the voice immediately and releases its wave.
     void kill() noexcept;
 
-    /// The stereo gains for this voice against a part's pan.
-    [[nodiscard]] std::pair<double, double> pan_gains(int part_pan) const noexcept;
+    /// Slews the voice's pan toward the part's, once a control tick.
+    ///
+    /// Call this before `render` for the block, like `volume_gains` and for the same reason: it
+    /// reads the sample clock to find the tick.
+    void slew_pan(int part_pan) noexcept;
+
+    /// The stereo gains for this voice, at the pan position the slew has reached.
+    [[nodiscard]] std::pair<double, double> pan_gains() const noexcept;
 
     /// Renders one block.
     ///
@@ -227,9 +233,24 @@ private:
     double base_pitch_ = 0.0;
     double native_pitch_ = 0.0;
 
+    /// The pan the voice is aiming at, before the slew.
+    [[nodiscard]] int pan_target(int part_pan) const noexcept;
+
     int pan_ = PanLaw::centre;
     bool pan_follows_part_ = false;
     int random_pan_ = -1;
+
+    /// The pan position actually in force, which chases `pan_target` rather than jumping to it.
+    ///
+    /// `voice_expr_smooth` @`180083db0` moves it by at most two of 127 a control tick, so a
+    /// hard-panned CC#10 mid-note sweeps across roughly 300 ms rather than snapping. Measured:
+    /// `scdec panramp` puts CC#10 64->127 at 32 steps of two, one every 320 samples, 310 ms end to
+    /// end. Unlike the volume fader this is a slew on the *position*, with the left and right gains
+    /// falling out of the pan law at whatever position it has reached -- there is no accumulator
+    /// and no per-sample buffer, and the pair is a scalar for the whole tick.
+    int pan_position_ = PanLaw::centre;
+    /// Whether the position has been seeded; a voice starts *at* its pan, it does not glide in.
+    bool pan_seeded_ = false;
     double level_gain_ = 1.0;
 
     /// The part-volume anti-zipper ramp — `voice_ctrl_ramp_b`'s state, one per voice.
