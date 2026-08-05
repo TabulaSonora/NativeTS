@@ -246,6 +246,20 @@ public:
     /// parts.
     bool efx_enabled = false;
 
+    /// The two biases on the envelope hold clock's rate index — the ninth tone-modify slot, which
+    /// continues the `30`-`37` run past where Roland's published list ends.
+    ///
+    /// `envelope_delay` is the user offset (`40 1x 38`, `part+0x44b`) and survives a program
+    /// change; `envelope_delay_tone` is the per-program one (`40 4x 38`, `part+0x45b`) that every
+    /// program change forces back to centre, the same way the tone loader fills the eight slots
+    /// before it. Both are `0x40` for no change, and they are summed.
+    ///
+    /// Above centre this does not merely lengthen an existing delay — it **arms** one on partials
+    /// that have none, because the rate curve's first entry is zero. See
+    /// `EnvelopeMachine::hold_samples`.
+    int envelope_delay = 0x40;
+    int envelope_delay_tone = 0x40;
+
     /// GS velocity sense depth and offset (`40 1x 1A`/`1B`), applied by `effective_velocity`.
     int velocity_depth = 0x40;
     int velocity_offset = 0x40;

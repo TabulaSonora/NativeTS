@@ -742,6 +742,10 @@ void ToneGenerator::Impl::apply_channel(
 void ToneGenerator::Impl::program_change(int part_index, Part& part, int program)
 {
     part.program = program;
+    // The tone loader fills the per-program tone-modify slots and forces the ninth back to centre
+    // on every program change. No shipped tone populates it, so in practice this is a reset: a
+    // file that sets `40 4x 38` and then changes program loses it, where `40 1x 38` survives.
+    part.envelope_delay_tone = 0x40;
     if (is_drum_part(part_index)) {
         const std::optional<int> kit = notes->drums().kit_for_program(program, drum_row_for(part));
         if (kit) {
@@ -1192,6 +1196,11 @@ void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
             Part& part = impl_->parts[static_cast<std::size_t>(index)];
             if (a3 == 0x20) {
                 part.eq_enabled = value != 0;
+            } else if (a3 == 0x38) {
+                // The per-program half of the hold-clock bias (`part+0x45b`). The tone loader
+                // fills the eight slots before it from the tone and forces this one back to
+                // centre, so unlike `40 1x 38` it does not survive a program change.
+                part.envelope_delay_tone = value;
             } else if (a3 == 0x22 && impl_->options.efx) {
                 part.efx_enabled = value != 0;
                 if (part.efx_enabled) {
@@ -1401,15 +1410,10 @@ void ToneGenerator::Impl::gs_part_parameter(int part_index,
 
     case 0x38:
         // The ninth tone-modify slot (`part+0x44b`, 0x40 neutral), continuing the `30`-`37` run
-        // past where Roland's list ends. It biases the envelope hold clock's rate index --
-        // `clamp(part[0x45b] + part[0x44b] + (clock & 0x7F) - 0x80, 0, 0x7F)` at every note-on --
-        // so above neutral it *arms* a start delay on partials that have none, up to 24 s, and
-        // below neutral it shortens the ones that do.
-        //
-        // Deliberately not stored yet: honouring it means `EnvelopeMachine::hold_samples` taking
-        // the bias and losing its `clock == 0` early exit, which is only equivalent while the bias
-        // is neutral (`g_rate_curve[0]` is 0). Dropping it keeps this engine exactly where it was
-        // rather than half-wiring it. See the FINDINGS entry for the full law.
+        // past where Roland's published list ends: a bias on the envelope hold clock's rate index.
+        // Above neutral it *arms* a start delay on partials that have none. Survives a program
+        // change, unlike its `40 4x 38` twin.
+        part.envelope_delay = value;
         break;
 
     // The part modify offsets -- third writer onto the same bytes as CC#71-78 and the NRPNs.
@@ -2044,7 +2048,8 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             setup.pitch_envelope = notes->pitch().create_envelope_runner(partial, key, velocity);
             setup.lfo1 = std::move(lfo1);
             setup.lfo2 = std::move(lfo2);
-            setup.envelope_hold_samples = notes->envelopes().hold_samples(partial, velocity);
+            setup.envelope_hold_samples = notes->envelopes().hold_samples(
+                partial, velocity, part.envelope_delay + part.envelope_delay_tone);
             setup.half_damper = notes->directory().half_damper(tone_number);
             setup.glide_milli_semitones =
                 glide_from < 0
@@ -2168,7 +2173,8 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.pitch_envelope = notes->pitch().create_envelope_runner(partial, 60, velocity);
         setup.lfo1 = std::move(lfo1);
         setup.lfo2 = std::move(lfo2);
-        setup.envelope_hold_samples = notes->envelopes().hold_samples(partial, velocity);
+        setup.envelope_hold_samples = notes->envelopes().hold_samples(
+            partial, velocity, part.envelope_delay + part.envelope_delay_tone);
         setup.is_drum = true;
         setup.drum_base_ratio = std::pow(
             2.0, (PitchChain::drum_pitch_milli_semitones(partial, key.pitch) - native) / 12000.0);

@@ -135,28 +135,35 @@ double EnvelopeMachine::segment_curve(double position,
 }
 
 std::int64_t EnvelopeMachine::hold_samples(const PartialParameters& partial,
-                                           int velocity) const noexcept
+                                           int velocity,
+                                           int delay_bias) const noexcept
 {
     const int clock = partial.raw()[0x00];
-    // The engine has no such early exit: it always forms the index from the two part biases and
-    // this byte. It is equivalent only because both biases default to 0x40 and `g_rate_curve[0]`
-    // is exactly zero, so a neutral part computes a zero period here anyway. GS `40 1x 38` and
-    // `40 4x 38` move those biases -- see the FINDINGS entry -- and honouring them means losing
-    // this exit, since a raised bias arms the clock on a partial that has no delay of its own.
-    if (clock == 0) {
-        return 0;
-    }
+    // Only the exact byte 0xff holds forever. A high bit with any other low bits is an ordinary
+    // delay -- the engine masks the bit off and carries on into the index below -- so testing the
+    // high bit here instead would turn every long delay into an infinite one.
     if (clock == 0xFF) {
         return hold_forever;
     }
 
-    const int index = clock & 0x7F;
+    // No early exit on a zero clock byte. The engine has none, and it matters: the index is the
+    // sum of the part's two biases and this byte, so a part biased above neutral arms the clock on
+    // a partial that carries no delay at all. At the neutral 0x80 this reduces to the clock byte,
+    // and `g_rate_curve[0]` is zero, so an unbiased part renders exactly as it did before.
+    //
+    // Measured against the module across a bias sweep on a two-partial patch, this lands on the
+    // same control tick at six of eight points and one tick (10 ms) short at 0x44 and 0x50. No
+    // single velocity scale explains those two -- solving for one puts 0x4C at 256 or above and
+    // 0x50 below 242 -- so the residual is likely the per-partial velocity scale deciding which
+    // of two partials arms first, not this index. Left as a measured residual rather than fitted
+    // away.
+    const int index = std::clamp((delay_bias + (clock & 0x7F)) - 0x80, 0, 0x7F);
     const int scale = level_scale(std::clamp(velocity, 0, 127), partial.raw()[0x01]);
 
     // The product reaches 0xffff * 0xffff, so this wraps by design before the mask takes the low
     // word back out. Values 1 and 2 compute to zero ticks and never arm.
     const int ticks =
-        ((fx::wmul(scale, rate_curve_[static_cast<std::size_t>(std::min(index, 0x7F))]) >> 8)
+        ((fx::wmul(scale, rate_curve_[static_cast<std::size_t>(index)]) >> 8)
          & 0xFFFF)
         / 10;
 

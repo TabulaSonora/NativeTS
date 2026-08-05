@@ -42,6 +42,8 @@ void Part::reset()
     key_high = 0x7F;
     eq_enabled = false;
     efx_enabled = false;
+    envelope_delay = 0x40;
+    envelope_delay_tone = 0x40;
     velocity_depth = 0x40;
     velocity_offset = 0x40;
     pitch_offset_fine = 0x08;
