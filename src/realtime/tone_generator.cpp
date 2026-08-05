@@ -105,6 +105,13 @@ struct ToneGenerator::Impl {
         for (std::size_t i = 0; i < parts.size(); ++i) {
             parts[i].rx_channel = static_cast<int>(i) % Sequence::channel_count;
         }
+
+        // The two tables that pick the anti-zipper hold, finally read. The volume path's rate word
+        // is a constant at the call site, so its mask is a constant too -- resolved once here
+        // rather than per voice per block.
+        volume_ramp_mask = ControlRamp::mask_of(ControlRamp::volume_rate_word,
+                                                renderer.tables().ramp_flagword(),
+                                                renderer.tables().ramp_divider());
     }
 
     NoteRenderer* notes;
@@ -124,6 +131,13 @@ struct ToneGenerator::Impl {
     std::vector<std::unique_ptr<PartialVoice>> dying;
 
     std::array<float, block_size> scratch{};
+
+    /// The voice's part-volume gain, one entry a sample, refilled by its anti-zipper ramp.
+    std::array<double, block_size> volume_gains{};
+
+    /// The zero-order-hold mask the part-volume ramp runs on — zero, so one update a sample.
+    unsigned volume_ramp_mask = 0;
+
     std::array<float, block_size> reverb_bus{};
     std::array<float, block_size> chorus_bus{};
     std::array<float, block_size> delay_bus{};
@@ -1721,6 +1735,11 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // Refreshed per block, not latched at note-on: a filter sweep has to reach notes that are
     // already sounding.
     voice.set_cutoff_offset(part.modifiers().cutoff_offset());
+
+    // Ahead of `render`, which advances the sample clock the retarget tick is found from. The ramp
+    // runs whether or not the part is audible, so muting cannot leave it stranded mid-glide.
+    voice.volume_gains(part.volume_word(), volume_ramp_mask, volume_gains);
+
     voice.render(block, pitch_offset, matrix);
 
     // A silenced part contributes nothing at all -- not to the dry mix and not to the sends
@@ -1735,7 +1754,21 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     }
 
     const auto [pan_left, pan_right] = voice.pan_gains(part.pan);
-    const double gain = part.volume_scale() * voice.level_gain();
+
+    // The part fader is a *buffer* now, not a scalar: `voice_ctrl_ramp_b` glides it toward each new
+    // CC#7/CC#11 value over about 6 ms instead of stepping it, which is what keeps a volume slide
+    // from clicking once per event.
+    //
+    // The kit level is folded into it rather than multiplied alongside, so every mix below keeps the
+    // two-multiply shape it had when the fader was a scalar -- `(sample * gain) * pan`, with the
+    // per-sample gain standing exactly where the constant one did. The engine folds the kit level
+    // into the ramped word itself; it is fixed for the life of a strike, so the product agrees.
+    if (const double level = voice.level_gain(); level != 1.0) {
+        for (double& gain : volume_gains) {
+            gain *= level;
+        }
+    }
+    std::span<const double> gains{volume_gains};
 
     // An EFX part detours to the block's input pair and has both sends forced to the null bus,
     // exactly as the voice bus-assign does with `part+0x452` set — the block's own send levels
@@ -1763,21 +1796,21 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     std::span<float> dry_right = efx_part          ? std::span<float>{efx_in_right}
                                  : part.eq_enabled ? std::span<float>{eq_right}
                                                    : right;
-    simd::mix_scaled(block, gain, pan_left, dry_left);
-    simd::mix_scaled(block, gain, pan_right, dry_right);
+    simd::mix_scaled_varying(block, gains, pan_left, dry_left);
+    simd::mix_scaled_varying(block, gains, pan_right, dry_right);
 
     // A send at zero is skipped rather than multiplied out, which drops three of the five passes
     // over the block on a part with no sends. That is exact rather than merely harmless: the buses
     // are cleared to +0 at the top of every block, and a sum that starts at +0 can never reach -0,
     // so adding the +-0 the multiply would have produced leaves every element as it stands.
     if (to_reverb != 0.0) {
-        simd::mix_scaled(block, gain, to_reverb, reverb_bus);
+        simd::mix_scaled_varying(block, gains, to_reverb, reverb_bus);
     }
     if (to_chorus != 0.0) {
-        simd::mix_scaled(block, gain, to_chorus, chorus_bus);
+        simd::mix_scaled_varying(block, gains, to_chorus, chorus_bus);
     }
     if (to_delay != 0.0) {
-        simd::mix_scaled(block, gain, to_delay, delay_bus);
+        simd::mix_scaled_varying(block, gains, to_delay, delay_bus);
     }
 }
 
@@ -1878,6 +1911,12 @@ void ToneGenerator::Impl::recycle(int index)
 
 void ToneGenerator::Impl::begin(int channel, int note, int velocity, int group, VoiceSetup&& setup)
 {
+    // The voice's part fader starts *at* the part's volume rather than gliding up to it, so a note
+    // struck part-way through a slide is already where the slide has got to. Set here, for both
+    // callers, because it is a property of the part rather than of the tone being started.
+    setup.volume_word = parts[static_cast<std::size_t>(channel)].volume_word();
+    setup.volume_mask = volume_ramp_mask;
+
     // Allocating may steal, which hands whatever was sounding to the dying list and empties the
     // slot; anything still there was already finished.
     const Voice slot = pool.allocate(channel, note, velocity, group);

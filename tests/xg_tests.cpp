@@ -194,11 +194,16 @@ TEST_CASE("an XG part above the configured count is dropped, not wrapped", "[xg]
         return peak;
     };
 
-    // Part 0 exists: the volume lands and the note is silent.
-    CHECK(peak_with_volume_aimed_at(0x00) == 0.0);
+    // Part 0 exists: the volume lands and the note is silenced.
+    //
+    // Silenced, not zeroed. The part fader reaches the mix through `voice_ctrl_ramp_b`, which emits
+    // 1e-05 rather than +0 for a zero value -- so a part at volume 0 sits about 120 dB down instead
+    // of at true silence. The margin against a sounding note is four orders of magnitude either
+    // way, which is what this is really asking.
+    CHECK(peak_with_volume_aimed_at(0x00) < 1e-04);
 
     // Part 32 does not, at two ports. Folding it would mask to part 0 and silence the note too.
-    CHECK(peak_with_volume_aimed_at(0x20) > 0.0);
+    CHECK(peak_with_volume_aimed_at(0x20) > 1e-02);
 }
 
 // What a mixer shows for an XG part.

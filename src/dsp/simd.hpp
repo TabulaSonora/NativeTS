@@ -57,6 +57,23 @@ inline void mix_scaled(std::span<const float> source,
     }
 }
 
+/// Accumulates a twice-scaled buffer whose first gain varies per sample.
+///
+/// The constant-gain overload's shape exactly, with `first` read from a buffer instead of a
+/// register — so a part whose volume is standing still mixes the same either way. The two multiplies
+/// stay separate here for the same reason they do there.
+inline void mix_scaled_varying(std::span<const float> source,
+                               std::span<const double> first,
+                               double second,
+                               std::span<float> destination) noexcept
+{
+    const std::size_t count =
+        std::min(std::min(source.size(), first.size()), destination.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        destination[i] += static_cast<float>((static_cast<double>(source[i]) * first[i]) * second);
+    }
+}
+
 /// Stores a scaled buffer: `destination[i] = (float)(source[i] * gain)`.
 inline void
 store_scaled(std::span<const float> source, double gain, std::span<float> destination) noexcept

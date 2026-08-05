@@ -2,6 +2,7 @@
 
 #include "realtime/wave_reader.hpp"
 #include "tabulasonora/control_matrix.hpp"
+#include "tabulasonora/control_ramp.hpp"
 #include "tabulasonora/interpolator.hpp"
 #include "tabulasonora/lfo_engine.hpp"
 #include "tabulasonora/partial_parameters.hpp"
@@ -58,6 +59,13 @@ struct VoiceSetup {
     double level_gain = 1.0;
     /// The drum mute group, or zero.
     int mute_group = 0;
+
+    /// The part's volume word as the voice starts, and the ZOH mask its ramp runs on.
+    ///
+    /// Seeded rather than ramped to: `tvf_env_prep` writes the same value into the ramp's source and
+    /// target slots, so a note struck part-way through a fade begins at the level already reached.
+    int volume_word = 0;
+    unsigned volume_mask = 0;
 
     /// Sample at which a voice is force-released, or -1 to let its envelope decide.
     ///
@@ -157,6 +165,14 @@ public:
     /// Sets the part's live cutoff offset, in the 15-bit cutoff units the filter sums.
     void set_cutoff_offset(double offset) noexcept { cutoff_offset_ = offset; }
 
+    /// Fills one block of per-sample part-volume gains from the anti-zipper ramp.
+    ///
+    /// Call this *before* `render` for the same block. It reads the voice's own sample clock to
+    /// find the control tick, which is the grid `voice_ramp_target_aux` retargets on — once every
+    /// ten blocks, not once a block, because the retarget quantises the ramp accumulator and doing
+    /// it ten times too often would bias the glide.
+    void volume_gains(int word, unsigned mask, std::span<double> gains) noexcept;
+
 private:
     void release(int damper = 0);
     void control(double bend_milli_semitones, const ControlMatrix::Modulation& matrix, bool first);
@@ -215,6 +231,13 @@ private:
     bool pan_follows_part_ = false;
     int random_pan_ = -1;
     double level_gain_ = 1.0;
+
+    /// The part-volume anti-zipper ramp — `voice_ctrl_ramp_b`'s state, one per voice.
+    ///
+    /// Per voice rather than per part because that is where the engine keeps it: each voice has its
+    /// own accumulator seeded at note-on, so voices started at different points of a slide are at
+    /// different places along it.
+    ControlRamp volume_ramp_;
 
     std::int64_t sample_ = 0;
     std::int64_t note_off_ = -1;

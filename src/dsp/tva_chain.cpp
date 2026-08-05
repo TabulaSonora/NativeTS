@@ -242,4 +242,24 @@ double TvaChain::part_volume_scale(int volume, int expression, int master) noexc
            / reference;
 }
 
+int TvaChain::part_volume_word(int volume, int expression, int master) noexcept
+{
+    const auto v = static_cast<std::uint32_t>(std::clamp(volume, 0, 127));
+    const auto e = static_cast<std::uint32_t>(std::clamp(expression, 0, 127));
+    const auto m = static_cast<std::uint32_t>(std::clamp(master, 0, 127));
+
+    const std::uint32_t u = ((((e * v) & 0xFFFFU) * m) >> 6) & 0xFFFFU;
+    const std::uint32_t level = (u * 0x10410U) >> 16;
+
+    // The engine tests the narrowed half, not the whole word: a level that reads zero as an `int16`
+    // is silence and never reaches the squaring.
+    if (static_cast<std::int16_t>(level) == 0) {
+        return 0;
+    }
+
+    const std::uint32_t squared = level * level;
+    const auto folded = static_cast<std::uint32_t>(static_cast<std::uint16_t>(squared >> 16));
+    return static_cast<int>(std::min<std::uint32_t>((folded * 0x208U) >> 8, 0xFFFFU));
+}
+
 } // namespace ts

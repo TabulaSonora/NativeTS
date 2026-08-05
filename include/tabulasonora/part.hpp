@@ -351,6 +351,10 @@ public:
     /// The combined volume multiplier, 1.0 with everything at 127.
     [[nodiscard]] double volume_scale() const noexcept { return volume_scale_; }
 
+    /// The same combination as the integer `voice_volume_apply` yields, which is what the voices'
+    /// anti-zipper ramps chase. The mixer reads the ramp rather than this directly.
+    [[nodiscard]] int volume_word() const noexcept { return volume_word_; }
+
     /// Everything the control matrix modulates, each destination in its own unit.
     ///
     /// `part_mod_depth_recalc` keeps eleven running sums a part, one a destination, each the total
@@ -455,12 +459,14 @@ private:
     void recompute() noexcept
     {
         volume_scale_ = TvaChain::part_volume_scale(volume_, expression_, master_);
+        volume_word_ = TvaChain::part_volume_word(volume_, expression_, master_);
     }
 
     int volume_ = sequence_builder::default_volume;
     int expression_ = sequence_builder::default_expression;
     int master_ = sequence_builder::default_master;
     double volume_scale_ = 1.0;
+    int volume_word_ = TvaChain::part_volume_word();
 };
 
 } // namespace ts

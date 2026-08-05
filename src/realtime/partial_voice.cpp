@@ -35,6 +35,10 @@ void PartialVoice::start(VoiceSetup&& setup)
     pan_follows_part_ = setup.pan_follows_part;
     random_pan_ = setup.random_pan.value_or(-1);
 
+    volume_ramp_.seed(ControlRamp::target_of(setup.volume_word),
+                      ControlRamp::volume_rate_word,
+                      setup.volume_mask);
+
     reader_.start(*setup.wave);
     filter_.reset();
 
@@ -139,6 +143,22 @@ double PartialVoice::choke_gain(std::int64_t since) noexcept
     }
     const std::int64_t into = since - choke_hold;
     return into < choke_fade ? 1.0 - (static_cast<double>(into) / choke_fade) : 0.0;
+}
+
+void PartialVoice::volume_gains(int word, unsigned mask, std::span<double> gains) noexcept
+{
+    // Every control tick, whether the target moved or not: `voice_ramp_target_aux` sits in the
+    // per-tick voice update, not behind a change test. It costs a truncation of the accumulator's
+    // low ten bits each time, which is invisible in the oracle's gain trace either way -- the
+    // per-update ratio holds at 0.90403 straight across the tick boundaries a glide crosses -- so
+    // this follows the decompile rather than the measurement, which cannot separate them.
+    //
+    // The same test `render` uses to find a control tick, and it reads the clock before `render`
+    // advances it, which is why the two calls are ordered.
+    if (sample_ % control_block == 0) {
+        volume_ramp_.retarget(ControlRamp::target_of(word), ControlRamp::volume_rate_word, mask);
+    }
+    volume_ramp_.fill(gains);
 }
 
 void PartialVoice::render(std::span<float> destination,

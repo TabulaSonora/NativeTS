@@ -110,6 +110,20 @@ public:
     [[nodiscard]] static double
     part_volume_scale(int volume = 127, int expression = 127, int master = 127) noexcept;
 
+    /// The same law as an integer, in the units the control ramp's target is set in.
+    ///
+    /// `voice_volume_apply` @`180060390` returns this, and the tail `part_volume_scale` does not
+    /// model is where it comes from: the squared product is taken sixteen bits down, narrowed to
+    /// `uint16`, scaled by `0x208` and shifted back by eight. Everything at 127 yields 32764 rather
+    /// than a round 32768, so a part at full volume rests a whisker under unity — 0.99988, which is
+    /// -0.001 dB. That is the engine's number, and the ramp's gain is derived from it rather than
+    /// from `part_volume_scale`, so the two differ in the last few places by design.
+    ///
+    /// The TVA-destination LFO the engine folds in here is not modelled: it reaches the voice
+    /// through the control matrix instead.
+    [[nodiscard]] static int
+    part_volume_word(int volume = 127, int expression = 127, int master = 127) noexcept;
+
 private:
     const EnvelopeMachine* envelope_;
     std::span<const std::uint16_t> level_curve_;
