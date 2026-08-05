@@ -593,6 +593,40 @@ TEST_CASE("the part modify offsets reach the chains that consume them", "[dsp][s
     std::copy(source.raw().begin(), source.raw().end(), block.begin());
     const PartialParameters partial{block.data()};
 
+    SECTION("the resonance byte is floored at 4 and capped at 0x7f")
+    {
+        // `tvf_cutoff_compute` @`180083f00` clamps the resonance byte at voice+0xee up to 4 before
+        // the filter runs -- `if (*pbVar1 < 4) *pbVar1 = 4` -- and stage A caps it at 0x7f.
+        //
+        // Both rails are reachable and the engine sits on them. Reading its own byte through
+        // `scdec svfmel 38 0 48 127 64 <cc71>`, CC#71 walks it 127 -> 112 -> 48 -> 4 across
+        // 0/32/64/96, and 96, 120 and 127 all read exactly 4 with the filter's q pinned at
+        // 0.0625. So this is not a defensive clamp on data that never occurs; it is where the
+        // module parks whenever the resonance control is driven far enough.
+        int lowest = 0x7F;
+        int highest = 0;
+        int previous = 0x7F + 1;
+
+        for (int part_resonance = 0; part_resonance <= 0x7F; ++part_resonance) {
+            const int byte = TvfChain::resonance_byte(partial, part_resonance);
+
+            INFO("part resonance " << part_resonance);
+            CHECK(byte >= 4);
+            CHECK(byte <= 0x7F);
+
+            // Monotone: more of the control never means more of the byte.
+            CHECK(byte <= previous);
+            previous = byte;
+
+            lowest = std::min(lowest, byte);
+            highest = std::max(highest, byte);
+        }
+
+        // The clamps are live rather than vacuous -- the sweep reaches both.
+        CHECK(lowest == 4);
+        CHECK(highest == 0x7F);
+    }
+
     SECTION("the cutoff offset is not in the base, because the live path adds it")
     {
         // `base_cutoff` is a property of the tone. The part's cutoff offset reaches the filter from
