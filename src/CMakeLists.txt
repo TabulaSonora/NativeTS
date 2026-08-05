@@ -35,6 +35,7 @@ add_library(tabulasonora
     rom/sha256.cpp
     rom/table_manifest.cpp
     soundfont/bank_builder.cpp
+    soundfont/envelope_fit.cpp
     soundfont/sample_set.cpp
     soundfont/writer.cpp
     voices/voice_pool.cpp

@@ -1,5 +1,6 @@
 #include "tabulasonora/soundfont_bank.hpp"
 
+#include "tabulasonora/soundfont_envelopes.hpp"
 #include "tabulasonora/tone.hpp"
 
 #include <algorithm>
@@ -33,6 +34,32 @@ constexpr int inter_sample_gap = 46;
     }
     const double cb = -200.0 * std::log10(gain);
     return static_cast<int>(std::lround(std::clamp(cb, 0.0, 1440.0)));
+}
+
+/// Writes a fitted DAHDSR as its six generators, omitting any left at the SF2 default.
+///
+/// Omitting defaults is not only tidiness: a zone generator overrides the instrument's, so writing
+/// a default explicitly would stop a future global-zone value from reaching this zone.
+void emit_dahdsr(std::vector<Generator>& into, const Dahdsr& envelope)
+{
+    if (envelope.delay > min_timecents) {
+        into.push_back(Generator::value(Gen::delay_vol_env, envelope.delay));
+    }
+    if (envelope.attack > min_timecents) {
+        into.push_back(Generator::value(Gen::attack_vol_env, envelope.attack));
+    }
+    if (envelope.hold > min_timecents) {
+        into.push_back(Generator::value(Gen::hold_vol_env, envelope.hold));
+    }
+    if (envelope.decay > min_timecents) {
+        into.push_back(Generator::value(Gen::decay_vol_env, envelope.decay));
+    }
+    if (envelope.sustain != 0) {
+        into.push_back(Generator::value(Gen::sustain_vol_env, envelope.sustain));
+    }
+    if (envelope.release > min_timecents) {
+        into.push_back(Generator::value(Gen::release_vol_env, envelope.release));
+    }
 }
 
 /// The tones the export reaches: every mapped melodic tone, plus every tone a drum key sounds.
@@ -158,21 +185,31 @@ BankBuild build_bank(const PatchDirectory& directory,
                 out.generators.push_back(
                     Generator::range(Gen::vel_range, velocity_low, velocity_high));
 
-                // The level chain's four attenuations collapse into one static value. This is
-                // provisional: it is taken at the top of the partial's velocity window, so the
-                // velocity-dependent part is frozen there and the default velocity modulator
-                // supplies the rest. The envelope pass replaces it.
+                // The amplitude envelope, fitted per key zone rather than per partial, because
+                // its peak depends on the zone's own level and SF2 normalises the envelope to that
+                // peak. Emitting one shape per partial and a separate attenuation would double
+                // count wherever the peak segment sits below the base level.
                 const int zone_level =
                     directory.zone_level(partial.multisample(), zone.key_low, partial.key_center());
-                const std::optional<int> partial_level =
-                    levels.partial_level(partial, velocity_high);
-                if (partial_level) {
-                    const int level16 = levels.base_level(partial, *partial_level,
-                                                                zone.key_low, zone_level,
-                                                                tone_level);
-                    out.generators.push_back(Generator::value(
-                        Gen::initial_attenuation, centibels(levels.amp_of(level16))));
+                const SegmentEnvelope amplitude =
+                    levels.create_envelope(partial, velocity_high, zone.key_low, zone_level,
+                                           tone_level, options.sample_rate);
+                const VolumeFit fit =
+                    fit_volume(amplitude, options.sample_rate, options.fit_hold_seconds);
+
+                built.worst_fit = std::max(built.worst_fit, fit.rms_error);
+                built.fit_error_sum += fit.rms_error;
+                ++built.fitted_zones;
+                if (fit.moving_segments > 2) {
+                    ++built.overflowed_zones;
                 }
+
+                // The peak the envelope actually reaches is the whole static level chain, so it
+                // replaces the base level rather than sitting beside it.
+                out.generators.push_back(
+                    Generator::value(Gen::initial_attenuation, centibels(fit.peak)));
+
+                emit_dahdsr(out.generators, fit.envelope);
 
                 if (partial.pan() != 0x40) {
                     // SF2 pan is tenths of a percent either side of centre; the partial's is a
