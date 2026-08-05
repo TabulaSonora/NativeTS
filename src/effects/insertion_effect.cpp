@@ -1275,13 +1275,37 @@ bool InsertionEffect::implemented() const
 }
 
 // The send ramps convert their u16 targets as `value × 3.0517578e-05 × 2` — target/16384, so a
-// full-scale send byte is 16256/16384 ≈ 0.992 on the block's halved mono sum (`fx_process_block`,
-// the ramp loop ahead of the accumulates).
+// full-scale send byte is 16256/16384 ≈ 0.992 on the block's stereo sum (`fx_process_block`, the
+// ramp loop ahead of the accumulates, where the source is `out_left + out_right`).
+//
+// Tapping the *sum* rather than a mono signal is the block's own behaviour and is measurable: in
+// the live engine an EFX send scales with the part's pan — centre/hard = 1.1825 against the pan
+// table's centre sum of 2×75/127 = 1.1811 — where a part send is pan-independent (1.0000), since
+// that one is fed pre-pan. The gain law and the tap are therefore both traced.
+//
+// What the raw fraction is *not* is a gain in this engine's units. Each network here carries its
+// own input constant (`ReverbPresets::send_at_full_scale` and friends), so an engine bus value
+// has to be converted per network. The reverb conversion below is measured rather than derived:
+// with a level-transparent Thru block in the path, the live engine puts 0.980 of a part send's
+// wet on the reverb bus for the same byte, where this engine put 1.144 — so the raw fraction is
+// scaled to bring the two into the engine's ratio.
+//
+// It is deliberately a ratio against the part send rather than a constant tuned to match the DLL
+// outright, because the shared reverb path does not match the engine on its own: isolated by
+// subtracting a send-zero render, this engine's reverb wet starts ~14% louder and decays several
+// times faster than the module's. A ratio between two paths through the same network is immune to
+// that -- it measured flat across the whole send sweep, which an absolute constant did not -- and
+// it keeps the EFX send correct relative to the part send, so correcting the network later
+// corrects both instead of breaking this.
 double InsertionEffect::reverb_send() const noexcept
 {
-    return impl_->send_reverb / 16384.0;
+    constexpr double bus_conversion = 0.857;
+    return (impl_->send_reverb / 16384.0) * bus_conversion;
 }
 
+// No conversion on these two: the delay bus lands within 5% of the live engine on the raw
+// fraction, and the chorus bus has no measurement behind it at all — the GS default chorus is
+// silent on the probes that pinned the other two, so a constant here would be invention.
 double InsertionEffect::chorus_send() const noexcept
 {
     return impl_->send_chorus / 16384.0;

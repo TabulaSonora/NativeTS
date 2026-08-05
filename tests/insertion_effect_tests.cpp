@@ -2,9 +2,11 @@
 
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/rom_image.hpp"
+#include "tabulasonora/send_effects.hpp"
 #include "tabulasonora/tone_generator.hpp"
 #include "test_data.hpp"
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include <array>
@@ -212,6 +214,39 @@ TEST_CASE("the EFX reverb builds a tail and its tap program", "[efx][sccore]")
     CHECK(early > 1e-5);
     CHECK(late < early);
     CHECK(late < 1.0);
+}
+
+TEST_CASE("the block's sends carry the engine's own ratios", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x00, 0x00);
+
+    // Linear in the byte, and zero at zero — the ramp targets are `byte << 7`.
+    efx.set_parameter(0x17, 0);
+    CHECK(efx.reverb_send() == 0.0);
+    efx.set_parameter(0x17, 64);
+    const double half = efx.reverb_send();
+    efx.set_parameter(0x17, 127);
+    const double full = efx.reverb_send();
+    CHECK(half > 0.0);
+    CHECK(full > half);
+    CHECK(full / half == Catch::Approx(127.0 / 64.0).epsilon(0.001));
+
+    // Measured against the live engine: with a level-transparent Thru in the path, an EFX send
+    // byte puts 0.98 of a part send's wet on the reverb bus. `Reverb::send_gain` is the part
+    // side, and the block's tap is the stereo sum rather than the pre-pan mono the part path
+    // uses, so the comparison carries the pan-table centre sum.
+    constexpr double centre_pan_sum = 2.0 * 75.0 / 127.0;
+    const double against_part = full * centre_pan_sum / Reverb::send_gain(127);
+    CHECK(against_part == Catch::Approx(0.98).epsilon(0.02));
+
+    // The three sends are independent: writing one leaves the others alone.
+    efx.set_parameter(0x18, 0);
+    efx.set_parameter(0x19, 0);
+    CHECK(efx.chorus_send() == 0.0);
+    CHECK(efx.delay_send() == 0.0);
+    CHECK(efx.reverb_send() == full);
 }
 
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
