@@ -220,7 +220,8 @@ send levels into the reverb (bus 60), chorus (bus 3) and delay/EFX (bus 2) buses
 processors — each behind its own 20 Hz one-pole DC blocker, a hardware-era necessity because the
 DPCM predictor drifts. Reverb is an allpass/comb tank whose 8 GS types are coefficient sets over
 one topology; chorus is a modulated delay line with 8 types; the GS system delay is a third send
-effect woven directly into the matrix, with 10 types and a fixed 60 ms input pre-delay. Insertion
+effect with 10 types — three taps and a feedback loop one sample longer than its tap, and no input
+pre-delay — carried by `fx_chorus_stage_r`, which is not the chorus. Insertion
 EFX is a function-pointer table of 67 distinct algorithm processors selected by a type-to-index
 map — including dispatch slot 66, a complete modulated multi-tap delay that nothing can select.
 
