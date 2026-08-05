@@ -7,6 +7,7 @@
 // reaches them.
 
 import type { EngineSettings } from '../engine/protocol';
+import { engineMaps } from '../lib/tone-catalog';
 import * as assets from './asset-store';
 
 /** Storage key, in the same namespace as the theme's tabula-sonora.theme. */
@@ -141,8 +142,10 @@ function parse(stored: string | null): EngineSettings | null {
         return null;
     }
 
+    // Checked against the list rather than a range: XG's selector is 0x77, so the maps are not
+    // contiguous and a range test would quietly discard a remembered XG.
     const map = Number(fields[0]);
-    if (!Number.isInteger(map) || map < 1 || map > 4) {
+    if (!Number.isInteger(map) || !(engineMaps as readonly number[]).includes(map)) {
         return null;
     }
 

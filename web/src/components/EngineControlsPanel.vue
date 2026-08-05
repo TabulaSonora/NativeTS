@@ -11,7 +11,7 @@
             <label>
                 Vintage
                 <select :value="store.settings.map" @change="mapChanged">
-                    <option v-for="map in vintages" :key="map" :value="map">
+                    <option v-for="map in engineMaps" :key="map" :value="map">
                         {{ vintageName(map) }}
                     </option>
                 </select>
@@ -60,7 +60,7 @@
 
 <script setup lang="ts">
 import { defaultSettings, isDefault } from '../services/engine-preferences';
-import { vintageName, vintages } from '../lib/tone-catalog';
+import { engineMaps, vintageName } from '../lib/tone-catalog';
 import { useEngineStore } from '../stores/engine';
 
 const store = useEngineStore();

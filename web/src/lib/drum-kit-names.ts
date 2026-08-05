@@ -15,7 +15,7 @@
 // One kit is deliberately unnamed: program 127 — the CM-64/32L kit, the MT-32's drum set — is
 // defined by the ROM on both rows and appears on neither of these pages, so it keeps its number.
 
-import { vintageName } from './tone-catalog';
+import { vintageName, xgMap } from './tone-catalog';
 
 const pages: Record<number, Record<number, string>> = {
     4: {
@@ -91,7 +91,7 @@ const pages: Record<number, Record<number, string>> = {
  * programs each row defines matches one page's set of kits exactly, in both cases plus program
  * 127, which the ROM carries and no page offers.
  */
-export const rowMaps = [4, 3, 2, 1];
+export const rowMaps = [4, 3, 2, 1, xgMap];
 
 /** Names the kit a program selects, or null where nothing names it. */
 export function forRow(row: number, program: number): string | null {

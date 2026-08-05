@@ -4,6 +4,22 @@
 export const vintages = [1, 2, 3, 4] as const;
 
 /**
+ * XG's selector, which is the module's own number for it rather than a fifth vintage slot.
+ *
+ * The engine takes it in the same field the vintages go in, and starting there is the whole point:
+ * a file that never sends XG System On is played as XG anyway, which is what most XG files written
+ * for a hardware module in XG mode need.
+ */
+export const xgMap = 0x77;
+
+/**
+ * Every tone map the engine's map field accepts. Not the same list as `vintages`: XG is a different
+ * instrument's sound set living in the same ROM, not an older Sound Canvas, so the instrument
+ * browser stays on the four while the engine selector offers all five.
+ */
+export const engineMaps = [...vintages, xgMap] as const;
+
+/**
  * The module's name for a tone map. The plugin's own tone files name these 55Map, 88Map, 88ProMap
  * and 8820Map; the modules are what a reader recognises.
  */
@@ -12,7 +28,9 @@ export function vintageName(map: number): string {
         case 1: return 'SC-55';
         case 2: return 'SC-88';
         case 3: return 'SC-88Pro';
-        default: return 'SC-8820';
+        case 4: return 'SC-8820';
+        case xgMap: return 'XG';
+        default: return `map ${map}`;
     }
 }
 
