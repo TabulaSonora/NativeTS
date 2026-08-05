@@ -270,6 +270,40 @@ std::optional<int> PatchDirectory::lut3_raw(int program, ToneMap map, int bank) 
 
 std::optional<int> PatchDirectory::lut3_resolved(int program, ToneMap map, int bank) const
 {
+    // Two banks redirect instead of resolving. `program_resolve_tone` @`180069200` tests the lookup
+    // bank before any of the three levels run, and 0x40 and 0x41 send it through an indirection
+    // table indexed by program whose first three planes *replace* the map, bank and program the
+    // lookup then uses. The shipped data makes 0x40 mean "map 2, bank 0" and 0x41 "map 1, bank 0",
+    // both keeping the program -- the SC-88 and SC-55 compatibility banks, reachable from any map.
+    //
+    // XG is what makes them matter: its variations hang off the bank LSB, so a file selecting LSB
+    // 64 or 65 is asking for an older Sound Canvas's voice. Without this it got whatever the
+    // current map happened to hold there, which for the Cave Story XG set was a two-partial tone
+    // where the module plays one -- five decibels of it.
+    //
+    // Here and not in `lut3_raw`, which is a raw table read and has to stay one: the bank-count
+    // gate gets each vintage's *native* bank set from it, and a vintage does not natively define
+    // the two banks it merely redirects through.
+    if (bank == indirect_bank_88 || bank == indirect_bank_55) {
+        const auto table = bank == indirect_bank_88 ? tables_->tone_indirect_bank64()
+                                                    : tables_->tone_indirect_bank65();
+        constexpr std::size_t plane = 0x80;
+        const auto at = static_cast<std::size_t>(program);
+        if (program < 0 || at >= plane || table.size() < 3 * plane) {
+            return std::nullopt;
+        }
+
+        const int substituted_bank = table[plane + at];
+        // The shipped tables substitute bank 0, so this recurses once. The guard is against data
+        // that says otherwise rather than against anything observed.
+        if (substituted_bank == indirect_bank_88 || substituted_bank == indirect_bank_55) {
+            return std::nullopt;
+        }
+        return lut3_resolved(static_cast<int>(table[(2 * plane) + at]),
+                             static_cast<ToneMap>(table[at]),
+                             substituted_bank);
+    }
+
     std::optional<int> raw = lut3_raw(program, map, bank);
     if (bank != 0 && (!raw || *raw == unassigned)) {
         raw = lut3_raw(program, map, 0);

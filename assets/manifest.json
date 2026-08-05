@@ -669,6 +669,32 @@
       "match": "full",
       "purpose": "wave descriptors: ROM coords, root key, loop",
       "note": "was 0x16000 (4096 records), another round number and another 163 zones short. Multisamples a defined tone reaches name waves up to 4258, and 4259 records is exactly what fits before g_drum_kits at 0x18ad950 -- they end at 0x18ad942. The keys this silenced are the reverse and SFX drum kits, whose tones are themselves in the range the short tone slice used to hide. Note that g_wave_desc_table_b and _g_multisample_table_b are both aliased to the A tables at init (@180086d00), so the A/B selector in multisample_select_wave picks between two pointers to the same memory in this build -- these indices are not a second table."
+    },
+    {
+      "name": "tone_indirect_bank64_a8bf0.bin",
+      "symbol": "g_tone_indirect_bank64",
+      "subsystem": "PATCH",
+      "dtype": "u8",
+      "shape": "11x128",
+      "size": 1408,
+      "file_offset": "0x19a7bf0",
+      "va": "0x1819a8bf0",
+      "section_adjust": "0x1000",
+      "match": "full",
+      "purpose": "bank 0x40 indirection: program -> (lut1, lut2, lut3 index) + 8 part-parameter overrides"
+    },
+    {
+      "name": "tone_indirect_bank65_a9800.bin",
+      "symbol": "g_tone_indirect_bank65",
+      "subsystem": "PATCH",
+      "dtype": "u8",
+      "shape": "11x128",
+      "size": 1408,
+      "file_offset": "0x19a8800",
+      "va": "0x1819a9800",
+      "section_adjust": "0x1000",
+      "match": "full",
+      "purpose": "bank 0x41 indirection, same 11-plane shape"
     }
   ],
   "live_regions": [

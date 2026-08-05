@@ -152,6 +152,8 @@ void TableSet::bind()
     dir_lut3_ = reinterpret_as<std::uint16_t>(raw(names::dir_lut3));
     multisample_ = raw(names::multisample);
     pan_ = raw(names::pan);
+    tone_indirect_bank64_ = raw(names::tone_indirect_bank64);
+    tone_indirect_bank65_ = raw(names::tone_indirect_bank65);
     ramp_divider_ = raw(names::ramp_divider);
     ramp_exp_ = reinterpret_as<std::int32_t>(raw(names::ramp_exp));
     ramp_flagword_ = raw(names::ramp_flagword);

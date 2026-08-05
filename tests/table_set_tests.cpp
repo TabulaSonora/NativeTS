@@ -34,7 +34,7 @@ TEST_CASE("the table set loads identically from the DLL and from a cache", "[tab
         REQUIRE(std::equal(a.begin(), a.end(), b.begin(), b.end()));
         ++compared;
     }
-    CHECK(compared == 50);
+    CHECK(compared == 52);
 }
 
 TEST_CASE("element counts come from byte length, not the manifest shape", "[tables][sccore]")

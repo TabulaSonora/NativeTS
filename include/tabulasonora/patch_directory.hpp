@@ -19,6 +19,11 @@ namespace ts {
 /// new map needs no code beyond its name. `xg` is not a vintage: XG System On switches every part
 /// onto it, and it selects a separate melodic layout — 45 bank-LSB variations over 534 presets,
 /// where the bank *LSB* picks the variation rather than the MSB.
+/// The two lookup banks that redirect to another map instead of resolving in this one — the SC-88
+/// and SC-55 compatibility banks, which any map can reach.
+inline constexpr int indirect_bank_88 = 0x40;
+inline constexpr int indirect_bank_55 = 0x41;
+
 enum class ToneMap {
     sc55 = 1,
     sc88 = 2,

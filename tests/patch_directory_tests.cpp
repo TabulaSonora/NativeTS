@@ -183,6 +183,13 @@ TEST_CASE("an empty variation slot falls back to the capital tone", "[patch][scc
 
     std::size_t fallbacks = 0;
     for (int bank = 1; bank < 128; ++bank) {
+        // Two banks do not fall back, because they never resolve in this map at all: 0x40 and 0x41
+        // redirect to the SC-88 and SC-55 maps before the lookup runs, so an empty slot there
+        // sounds that module's tone rather than this one's capital.
+        if (bank == indirect_bank_88 || bank == indirect_bank_55) {
+            continue;
+        }
+
         for (int program = 0; program < 128; ++program) {
             const std::optional<int> raw = directory.lut3_raw(program, ToneMap::sc8820, bank);
             if (raw && *raw != PatchDirectory::unassigned) {
