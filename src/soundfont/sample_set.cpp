@@ -118,7 +118,17 @@ RootTuning root_tuning(const WaveDescriptor& descriptor) noexcept
     // a tenth of a cent.
     const double semitones = descriptor.native_milli_semitones() / 1000.0;
     const auto key = static_cast<int>(std::lround(semitones));
-    const auto cents = static_cast<int>(std::lround((semitones - key) * 100.0));
+
+    // **Negated**, and the sign is the whole point. SF2's `chPitchCorrection` compensates for a
+    // recording error rather than describing the sample's pitch: it is added to playback, so a
+    // sample sitting *sharp* of its nominal root needs a *negative* correction to be pulled back.
+    //
+    // Wave 7 is the worked example. Its native pitch is 64052 milli-semitones -- 5.2 cents above
+    // root key 64 -- so the correction that brings it to pitch is -5, not +5. Emitting +5 makes it
+    // 10.4 cents sharp instead of correct, and getting this backwards detunes the entire bank by
+    // twice each sample's own offset. Measured before the fix: +11.5 cents on a rendered middle C,
+    // and +9.9 to +12.2 cents in the pitch law across the keyboard.
+    const auto cents = static_cast<int>(std::lround((key - semitones) * 100.0));
     return RootTuning{key, cents};
 }
 
