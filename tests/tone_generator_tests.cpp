@@ -1488,3 +1488,58 @@ TEST_CASE("CC#71 reaches a note that is already sounding", "[stream][sccore]")
     // not re-break on any change that moves the filter slightly without breaking the routing.
     CHECK(swept > held * 1.1);
 }
+
+TEST_CASE("the event pipeline holds a message for whole chunks", "[stream][sccore]")
+{
+    // The module never applies a MIDI message on arrival: `TG_ShortMidiIn` puts it in a ring,
+    // `TG_Process` walks it into a staging ring, raises a task bit, and dispatches that bit on a
+    // later chunk. Four stages, and the note-on latency measured against the oracle is 128 samples
+    // -- four of the engine's 32-sample chunks.
+    //
+    // The unit is the chunk rather than the host call because `TG_Process` over-renders: it serves
+    // whatever the previous call left buffered before rendering anything new, so a host asking for
+    // a length that is not a whole number of chunks leaves a remainder and the grid drifts against
+    // the host's boundaries.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    const auto onset_with = [&](int delay) {
+        ToneGeneratorOptions options;
+        options.event_delay_blocks = delay;
+        ToneGenerator generator{notes, options};
+        generator.send_channel(0xB0, 7, 127);
+        generator.send_channel(0xB0, 91, 0);
+        generator.send_channel(0xB0, 93, 0);
+        generator.send_channel(0xC0, 99, 0);
+        generator.send_channel(0x90, 48, 127);
+
+        std::vector<float> left(8000);
+        std::vector<float> right(8000);
+        generator.render(left, right);
+
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            if (std::abs(left[i]) > 1e-4F) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    };
+
+    // Off is the default and sounds at once, which is what every other test here relies on.
+    REQUIRE(onset_with(0) == 1);
+
+    // On, each chunk is a whole 32 samples and nothing in between.
+    const int one = onset_with(1);
+    const int four = onset_with(4);
+    CHECK(one == 33);
+    CHECK(four == 129);
+    CHECK(four - one == 3 * ToneGenerator::block_size);
+
+    // Four chunks is the module's own 128, which is the number this exists to reproduce: the
+    // oracle's peak for this note lands 148 samples after ours with the pipeline off, and 20 after
+    // it with the pipeline on. The remaining 20 is not staging -- `tg_output_filter` runs even when
+    // the host rate already matches the engine's, with a live allpass coefficient of 1/3 over six
+    // state slots, and its delay has not been separated out yet.
+    CHECK(four - onset_with(0) == 128);
+}

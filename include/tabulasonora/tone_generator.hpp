@@ -41,6 +41,29 @@ struct ToneGeneratorOptions {
     /// 1, 2 or 4 are rejected: the part index is formed by masking, which needs a power of two.
     int ports = 2;
 
+    /// Internal 32-sample chunks a MIDI message waits before it reaches a part.
+    ///
+    /// The module never applies a message on arrival. `TG_ShortMidiIn` only puts it in a ring;
+    /// `TG_Process` walks it from there into a staging ring, raises a task bit, and dispatches that
+    /// bit on a later chunk. The note-on latency measured against the oracle is 128 samples, which
+    /// is four of these chunks.
+    ///
+    /// The chunk is the unit rather than the host call, because `TG_Process` over-renders: it
+    /// serves whatever the last call left buffered before rendering anything new, so a host asking
+    /// for a length that is not a whole number of chunks leaves a remainder behind and the grid
+    /// drifts against the host's boundaries. A deferral counted in host calls drifts with it.
+    ///
+    /// **Zero, the default, applies on arrival** -- what this engine has always done, and what its
+    /// tests are written against, since many send a message and inspect the part on the next line.
+    /// Four models the module. It is an option rather than a constant because the behaviours it
+    /// governs are only testable when the two pipelines line up sample for sample, so being able to
+    /// take it out of the picture is what makes a failure attributable.
+    ///
+    /// Not everything in that 128 is necessarily staging: `tg_output_filter` runs even when the
+    /// host rate already matches the engine's, and any group delay it carries would sit in the same
+    /// measurement. Pinning the split is what the next measurement is for.
+    int event_delay_blocks = 0;
+
     /// Which tone map program changes resolve against.
     ///
     /// `ToneMap::xg` is the switch that starts the engine in XG mode, rather than a separate flag,

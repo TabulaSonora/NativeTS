@@ -174,6 +174,36 @@ struct ToneGenerator::Impl {
     // the caller asks for, because a voice's control tick is counted in them.
     int block_offset = block_size;
 
+    /// Internal chunks rendered since the engine started, which is the clock the event pipeline
+    /// runs on.
+    ///
+    /// Not host calls: `render` serves whatever is left in the block buffer before rendering
+    /// anything new, so a host asking for 100 samples leaves 28 of a chunk behind and the next call
+    /// starts part-way through the grid. The chunk boundaries drift against the host's, and a
+    /// deferral counted in host calls would drift with them.
+    std::int64_t block_index = 0;
+
+    /// A channel message waiting for its chunk, exactly as the module holds one.
+    ///
+    /// The port and the raw status are kept rather than the resolved part, because the engine
+    /// matches parts to a message when it *dispatches* it: a SysEx that repoints a part's receive
+    /// channel in between is meant to take effect first.
+    struct PendingChannel {
+        std::int64_t due = 0;
+        int port = 0;
+        int status = 0;
+        int data1 = 0;
+        int data2 = 0;
+    };
+
+    std::vector<PendingChannel> pending_channel;
+
+    /// Applies a channel message to whichever parts are listening.
+    void dispatch_channel(int port, int status, int data1, int data2);
+
+    /// Runs everything the pipeline has held until this chunk.
+    void drain_events();
+
     std::optional<Reverb> reverb;
     std::optional<Chorus> chorus;
     std::optional<SystemDelay> delay;
@@ -658,18 +688,55 @@ void ToneGenerator::send_channel(int status, int data1, int data2)
 
 void ToneGenerator::send_channel(int port, int status, int data1, int data2)
 {
+    // Held for the pipeline when one is configured, applied on arrival when it is not. The module
+    // always holds: `TG_ShortMidiIn` only puts the message in a ring, and nothing reaches a part
+    // until `TG_Process` walks it out. See `ToneGeneratorOptions::event_delay_blocks`.
+    if (impl_->options.event_delay_blocks > 0) {
+        // Due one past the count, because the drain runs after the chunk counter has already
+        // advanced -- without it, a delay of one would land in the very next chunk and cost
+        // nothing, and every setting would read one short.
+        impl_->pending_channel.push_back(
+            Impl::PendingChannel{impl_->block_index + impl_->options.event_delay_blocks + 1,
+                                 port,
+                                 status,
+                                 data1,
+                                 data2});
+        return;
+    }
+    impl_->dispatch_channel(port, status, data1, data2);
+}
+
+void ToneGenerator::Impl::dispatch_channel(int port, int status, int data1, int data2)
+{
     // Parts are matched by their receive channel rather than indexed by it, the way the engine
     // walks a per-channel list of listening parts: SysEx can point several parts at one channel,
     // or detach a part entirely.
     const int incoming = status & 0x0F;
-    const int base = (port & (impl_->port_count - 1)) * Sequence::channel_count;
+    const int base = (port & (port_count - 1)) * Sequence::channel_count;
     for (int i = 0; i < Sequence::channel_count; ++i) {
         const int index = base + i;
-        Part& part = impl_->parts[static_cast<std::size_t>(index)];
+        Part& part = parts[static_cast<std::size_t>(index)];
         if (part.rx_channel == incoming) {
-            impl_->apply_channel(index, part, status & 0xF0, data1, data2);
+            apply_channel(index, part, status & 0xF0, data1, data2);
         }
     }
+}
+
+void ToneGenerator::Impl::drain_events()
+{
+    if (pending_channel.empty()) {
+        return;
+    }
+    std::size_t kept = 0;
+    for (std::size_t i = 0; i < pending_channel.size(); ++i) {
+        const PendingChannel event = pending_channel[i];
+        if (event.due > block_index) {
+            pending_channel[kept++] = event;
+            continue;
+        }
+        dispatch_channel(event.port, event.status, event.data1, event.data2);
+    }
+    pending_channel.resize(kept);
 }
 
 void ToneGenerator::Impl::apply_channel(
@@ -1669,6 +1736,11 @@ void ToneGenerator::render(std::span<float> left, std::span<float> right)
 
 void ToneGenerator::Impl::render_block()
 {
+    // The pipeline's clock ticks with the chunk, and everything it has been holding lands before
+    // any audio for this chunk is produced.
+    ++block_index;
+    drain_events();
+
     // The parts' chorus and delay sends are matrix coefficients, one a part, and move on the
     // control tick like everything else. Ten blocks to a tick.
     if (block_tick == 0) {
