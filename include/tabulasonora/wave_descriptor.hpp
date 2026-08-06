@@ -47,12 +47,35 @@ struct WaveDescriptor {
     /// — is `voice+0x1fc = voice+0x200`. The four-byte skew is why no search for the literal offset
     /// ever found it.
     ///
-    /// It is **not** run every tick: it sits inside `if (voice+0x16c == 1) if (voice+4 != 0) {
-    /// voice+4 = 0; if (voice+0x1b0 != 0) { …retrigger…; continue; } … }`, so it fires once when a
-    /// per-voice flag is set and is skipped down the retrigger branch. Measured against the
-    /// module's own pitch word, 84 of 254 non-neutral cases carry the term and 37 plainly do not —
-    /// *and the same wave does both on different notes*, so nothing in this record decides it.
-    /// Applying it unconditionally is the closest available: 84 exact against 45 without.
+    /// It is **not** run every tick, and it is **not** run at note-on. The condition, read off
+    /// `voices_control_update` with its pointer at `voice + 4`:
+    ///
+    /// ```c
+    /// if (voice+0x16c == 1) {                  // the ordinary sounding state
+    ///     if (voice+4 != 0) {                  // a one-shot flag, cleared here
+    ///         voice+4 = 0;
+    ///         if (voice+0x1b0 != 0) { …retrigger…; voice+0x16c = 2; goto next; }
+    ///         voice+0x1fc = voice+0x200;       // ← the term is adopted here, and only here
+    ///     }
+    ///     voice_block_process(voice);
+    /// }
+    /// ```
+    ///
+    /// So the term is adopted once, on a control tick where something else has already set
+    /// `voice+4`, and never on the retrigger path. A fresh note-on does not set that flag, which is
+    /// why `native_milli_semitones` leaves the term out.
+    ///
+    /// Confirmed on the engine rather than inferred: `scdec pitchword` reads both words off live
+    /// voices, and for a struck note they stay *different* — Atmosphere's first partial sits at
+    /// `0x1fc = 60243` against `0x200 = 60191`, and Synth Drum at `56316` against `56356`. Equal
+    /// would mean adopted; they are not.
+    ///
+    /// An earlier note here recorded "84 of 254 non-neutral cases carry the term and 37 plainly do
+    /// not" and concluded that applying it unconditionally was the closest available. That was
+    /// measured against the module's pitch word across cases that include voices well past their
+    /// note-on, which is exactly where the flag does get set — so it counted the adopted state
+    /// without separating it from the struck one. Against rendered audio it is the wrong call: the
+    /// 239-case oracle note gate goes from nine failing assertions to none by leaving it out.
     int second_fine_tune = 1024;
     /// Raw flag byte. Bit 0 is bidirectional, bit 2 is reverse; bit 1 takes no part in the
     /// dispatch.
@@ -78,9 +101,22 @@ struct WaveDescriptor {
     /// The module's `voice+0x1fc` *after* the control tick overwrites it with `voice+0x200` — both
     /// fine tunes, which is what a sounding note is tuned to. See `second_fine_tune`. Every ratio
     /// in this engine divides by this, so the sites must not drift apart.
+    /// The native pitch a note-on plays at — `voice+0x1fc`, **without** `second_fine_tune`.
+    ///
+    /// The second term is not part of this. `partial_compute_pitch` writes it into a *separate*
+    /// word, `voice+0x200`, and `voices_control_update` copies that over `voice+0x1fc` only under
+    /// the condition recovered below — which a fresh note-on does not meet.
     [[nodiscard]] constexpr double native_milli_semitones() const noexcept
     {
-        return (root_key * 1000.0) + 1024.0 - fine_tune - (second_fine_tune - 1024.0);
+        return (root_key * 1000.0) + 1024.0 - fine_tune;
+    }
+
+    /// The same, with `second_fine_tune` folded in — `voice+0x200`.
+    ///
+    /// Kept because the word is real and the engine does adopt it, just not when a note starts.
+    [[nodiscard]] constexpr double adopted_milli_semitones() const noexcept
+    {
+        return native_milli_semitones() - (second_fine_tune - 1024.0);
     }
 
     /// Parses a descriptor from its `stride` raw bytes.

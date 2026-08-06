@@ -108,15 +108,23 @@ TEST_CASE("a descriptor unpacks its 20-bit position fields", "[sampler]")
     // Fine tune 1024 is exactly the root key; the offset is (1024 - fineTune) / 1000.
     CHECK_THAT(descriptor.native_pitch(), WithinAbs(60.0, 1e-12));
 
-    // The second fine tune tunes off that result, not off the root. The module computes it into
-    // `voice+0x200` and `voices_control_update` copies that over `voice+0x1fc` on every control
-    // tick of a sounding voice, so it is what the exponent ends up taken against.
+    // The second fine tune tunes off that result, not off the root -- but it is a *separate* word,
+    // and a struck note does not play at it.
+    //
+    // `voices_control_update` copies `voice+0x200` over `voice+0x1fc` only on a control tick where
+    // the one-shot flag at `voice+4` is already set, and never down the retrigger branch; a
+    // note-on does not set that flag. Read off live voices with `scdec pitchword`, the two words
+    // stay different for a struck note -- Atmosphere's first partial holds 60243 against 60191.
+    //
+    // So the two are kept apart: `native_milli_semitones` is what a note-on plays at, and
+    // `adopted_milli_semitones` is what the engine moves to once the flag fires.
     record[0x0E] = 0xC0;
     record[0x0F] = 0x02; // 704, the value the alto sax's top zone carries
     const WaveDescriptor detuned = WaveDescriptor::parse(record);
     CHECK(detuned.second_fine_tune == 704);
-    CHECK_THAT(detuned.native_milli_semitones(), WithinAbs(60320.0, 1e-9));
-    CHECK_THAT(detuned.native_pitch(), WithinAbs(60.320, 1e-12));
+    CHECK_THAT(detuned.native_milli_semitones(), WithinAbs(60000.0, 1e-9));
+    CHECK_THAT(detuned.native_pitch(), WithinAbs(60.0, 1e-12));
+    CHECK_THAT(detuned.adopted_milli_semitones(), WithinAbs(60320.0, 1e-9));
 }
 
 TEST_CASE("bit 1 of the flag byte takes no part in the dispatch", "[sampler]")
