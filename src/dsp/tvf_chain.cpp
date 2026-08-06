@@ -335,6 +335,8 @@ void TvfChain::apply(std::span<float> signal,
     }
 
     StateVariableFilter filter;
+    CoefficientRamp frequency;
+    DampingRamp damping;
 
     for (std::size_t start = 0; start < signal.size();
          start += static_cast<std::size_t>(block_samples)) {
@@ -353,11 +355,28 @@ void TvfChain::apply(std::span<float> signal,
             cutoff_units(sum / static_cast<double>(end - start), resonance_byte_value);
         const auto [f, q] = coefficients(units, resonance_byte_value, filter_type);
 
+        // The same two ramps the live path runs, for the same reason and so the two paths do not
+        // disagree: the engine glides both coefficients rather than stepping them at the block
+        // boundary, and at high resonance a step re-excites the filter every tick.
+        const int raw = frequency_accumulator(units);
+        const int target =
+            f < CoefficientRamp::decode(raw)
+                ? static_cast<int>(f * 16384.0) << CoefficientRamp::decode_shift
+                : raw;
+
+        if (frequency.is_seeded()) {
+            frequency.retarget(target);
+            damping.retarget(DampingRamp::encode(q));
+        } else {
+            frequency.seed(target);
+            damping.seed(DampingRamp::encode(q));
+        }
+
         for (std::size_t n = start; n < end; ++n) {
             // The filter runs in double and the signal is float; the widening and the single
             // narrowing back are both deliberate, so they are spelled out.
-            signal[n] =
-                static_cast<float>(filter.process(static_cast<double>(signal[n]), f, q, selected));
+            signal[n] = static_cast<float>(filter.process(
+                static_cast<double>(signal[n]), frequency.step(), damping.step(), selected));
         }
     }
 }
