@@ -84,21 +84,32 @@ struct WaveDescriptor {
     /// caught the term depended on how far into the note it looked and how fast that wave loops,
     /// which is exactly why "the same wave does both on different notes".
     ///
-    /// **The adoption does not retune a running voice**, which is why nothing here acts on it. The
-    /// copy stages a value; it does not recompute the sampler increment. Traced with `scdec
-    /// postrace` at 32-sample resolution straight through the crossing, the increment holds at one
-    /// value for the whole note — Atmosphere's is 42588 at every reading either side of its loop
-    /// point and its adoption tick, and program 4's holds 61656 the same way.
+    /// **The adoption does retune the running voice.** Traced on the pitch ramp's own slot
+    /// (`g_voice_ramp_pitch` @`181a1cbf0`, stride 0x18: +8 current, +0xc target, +0x14 increment),
+    /// Atmosphere's first partial moves its *target* at sample 13440 — `cur=212614 tgt=212684
+    /// step=34`, glides over about two samples, and its increment settles from 32163 to 32258, a
+    /// rise of 5.11 cents against the 52 milli-semitones the term is worth. The exponent unit is
+    /// 1/16384 of an octave, so the 70-unit move is exactly the term.
     ///
-    /// So a note with no pitch modulation sounds at the attack pitch from beginning to end, and
-    /// `native_milli_semitones` is the whole story for it. Modelling the switch as a retune was
-    /// tried and is wrong: it moves the pitch mid-note where the engine does not, and it takes the
-    /// oracle note gate from clean to five failing assertions across three layered tones, where a
-    /// couple of cents on one partial is enough to move how the layers interfere.
+    /// Reading the increment rather than the target reports this late, because the ramp glides;
+    /// reading the wrong voice hides it entirely, because a partial whose `second_fine_tune` is
+    /// neutral never moves. An earlier note here claimed the copy only staged a value and did not
+    /// retune. That was both of those mistakes at once, and it was wrong.
     ///
-    /// What the staged value is *for* is the next recomputation of the increment — a bend, a pitch
-    /// envelope or an LFO would pick it up. That path is unmodelled and its effect is confined to
-    /// notes that modulate their pitch after passing their loop.
+    /// It is nonetheless **not modelled**, and the reason is worth stating precisely rather than
+    /// dressing up. Wiring it — the offline path walking its ratios to find the crossing, the
+    /// realtime path testing the reader at the tick — takes the 239-case oracle note gate from
+    /// clean to five failing assertions on programs 4, 38 and 66. The magnitudes say the fault is
+    /// in the wiring, not the mechanism: program 38's term is **three** milli-semitones, 0.3 of a
+    /// cent, and no 0.3-cent retune moves an envelope window by 1.2 dB. What it does do is assign
+    /// straight to the voice's root underneath `PitchRamp` and the pitch envelope, so the change
+    /// arrives as a discontinuity rather than as a retarget the ramp glides into — which is
+    /// precisely what the engine does *not* do.
+    ///
+    /// Doing it properly means routing the new root through the pitch ramp as a target, the way a
+    /// bend or a TVP move goes, and finding the crossing as an event rather than predicting a tick
+    /// — a glide, a real-time pitch change and the pitch envelope all move the rate the crossing
+    /// is reached at, so no precomputed tick survives them.
     ///
     /// Confirmed on the engine rather than inferred: `scdec pitchword` reads both words off live
     /// voices, and for a struck note they stay *different* — Atmosphere's first partial sits at
