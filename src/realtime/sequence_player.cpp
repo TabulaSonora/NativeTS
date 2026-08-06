@@ -144,11 +144,30 @@ void SequencePlayer::render(std::span<float> left, std::span<float> right)
     }
 
     for (std::size_t start = 0; start < left.size();) {
-        // How far this pass can run. Not a fixed block: events are handed over with the offset
-        // they fall at, and the engine stamps that to the millisecond -- a 32-sample pass is under
-        // one, so everything would round to the top of it and the engine's own placement would
-        // never be exercised. The bound is the loop end instead, which is the only position that
-        // has to land exactly.
+        if (finished_) {
+            const auto rest = left.size() - start;
+            std::fill_n(left.begin() + static_cast<std::ptrdiff_t>(start), rest, 0.0F);
+            std::fill_n(right.begin() + static_cast<std::ptrdiff_t>(start), rest, 0.0F);
+            break;
+        }
+
+        // Whatever is already due, then the loop check, then whatever is due after a jump -- the
+        // order this has always had, and the reason an event sitting exactly on the loop end still
+        // reaches the engine before the jump takes the cursor away from it.
+        dispatch_within(0);
+        if (handle_loop_point()) {
+            dispatch_within(0);
+        }
+
+        // How far this pass may run, measured *after* the jump, because a jump moves the position
+        // the bound is taken from. Getting that order wrong lets a pass begin at the loop end, find
+        // nothing to bound it, and run to the end of the buffer -- overshooting the loop instead of
+        // landing on it.
+        //
+        // Not a fixed block: events are handed over with the offset they fall at and the engine
+        // stamps that to the millisecond, and a 32-sample pass is under one, so everything would
+        // round to the top of it and the engine's own placement would never be exercised. The loop
+        // end is the bound because it is the one position that has to land exactly.
         auto count = left.size() - start;
         if (loop_ && position_ < loop_->end) {
             count = std::min<std::size_t>(count,
@@ -156,19 +175,6 @@ void SequencePlayer::render(std::span<float> left, std::span<float> right)
         }
         count = std::max<std::size_t>(count, 1);
 
-        if (finished_) {
-            std::fill_n(left.begin() + static_cast<std::ptrdiff_t>(start), count, 0.0F);
-            std::fill_n(right.begin() + static_cast<std::ptrdiff_t>(start), count, 0.0F);
-            start += count;
-            continue;
-        }
-
-        // Everything inside this pass, each stamped where it falls -- the shape the module is
-        // driven in, and the only one that lets it place an event itself. A loop jump lands on the
-        // pass boundary and dispatches again from wherever it left the cursor.
-        if (handle_loop_point()) {
-            count = std::min(count, left.size() - start);
-        }
         dispatch_within(static_cast<std::int64_t>(count) - 1);
 
         generator_->render(left.subspan(start, count), right.subspan(start, count));
