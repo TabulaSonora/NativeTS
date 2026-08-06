@@ -65,6 +65,29 @@ struct WaveDescriptor {
     /// `voice+4`, and never on the retrigger path. A fresh note-on does not set that flag, which is
     /// why `native_milli_semitones` leaves the term out.
     ///
+    /// **What sets `voice+4` is the wave reaching its loop.** `voice_report_finished` @`18008aec0`
+    /// sweeps the run-flag array, and for any voice carrying bit `0x10` it clears the bit, posts an
+    /// event, and writes `voice+4 = 1`:
+    ///
+    /// ```c
+    /// if ((*flags & 0x10) != 0) { *flags &= 0xef; …; *(voice_base(i) + 4) = 1; }
+    /// ```
+    ///
+    /// So a note plays its attack at `native_milli_semitones` and its loop at
+    /// `adopted_milli_semitones`, one control tick after it crosses the loop point. Measured with
+    /// `scdec pitchword`, which reports whether the two words have converged: Atmosphere's first
+    /// partial adopts between ticks 40 and 50 at note 48, and the loop at sample 6480 played at
+    /// ratio 0.49 arrives at tick 41.3. The crossing scales with the rate, halving per octave —
+    /// 60–90 ticks at note 36, 40–60 at note 48, 20–40 at note 60.
+    ///
+    /// That also explains the old measurement's inconsistency, quoted below. Whether a reading
+    /// caught the term depended on how far into the note it looked and how fast that wave loops,
+    /// which is exactly why "the same wave does both on different notes".
+    ///
+    /// The switch itself is **not modelled**: a note here plays at the attack pitch throughout. The
+    /// 239-case oracle gate is green that way, so the error it leaves is small over a note, but it
+    /// is a real difference on any wave whose `second_fine_tune` is not neutral.
+    ///
     /// Confirmed on the engine rather than inferred: `scdec pitchword` reads both words off live
     /// voices, and for a struck note they stay *different* — Atmosphere's first partial sits at
     /// `0x1fc = 60243` against `0x200 = 60191`, and Synth Drum at `56316` against `56356`. Equal
