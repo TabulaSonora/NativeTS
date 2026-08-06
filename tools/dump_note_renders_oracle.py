@@ -18,19 +18,31 @@ The audio itself is written alongside as raw interleaved float32, so a failure c
 and measured rather than only counted. It is Roland-derived, so like the tables it is generated
 locally and gitignored.
 
+**Each case is rendered in its own process, and that is not a performance oversight.** The harness
+has a batch mode that renders the whole sweep at once with a GS reset between cases, and it was used
+here until the reset turned out not to isolate them: the reference's LFO nodes live in a pool whose
+random registers survive being freed, so a tone with a random LFO opens on whatever the previous
+case left behind. Measured, three cases in the sweep sat up to 5.8 cents from their own isolated
+render -- and two of them were being read as failures of this engine when the engine was right. The
+cases are independent, so the processes run concurrently and the cost is mostly recovered.
+
 Usage:
     python3 tools/dump_note_renders_oracle.py <SCCore.dll> fixtures/note_renders_oracle.json \\
-        [--scdec <path to scdec.exe>] [--audio-dir fixtures/oracle/notes] [--tail 1.8]
+        [--scdec <path to scdec.exe>] [--audio-dir fixtures/oracle/notes] [--tail 1.8] \\
+        [--jobs 6] [--runner "<launcher>"] [--batch]
 
 Needs the harness from the sibling specv2 checkout, and wine on a non-Windows host:
     (in specv2/tools/decoder) dotnet publish -c Release -r win-x64 --self-contained
 """
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import math
+import os
 import pathlib
+import shlex
 import shutil
 import struct
 import subprocess
@@ -256,6 +268,19 @@ def main():
     parser.add_argument("--tail", type=float, default=1.8,
                         help="seconds rendered past the note-off; must match the test's")
     parser.add_argument("--rate", type=int, default=32000)
+    # How to launch a Windows binary when the host is not Windows. Plain `wine` is the default and
+    # is what a Linux box wants; CrossOver's launcher takes the bottle as its own argument, so the
+    # whole command line is given here rather than guessed:
+    #
+    #   --runner "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxstart
+    #             --bottle tabulasonora"
+    parser.add_argument("--runner", default=None,
+                        help="command that launches a Windows .exe; defaults to 'wine' off Windows")
+    parser.add_argument("--jobs", type=int, default=6,
+                        help="how many cases to render at once, each its own process")
+    parser.add_argument("--batch", action="store_true",
+                        help="render the whole sweep in one process: faster, and WRONG for any "
+                             "tone with a random LFO -- see the note above")
     arguments = parser.parse_args()
 
     if not arguments.scdec.exists():
@@ -264,21 +289,75 @@ def main():
                  "dotnet publish -c Release -r win-x64 --self-contained")
 
     cases = build_cases()
-    case_file = arguments.audio_dir.parent / "notes_cases.txt"
     arguments.audio_dir.mkdir(parents=True, exist_ok=True)
-    case_file.write_text("".join(
-        f"{c['program']} {c['note']} {c['velocity']} {c['hold']} {c['map']} {c['channel']}\n"
-        for c in cases))
 
-    # One process for the whole sweep: wine start-up dominates otherwise.
-    runner = [] if sys.platform == "win32" else ["wine"]
-    command = runner + [str(arguments.scdec), str(arguments.dll), "notebatch",
-                        str(case_file), str(arguments.audio_dir), str(arguments.tail)]
-    print(f"rendering {len(cases)} notes through the oracle ...", flush=True)
-    result = subprocess.run(command, capture_output=True, text=True,
-                            env={"WINEDEBUG": "-all", "PATH": "/usr/bin:/bin"})
-    if result.returncode != 0:
-        sys.exit(f"harness failed ({result.returncode}):\n{result.stderr[-2000:]}")
+    if arguments.runner is not None:
+        runner = shlex.split(arguments.runner)
+    else:
+        runner = [] if sys.platform == "win32" else ["wine"]
+
+    # The pared-down environment is for wine, which is noisy and picks up the host's PATH. Windows
+    # runs the harness directly and needs its own environment intact; a custom runner keeps it for
+    # the same reason, since CrossOver's launcher resolves its bottle through HOME.
+    if sys.platform == "win32":
+        environment = None
+    elif arguments.runner is not None:
+        environment = {**os.environ, "WINEDEBUG": "-all"}
+    else:
+        environment = {"WINEDEBUG": "-all", "PATH": "/usr/bin:/bin"}
+
+    def case_line(case):
+        return (f"{case['program']} {case['note']} {case['velocity']} "
+                f"{case['hold']} {case['map']} {case['channel']}\n")
+
+    if arguments.batch:
+        # **Order-dependent, and only here because it is fast.** `notebatch` resets between cases,
+        # but a GS reset frees the LFO nodes without zeroing them -- their random registers survive
+        # into the next case, so any tone with a random LFO records a value that depends on what
+        # preceded it. Measured: three cases in the sweep differ from their own isolated render by
+        # up to 5.8 cents. Use for a quick look, never for a fixture anything is judged against.
+        case_file = arguments.audio_dir.parent / "notes_cases.txt"
+        case_file.write_text("".join(case_line(c) for c in cases))
+        command = runner + [str(arguments.scdec), str(arguments.dll), "notebatch",
+                            str(case_file.resolve()), str(arguments.audio_dir.resolve()),
+                            str(arguments.tail)]
+        print(f"rendering {len(cases)} notes in ONE process (order-dependent) ...", flush=True)
+        result = subprocess.run(command, capture_output=True, text=True, env=environment)
+        if result.returncode != 0:
+            sys.exit(f"harness failed ({result.returncode}):\n{result.stderr[-2000:]}")
+    else:
+        # One process per case, because that is the only thing that actually isolates them. The
+        # cases are independent, so they run concurrently; each needs its own output directory
+        # because `notebatch` always names what it writes `case0000.f32`.
+        def render(index_case):
+            index, case = index_case
+            work = arguments.audio_dir / f".work{index:04d}"
+            if work.exists():
+                shutil.rmtree(work)
+            work.mkdir(parents=True)
+            case_file = work / "case.txt"
+            case_file.write_text(case_line(case))
+            command = runner + [str(arguments.scdec), str(arguments.dll), "notebatch",
+                                str(case_file.resolve()), str(work.resolve()),
+                                str(arguments.tail)]
+            result = subprocess.run(command, capture_output=True, text=True, env=environment)
+            produced = work / "case0000.f32"
+            if result.returncode != 0 or not produced.exists():
+                return index, f"exit {result.returncode}: {result.stderr[-400:]}"
+            shutil.move(str(produced), str(arguments.audio_dir / f"case{index:04d}.f32"))
+            shutil.rmtree(work, ignore_errors=True)
+            return index, None
+
+        print(f"rendering {len(cases)} notes, one process each, {arguments.jobs} at a time ...",
+              flush=True)
+        done = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=arguments.jobs) as pool:
+            for index, error in pool.map(render, enumerate(cases)):
+                if error is not None:
+                    sys.exit(f"harness failed on case {index}: {error}")
+                done += 1
+                if done % 20 == 0 or done == len(cases):
+                    print(f"  {done}/{len(cases)}", flush=True)
 
     for index, case in enumerate(cases):
         audio = arguments.audio_dir / f"case{index:04d}.f32"

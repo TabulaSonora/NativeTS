@@ -295,6 +295,42 @@ that pin the note-on draw cadence use tones with no random LFO and a zero random
 they passed throughout both mistakes above. Agreement with an instrument you built is not agreement
 with the module.
 
+### The oracle is only as isolated as its harvest {#oracle-harvest-isolation}
+
+The previous section says tier 2 settles what tier 3 cannot. It needs one qualification, learned the
+same way: **a tier 2 case is authoritative only if it was harvested without carrying state from the
+case before it**, and that is a property of the harness rather than of the DLL.
+
+`scdec notebatch` rendered the whole 239-case sweep in one process with a `GsReset()` between cases,
+under a comment asserting that a case "must not depend on what preceded it". For most cases that
+holds. It does not hold for a tone with a random LFO. Those live in a 128-slot pool with a LIFO
+freelist; `partial_shared_node_free` clears the tick gate and pushes the slot back, and
+`partial_shared_node_alloc` resets only the link fields. The random shapes' registers at `+0x77` have
+exactly one writer in the whole decompilation, the per-tick save-back. A GS reset frees the nodes and
+does not zero them, so the next case's LFO opens on the previous case's values.
+
+Measured, rendering a case alone in a fresh process against its value in the sweep:
+
+| case | sweep fixture | isolated | this engine |
+| --- | --- | --- | --- |
+| `program 48 note 84 map 1` | 1045.7788 Hz | **1042.3225** | 1042.37 |
+| `program 48 note 72 map 4` | 519.4312 | **519.4312** | 521.113 |
+| `program 52 note 60 map 4` | 262.5991 | **263.4802** | 263.402 |
+
+Two of the three cases the note gate was failing were the fixture being wrong: this engine agreed
+with the isolated reference to within half a cent while the sweep value sat 5.7 and 5.8 cents away.
+The third is a real error in this engine. Reading all three as defects would have sent someone
+looking for a fault in two places that did not have one.
+
+`dump_note_renders_oracle.py` now renders each case in its own process, concurrently, and keeps the
+batched path behind `--batch` for a quick look only. When reproducing any of this, note that only
+the **first** case in a `notebatch` file is genuinely isolated — a two-case file has its second case
+inheriting from its first, which is its own way of getting a wrong answer confidently.
+
+The rule that falls out is short. *Tier 3 says the render moved. Tier 2 says whether it should have
+— provided the tier 2 case was harvested in isolation.* Neither instrument is trustworthy about the
+question it was not built to answer.
+
 ### What the first authoritative measurement says
 
 `onestop.mid` at the SC-8820 map, this engine at the hardware's 64 voices against the DLL's own
