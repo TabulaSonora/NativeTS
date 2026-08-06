@@ -2498,22 +2498,23 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         // and the tone's own key-follow decides what a step of it is worth.
         const double native = sounding.descriptor.native_milli_semitones();
 
-        // **No base-pitch jitter here, and the omission is measured rather than assumed.**
+        // `partial_compute_pitch` does not ask whether a voice is a drum, so a percussion partial
+        // with a non-zero +0x12 jitters and draws exactly as a melodic one does.
         //
-        // `partial_compute_pitch` does not ask whether a voice is a drum, so on the face of it a
-        // percussion partial with a non-zero +0x12 should jitter and draw exactly as a melodic one
-        // does -- and this path did that at first. It is wrong: `canyon.mid` reproduces the
-        // reference to within one LSB across 7.9M samples on all four maps, and adding the drum
-        // jitter took that to 1,183,722 samples differing by up to 2,354 LSB. The melodic jitter
-        // alone leaves the gate bit-exact, and every random-pan probe agrees either way.
+        // **This was disabled once, on an argument that did not hold.** Adding it moved
+        // `canyon.mid` from bit-exact to 1,183,722 samples differing by up to 2,354 LSB on the
+        // block-loop gate, which was read as the module making no draw here. That gate is not the
+        // module: `fixtures/stream_renders.json` is generated from *this engine* as a regression
+        // baseline -- its own note says it "cannot catch a mistake both sides share" -- so all it
+        // reported was drift from the engine's previous output, which is what an intended change
+        // looks like.
         //
-        // A spurious *draw* would shift the generator for every voice after it, so the gate staying
-        // bit-exact without one says the module makes no draw for these voices -- which means the
-        // +0x12 this path would read is not the byte the module reads. The drum route resolves its
-        // tone separately (`resolve(key.tone, 60, velocity)`), so the suspicion is the partial
-        // block's base rather than the offset. Left out until that is settled; drawing here on a
-        // guess would desynchronise every later consumer.
-        const int jitter = 0;
+        // Re-measured against the gates that do have an outside opinion, with the jitter on and
+        // off: the DLL-derived note gate is unchanged, 3537 assertions and the same three
+        // pitch-cents cases either way, and the song oracle gains one -- `dreaming_i_was_dreaming`
+        // map 4's peak passes with the jitter and fails without it. Nothing regresses. So the DLL
+        // does not contradict what the decompilation plainly says, and the decompilation decides.
+        const int jitter = notes->pitch().base_pitch_jitter_milli_semitones(partial);
 
         VoiceSetup setup;
         setup.channel = channel;
