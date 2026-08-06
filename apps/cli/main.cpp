@@ -976,10 +976,18 @@ int main(int argc, char** argv)
 
     std::vector<std::string> muted;
     std::vector<std::string> soloed;
+    // One value per occurrence, so the list is comma-separated rather than space-separated:
+    // `--mute 1,2,3`, or the option repeated. Left unbounded these take every argument that
+    // follows, positionals included, and `--mute 1 2 3 in.mid out.wav` then swallows the paths --
+    // which is worse than an error, because CLI11 fills the positionals from what is left and the
+    // render proceeds having muted something other than what was asked for. `apply_channels`
+    // already splits on commas, so only the arity was ever wrong.
     render->add_option(
         "--mute", muted,
-        "Silence these channels, as a mixer labels them (1-64; 17+ need --ports)");
-    render->add_option("--solo", soloed, "Hear only these channels");
+        "Silence these channels, comma-separated and labelled as a mixer does "
+        "(e.g. --mute 1,2,5; 1-64, and 17+ need --ports)")
+        ->expected(1);
+    render->add_option("--solo", soloed, "Hear only these channels, comma-separated")->expected(1);
 
     int loops = 1;
     double fade_seconds = 7.0;
