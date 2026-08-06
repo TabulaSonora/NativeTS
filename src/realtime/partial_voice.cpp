@@ -633,8 +633,26 @@ double PartialVoice::ratio_with(double modulation, double bend_milli_semitones) 
     }
 
     const double pitch = base_pitch_ + modulation + bend_milli_semitones;
-    return std::pow(2.0,
-                    (PitchChain::clamp(pitch) - native_pitch_ - second_fine_shift_) / 12000.0);
+
+    // Two clamps, not one, and they bound different quantities. `PitchChain::clamp` bounds the
+    // absolute accumulator at 0x1f018; this one bounds the *increment* the resampler is finally
+    // driven by, which is what `voice_pitch_block_init` limits:
+    //
+    //     increment = 0x38000 + relative_milli_semitones * 512/375, clamped to 0x3fffe
+    //
+    // and `(0x3fffe - 0x38000) * 375/512` is 23999.5, so the module cannot play a wave faster than
+    // four times its native rate however far the pitch is driven. Without this a partial near the
+    // top of its range takes the whole of a control-matrix pitch assignment and runs past it --
+    // `bigben` reaches 4.80x on a Kalimba wave, and a 4-tap kernel with no band-limiting folds
+    // everything above a quarter of the rate back down as it goes.
+    //
+    // The wave's second fine tune is inside the clamped quantity rather than outside it: it is part
+    // of what the pitch chain hands the resampler, so it is part of what becomes the increment
+    // word. Subtracting it afterwards would let a voice sitting on the ceiling be pushed back under
+    // it by a term the module has already folded in.
+    static constexpr double max_increment_milli_semitones = 24000.0;
+    const double relative = PitchChain::clamp(pitch) - native_pitch_ - second_fine_shift_;
+    return std::pow(2.0, std::min(relative, max_increment_milli_semitones) / 12000.0);
 }
 
 } // namespace ts
