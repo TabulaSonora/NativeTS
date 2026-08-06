@@ -259,6 +259,8 @@ int pitch_command(const std::string& path,
                   // it is remains open: `partial_compute_pitch` reads +0x12, this port reads 0x1A,
                   // and the note in PitchChain::create records why the byte has not been switched.
                   // A partial where the two disagree is what decides it.
+                  << "    hdr row 0x17  " << partial.pitch_curve_row()
+                  << "  (the tone header's byte, which selects the curve row)\n"
                   << "    jitter 0x12   " << static_cast<int>(partial.raw()[0x12])
                   << "  (the engine's byte)\n"
                   << "    jitter 0x1A   " << static_cast<int>(partial.raw()[0x1A])

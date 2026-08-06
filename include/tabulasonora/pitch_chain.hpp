@@ -92,6 +92,10 @@ public:
     /// Upper clamp of the pitch accumulator: 127 semitones in milli-semitones.
     static constexpr int max_pitch_milli_semitones = 0x1F018;
 
+    /// Rows in `g_kf_pitch`, the pitch key-follow curve table. Four of 128 entries, not eight —
+    /// `g_kf_pitchrate0` begins where a fifth would.
+    static constexpr int key_follow_rows = 4;
+
     /// The key a drum's coarse-pitch plane pivots around: 60 is its natural pitch.
     static constexpr int drum_key_centre = 60;
 
@@ -126,6 +130,20 @@ public:
     [[nodiscard]] int base_pitch_milli_semitones(const PartialParameters& partial,
                                                  int note,
                                                  int key_center = 0x3C) const noexcept;
+
+    /// The random offset `partial_compute_pitch` adds to the base pitch, in milli-semitones.
+    ///
+    /// **A second random-pitch depth, and not the same one as the pitch envelope's.** The module
+    /// has two: `partial_compute_pitch @ 18005fc20` tests block **+0x12** and moves the base pitch,
+    /// and `pitch_env_apply_stage @ 1800600c0` tests block **+0x1a** and moves the pitch envelope's
+    /// start level. Both draw from the shared generator, both use `start_jitter_milli_semitones`,
+    /// and both are skipped outright when their byte is zero. Reading this as one byte with two
+    /// candidate addresses is what made the choice look forced; the ROM carries both because the
+    /// module reads both -- +0x12 on 223 of the 4,726 partial blocks, +0x1a on nineteen.
+    ///
+    /// Draws from the shared generator when the depth is non-zero, and only then, so a patch that
+    /// does not use it must not be given this call's result to hold onto.
+    [[nodiscard]] int base_pitch_jitter_milli_semitones(const PartialParameters& partial) const;
 
     /// A drum key's absolute pitch in milli-semitones, from its coarse-pitch plane value.
     ///

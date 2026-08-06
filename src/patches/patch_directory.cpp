@@ -64,10 +64,12 @@ PartialParameters PatchDirectory::partial_by_slot(int tone_number, int slot) con
         throw std::out_of_range("A melodic tone has two partial slots.");
     }
 
-    const std::size_t offset = (static_cast<std::size_t>(tone_number) * Tone::stride)
-                               + Tone::header_size
-                               + (static_cast<std::size_t>(slot) * PartialParameters::stride);
-    return PartialParameters{tone_.data() + offset};
+    const std::size_t record = static_cast<std::size_t>(tone_number) * Tone::stride;
+    const std::size_t offset =
+        record + Tone::header_size + (static_cast<std::size_t>(slot) * PartialParameters::stride);
+    // The header travels with the partial: the engine reads a voice's `+0x150` as the tone record,
+    // so parameters like the pitch key-follow curve row live there rather than in the block.
+    return PartialParameters{tone_.data() + offset, tone_.data() + record};
 }
 
 std::optional<int> PatchDirectory::multisample_wave(int multisample, int transposed_key) const

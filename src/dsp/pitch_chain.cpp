@@ -169,18 +169,38 @@ int PitchChain::base_pitch_milli_semitones(const PartialParameters& partial,
     const KeyFollow follow = key_follow_key(partial, note, key_center);
     const int key = std::clamp(follow.key, 0, 0x7F);
 
-    // Row 2, always — not `(block[0x13] − 0x40) >> 2`, which this port derived from nothing and
-    // which lands on rows 0, 1 and 3 for 760 of the 4,096 partial blocks.
+    // The row comes from the **tone header's +0x17**, and reading it from the partial block at the
+    // same index is what kept this on row 2. `partial_compute_pitch @ 18005fc20` takes the row from
+    // the voice's +0x168, and the write at the decompile's line 1608 sources that from
+    // `*(voice+0x150) + 0x17` -- and `voice+0x150` is the tone record, not the block that starts
+    // 0x24 bytes into it. Dumping the whole structure through the module settles it: it opens with
+    // twelve bytes of ASCII name, and +0x0c is the master level `Tone::level` already reads.
     //
-    // `partial_compute_pitch @ 18005fc20` picks the row as **2 when the voice's +0x169 is zero,
-    // otherwise the block's +0x17**, and skips the curve entirely when that byte is zero. +0x169 is
-    // copied from the part's +0x10, and that byte is zero here: +0x17 is zero on 3,900 of the 4,096
-    // blocks, so a non-zero +0x169 would leave almost every partial with no curve at all, and no
-    // curve measures 16 of 550 cases exact against row 2's 225 on the same cases.
+    // Row 2 is the fallback, taken when the voice's +0x169 -- the part's +0x10 -- is zero. That
+    // byte measures 1 on a part at its defaults, so the fallback is the rare path rather than the
+    // usual one, and the header byte decides. Zero there means no curve at all.
+    //
+    // The earlier reasoning against this was sound given what it could see: block +0x17 is zero on
+    // 3,900 of 4,096 blocks, so honouring it would have left almost every partial with no curve,
+    // and row 2 scored 225 exact of 550 cases against no-curve's 16. Reading the *header* byte
+    // instead gives 1 for Piano 1, 2 for most of the library and 0 for a few -- so the library
+    // mostly stays where it was, and the tones that move, move onto the row the module measures.
+    // Piano 1 is the case that exposed it: rows 1 and 2 differ by exactly the pitch error seen
+    // against the module at every key, growing 85, 93, 101, 109 across keys 100 to 103.
     //
     // `g_kf_pitch` is four rows of 128, not eight — `g_kf_pitchrate0` begins where a fifth would.
-    return (key * 1000) + follow.weight
-           + key_follow_[static_cast<std::size_t>((2 * 0x80) + key)] + ((raw[0x11] - 0x40) * 10);
+    const int row = partial.pitch_curve_row();
+    const int curve = [&]() -> int {
+        if (row == PartialParameters::no_curve_row) {
+            // A partial built without its header -- only the tests do this -- keeps the old row.
+            return key_follow_[static_cast<std::size_t>((2 * 0x80) + key)];
+        }
+        if (row <= 0 || row >= key_follow_rows) {
+            return 0;
+        }
+        return key_follow_[static_cast<std::size_t>((row * 0x80) + key)];
+    }();
+    return (key * 1000) + follow.weight + curve + ((raw[0x11] - 0x40) * 10);
 }
 
 int PitchChain::drum_pitch_milli_semitones(const PartialParameters& partial,
@@ -204,6 +224,19 @@ int PitchChain::portamento_offset(int from_key, int target_pitch) noexcept
 double PitchChain::bend_offset_milli_semitones(int bend, double semitone_range) noexcept
 {
     return (bend - 8192) / 8192.0 * semitone_range * 1000.0;
+}
+
+int PitchChain::base_pitch_jitter_milli_semitones(const PartialParameters& partial) const
+{
+    // `partial_compute_pitch @ 18005fc20` reads the depth from the byte immediately after the
+    // coarse tune it has just applied, and takes the draw only when that byte is non-zero -- the
+    // conditional is the whole point, since an unaffected patch must leave the shared generator
+    // where it found it.
+    const int depth = partial.raw()[0x12];
+    if (depth == 0) {
+        return 0;
+    }
+    return start_jitter_milli_semitones(depth, noise_->next());
 }
 
 std::optional<PitchEnvelope>
@@ -335,24 +368,25 @@ PitchChain::create_envelope_runner(const PartialParameters& partial, int key, in
 {
     const auto raw = partial.raw();
 
-    // **This byte is almost certainly wrong, and correcting it is blocked on a second bug.**
+    // **This byte is right, and the case for replacing it with +0x12 was a false choice.** The two
+    // are different features that happen to share `start_jitter_milli_semitones`, and the module
+    // reads both: `pitch_env_apply_stage @ 1800600c0` tests **+0x1a** and adds its result to the
+    // pitch envelope's start level, which is this call; `partial_compute_pitch @ 18005fc20` tests
+    // **+0x12** and moves the base pitch, which is
+    // `PitchChain::base_pitch_jitter_milli_semitones`. That +0x12 is non-zero on 223 of the 4,726
+    // partial blocks and +0x1a on nineteen is not evidence for one over the other -- it is two
+    // features used at different rates.
     //
-    // `partial_compute_pitch @ 18005fc20` takes the coarse tune from block +0x11 -- which this port
-    // agrees with -- and then tests **+0x12** for the jitter draw, not +0x1a. The ROM says the same
-    // thing where no render can: +0x12 is non-zero on 223 of the 4,726 partial blocks with nineteen
-    // distinct depths, +0x1a on nineteen blocks with two. Nothing recorded why +0x1a was chosen.
-    //
-    // Switching it makes the authoritative song gate *worse*, which is why it still says +0x1a.
-    // `robyn_show_me_love` goes from inside the default 0.01 peak bound to 0.036 out and `rainy`
-    // breaches its row, while their level, spectrum and envelope all stay passing. That pattern --
-    // one fragile sample-level metric moving on two songs, nothing else -- points at the *draw
-    // order*: jitter on 223 partials instead of 19 means many more voices pulling from the one
-    // shared generator, so any disagreement about which voice draws when now shows. Fixing the byte
-    // needs that settled first, or it trades a known-wrong constant for wrong-sounding songs.
+    // Switching this byte to +0x12 used to make the song gate worse, and the reason is now plain:
+    // it moved the draw rather than adding the one that was missing, so a patch with a non-zero
+    // +0x12 drew in the wrong place *and* the +0x1a patches stopped drawing at all. Both are
+    // present now, in the module's own order -- base pitch first, envelope start second.
     const int jitter_depth = raw[0x1A];
 
     // One draw per partial voice, and only when the byte is non-zero -- the engine skips the draw
     // entirely otherwise, so an unaffected patch must not consume from the shared generator.
+    // `partial_compute_pitch_env` calls the stage unconditionally, so the *call* is not what is
+    // conditional here; the draw inside it is.
     const int jitter =
         jitter_depth != 0 ? start_jitter_milli_semitones(jitter_depth, noise_->next()) : 0;
     const bool one_shot = (raw[0x00] & 0x80) != 0;

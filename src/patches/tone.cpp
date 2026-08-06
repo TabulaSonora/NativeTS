@@ -38,7 +38,7 @@ Tone Tone::read(std::span<const std::uint8_t> tone_table, int number)
     for (int slot = 0; slot < partial_slots; ++slot) {
         const std::size_t block =
             offset + header_size + (static_cast<std::size_t>(slot) * PartialParameters::stride);
-        const PartialParameters partial{tone_table.data() + block};
+        const PartialParameters partial{tone_table.data() + block, tone_table.data() + offset};
         if (partial.is_present()) {
             tone.partials_.push_back(partial);
         }

@@ -22,19 +22,56 @@ public:
     /// Bytes per partial block.
     static constexpr int stride = 0x6E;
 
+    /// Bytes of tone header preceding the first partial block, mirroring `Tone::header_size`.
+    static constexpr int tone_header_size = 0x24;
+
     /// Value of `multisample` meaning the partial is absent.
     static constexpr int no_multisample = 0xFFFF;
 
     /// An absent partial.
     PartialParameters() = default;
 
-    /// Creates a view over a partial block's first byte.
-    explicit PartialParameters(const std::uint8_t* block) noexcept : block_(block) {}
+    /// Creates a view over a partial block's first byte, and optionally its tone's header.
+    ///
+    /// The header is worth carrying because the engine reads from both: a voice's `+0x150` points
+    /// at the **tone record**, not at the partial block that follows it, so several parameters a
+    /// partial's behaviour depends on live in the header rather than in the block. Reading them at
+    /// the same nominal index in the block finds a different byte entirely -- see
+    /// `pitch_curve_row`.
+    explicit PartialParameters(const std::uint8_t* block,
+                               const std::uint8_t* tone_header = nullptr) noexcept
+        : block_(block), tone_header_(tone_header)
+    {
+    }
 
     /// The block's raw bytes.
     [[nodiscard]] std::span<const std::uint8_t> raw() const noexcept
     {
         return {block_, static_cast<std::size_t>(stride)};
+    }
+
+    /// The tone header this partial belongs to, empty when it was not supplied.
+    [[nodiscard]] std::span<const std::uint8_t> tone_header() const noexcept
+    {
+        if (tone_header_ == nullptr) {
+            return {};
+        }
+        return {tone_header_, static_cast<std::size_t>(tone_header_size)};
+    }
+
+    /// The pitch key-follow curve row, from the tone header's `+0x17`.
+    ///
+    /// `partial_compute_pitch @ 18005fc20` takes the row from the voice's `+0x168`, and the write
+    /// at the decompile's line 1608 sources that from `*(voice+0x150) + 0x17` -- the tone header.
+    /// Measured against the module on Piano 1: header `+0x17` is 1, so row 1, and rows 1 and 2
+    /// differ by exactly the pitch error seen at every key.
+    ///
+    /// Returns `no_curve_row` when the header is absent, which keeps a partial built without one
+    /// on the behaviour this port had before the header was available.
+    static constexpr int no_curve_row = -1;
+    [[nodiscard]] int pitch_curve_row() const noexcept
+    {
+        return tone_header_ == nullptr ? no_curve_row : tone_header_[0x17];
     }
 
     /// True when this slot holds a real partial.
@@ -140,6 +177,8 @@ private:
     }
 
     const std::uint8_t* block_ = nullptr;
+
+    const std::uint8_t* tone_header_ = nullptr;
 };
 
 } // namespace ts
