@@ -255,6 +255,14 @@ int pitch_command(const std::string& path,
                   << "    kf byte 0x13  " << partial.pitch_key_follow() << " (follow amount)\n"
                   << "    kf byte 0x17  " << static_cast<int>(partial.raw()[0x17])
                   << " (the row, when the part's +0x10 is not zero)\n"
+                  // Both candidates for the random-pitch depth, printed together because which one
+                  // it is remains open: `partial_compute_pitch` reads +0x12, this port reads 0x1A,
+                  // and the note in PitchChain::create records why the byte has not been switched.
+                  // A partial where the two disagree is what decides it.
+                  << "    jitter 0x12   " << static_cast<int>(partial.raw()[0x12])
+                  << "  (the engine's byte)\n"
+                  << "    jitter 0x1A   " << static_cast<int>(partial.raw()[0x1A])
+                  << "  (the byte this port reads)\n"
                   << "    follow key    " << follow_key << '\n'
                   << "    follow weight " << follow.weight << '\n'
                   // All four rows, though only row 2 is used: printing the alternatives is what
