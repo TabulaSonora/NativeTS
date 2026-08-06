@@ -99,7 +99,7 @@ VolumeFit fit_volume(const SegmentEnvelope& source,
 
     // How many segments actually move, which is the number that decides representability.
     double previous = 0.0;
-    for (int i = 0; i < SegmentEnvelope::segment_count; ++i) {
+    for (std::size_t i = 0; i < SegmentEnvelope::segment_count; ++i) {
         if (std::abs(targets[i] - previous) > 1e-9) {
             ++fit.moving_segments;
         }
@@ -108,7 +108,8 @@ VolumeFit fit_volume(const SegmentEnvelope& source,
 
     const auto peak_iterator = std::max_element(targets.begin(), targets.end());
     fit.peak = *peak_iterator;
-    const auto peak_index = static_cast<int>(std::distance(targets.begin(), peak_iterator));
+    const auto peak_index =
+        static_cast<std::size_t>(std::distance(targets.begin(), peak_iterator));
 
     if (fit.peak <= 0.0) {
         // Nothing sounds. Leave the envelope instant and silent rather than emitting a shape.
@@ -120,7 +121,7 @@ VolumeFit fit_volume(const SegmentEnvelope& source,
     const double attack_seconds = static_cast<double>(ends[peak_index]) / rate;
 
     // A hold is the segments straight after the peak that stay at it.
-    int hold_index = peak_index;
+    std::size_t hold_index = peak_index;
     while (hold_index + 1 < SegmentEnvelope::segment_count
            && targets[hold_index + 1] >= fit.peak * 0.995) {
         ++hold_index;

@@ -544,13 +544,29 @@ The other host rates are the same latency seen through the module's resampler �
 internally and converts on the way out, so 64 kHz reads 255 and 16 kHz reads 48. At 32 kHz, which is
 what this engine renders at and what both gates compare, the number is 128 and it is exact.
 
-**It is not implemented, and that is a decision rather than an omission.** Modelling it faithfully
-means queueing events against a block counter the way `TG_Process` does — which makes
-`ToneGenerator::send_channel` asynchronous, so a program change no longer takes effect before the
-next call returns. A good deal of the suite reads state back immediately after sending, and every
-one of those would have to render four blocks first. The equivalent shortcut, delaying the output by
-128 samples, is exactly the same thing for a time-invariant engine and is one line — but it buys the
-alignment by asserting a latency the engine does not actually have.
+**It is implemented, and off by default.** ts::ToneGeneratorOptions::event_delay_blocks holds a
+message for that many 32-sample chunks before any part sees it, which is the module's staging rather
+than a delay bolted onto the output — messages are queued raw and matched to parts when they are
+*dispatched*, so a SysEx that repoints a part's receive channel in between takes effect first.
+Setting it to 4 moves this engine's onset from 1 to 129.
+
+The default is zero, and the reason is the suite rather than the engine: a good deal of it reads
+state back on the line after sending, which a real pipeline defers past. That makes it the right
+setting for a test of a *law* and the wrong one for a test of a *render*, so the note gate sets it
+to 4 and everything comparing against the oracle should.
+
+Two more pieces of the same 148 samples came out of the same look, and they are worth separating
+because guessing at the split is what went wrong the first time. ts::OutputFilter — the module's
+`tg_output_filter`, which runs at every host rate including its own — is worth exactly **one**
+sample here: at 1:1 its phase accumulator sits at zero, the interpolation weight with it, and the
+output is the previous input. It was the obvious candidate for the remaining 20 and it is not the
+answer. And `TG_ShortMidiIn` stamps a message with `offset * 1000 / host_rate` milliseconds rather
+than keeping its sample offset, which ts::ToneGenerator::send_channel_at reproduces — a millisecond
+being one 32-sample chunk at 32 kHz is why the module can compare a stamp against a chunk count at
+all.
+
+That accounts for 128 of staging and 1 of output stage. **19 samples remain unattributed**, and are
+recorded as unattributed rather than assigned to whichever component is nearest.
 
 ### The engine plays sharp {#the-engine-plays-sharp}
 

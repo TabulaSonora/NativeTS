@@ -117,7 +117,7 @@ TEST_CASE("a seeded ramp does not glide", "[control_ramp]")
     ramp.seed(full_scale_target(), rate, no_hold);
     const double first = ramp.step();
     for (int i = 0; i < 200; ++i) {
-        CHECK(std::abs(ramp.step() - first) < 1e-4);
+        CHECK(std::abs(static_cast<double>(ramp.step()) - first) < 1e-4);
     }
 }
 

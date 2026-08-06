@@ -367,7 +367,7 @@ TEST_CASE("the equalizer is exactly transparent when flat", "[effects][sccore]")
             // Skip the settling transient and measure the steady state.
             double sum = 0.0;
             for (std::size_t n = 1024; n < left.size(); ++n) {
-                sum += static_cast<double>(left[n]) * left[n];
+                sum += static_cast<double>(left[n]) * static_cast<double>(left[n]);
             }
             return sum;
         };

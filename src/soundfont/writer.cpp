@@ -315,7 +315,7 @@ WriteReport write(const std::filesystem::path& path, const Bank& bank, Codec cod
 
         // The mirror carries only the name's second half; every other field is read from the base.
         pdta.xshdr.name(sample.name, 20, 20);
-        for (int i = 0; i < 26; ++i) {
+        for (int pad = 0; pad < 26; ++pad) {
             pdta.xshdr.u8(0);
         }
     }

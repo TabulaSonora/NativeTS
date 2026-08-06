@@ -242,6 +242,13 @@ What varies is how much the engine is allowed to spend:
 | polyphony | 64 voices, stolen when full | any limit, or `ToneGeneratorOptions::unlimited_polyphony`, which **grows** the pool instead of stealing |
 | parts | 32, over two ports | 64, over four — an extension, not a fidelity feature |
 
+Two settings go the other way, and are off by default because the *engine* is the departure rather
+than the option: `ToneGeneratorOptions::event_delay_blocks` stages a message through the module's
+rings before a part sees it, and clearing `ToneGeneratorOptions::bypass_output_filter` runs the
+module's output stage. Both cost latency this engine otherwise does not have — 128 samples and 1 —
+and both are what the module always does, with no switch of its own. Anything compared against it
+wants them on; the suite leaves them off because much of it reads part state back synchronously.
+
 The growing pool is what an offline render wants and what an audio thread must not have: growing
 allocates, and allocating inside the block loop is the one thing a real-time thread cannot do. Both
 settings are departures, so both are opt-in — the principle throughout is to match the module by

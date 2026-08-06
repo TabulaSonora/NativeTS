@@ -193,8 +193,18 @@ engine.render(left, right);           // hold it for as long as you like
 engine.send_channel(0x80, 60, 0);     // note off, whenever
 ```
 
-Send events between `render` calls and they land on the block boundary, which is the grid the
-engine itself applies them on. Polyphony is the hardware's own 64 voices; past that the allocator
+Send events between `render` calls and they take effect at the top of the next one. To place them
+*inside* it, ts::ToneGenerator::send_channel_at takes a sample offset — the module stamps every
+message with `offset * 1000 / host_rate` milliseconds and releases it when its chunk counter reaches
+that, so placement is real but quantised to the millisecond. The offset leads rather than trails,
+which keeps a four-argument call from meaning two different things.
+
+Two options make the engine keep the module's own timing rather than this engine's convenience:
+ts::ToneGeneratorOptions::event_delay_blocks holds a message for four 32-sample chunks the way the
+module's rings do, and clearing ts::ToneGeneratorOptions::bypass_output_filter runs its output
+stage. Both default to the convenient setting, and anything being compared against the module wants
+both — see \ref verification.
+ Polyphony is the hardware's own 64 voices; past that the allocator
 steals, taking whole notes rather than half of one and fading what it takes.
 ts::ToneGeneratorOptions::polyphony raises that limit, and
 ts::ToneGeneratorOptions::unlimited_polyphony makes the pool grow rather than steal — right for an

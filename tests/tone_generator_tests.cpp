@@ -774,8 +774,9 @@ TEST_CASE("a drum part's pan follows CC#10, the kit plane offsetting it", "[stre
         for (int block = 0; block < 400; ++block) {
             generator.render(left, right);
             for (std::size_t i = 0; i < left.size(); ++i) {
-                left_energy += static_cast<double>(left[i]) * left[i];
-                right_energy += static_cast<double>(right[i]) * right[i];
+                left_energy += static_cast<double>(left[i]) * static_cast<double>(left[i]);
+                right_energy +=
+                    static_cast<double>(right[i]) * static_cast<double>(right[i]);
             }
         }
         REQUIRE(left_energy + right_energy > 0.0);
@@ -917,7 +918,7 @@ TEST_CASE("the four-band EQ engages only when a part opts in", "[stream][sccore]
 
         double energy = 0.0;
         for (const float sample : left) {
-            energy += static_cast<double>(sample) * sample;
+            energy += static_cast<double>(sample) * static_cast<double>(sample);
         }
         return energy;
     };
@@ -1086,7 +1087,8 @@ TEST_CASE("the control matrix reaches amplitude, not only pitch", "[stream][scco
 
         double energy = 0.0;
         for (std::size_t i = 0; i < left.size(); ++i) {
-            energy += (left[i] * left[i]) + (right[i] * right[i]);
+            energy += static_cast<double>(left[i]) * static_cast<double>(left[i])
+                      + static_cast<double>(right[i]) * static_cast<double>(right[i]);
         }
         return std::sqrt(energy / left.size());
     };
@@ -1184,7 +1186,8 @@ TEST_CASE("the assignable controllers reach the matrix", "[stream][sccore]")
             generator.render(left, right);
             double energy = 0.0;
             for (std::size_t i = 0; i < left.size(); ++i) {
-                energy += (left[i] * left[i]) + (right[i] * right[i]);
+                energy += static_cast<double>(left[i]) * static_cast<double>(left[i])
+                          + static_cast<double>(right[i]) * static_cast<double>(right[i]);
             }
             return std::sqrt(energy / left.size());
         };
@@ -1225,9 +1228,9 @@ TEST_CASE("a pan change sweeps rather than snapping", "[stream][sccore]")
         generator.render(left, right);
         double el = 0.0;
         double er = 0.0;
-        for (int i = 0; i < window; ++i) {
-            el += static_cast<double>(left[i]) * left[i];
-            er += static_cast<double>(right[i]) * right[i];
+        for (std::size_t i = 0; i < static_cast<std::size_t>(window); ++i) {
+            el += static_cast<double>(left[i]) * static_cast<double>(left[i]);
+            er += static_cast<double>(right[i]) * static_cast<double>(right[i]);
         }
         return el + er > 1e-14 ? er / (el + er) : 0.5;
     };
@@ -1300,8 +1303,8 @@ TEST_CASE("a send level slews rather than switching", "[stream][sccore]")
         wet.render(wl, wr);
         dry.render(dl, dr);
         double sum = 0.0;
-        for (int i = 0; i < window; ++i) {
-            const double d = static_cast<double>(wl[i]) - dl[i];
+        for (std::size_t i = 0; i < static_cast<std::size_t>(window); ++i) {
+            const double d = static_cast<double>(wl[i]) - static_cast<double>(dl[i]);
             sum += d * d;
         }
         return std::sqrt(sum / window);
@@ -1365,7 +1368,7 @@ TEST_CASE("CC#74 moves the cutoff once, not twice", "[stream][sccore]")
 
         double sum = 0.0;
         for (const float sample : left) {
-            sum += static_cast<double>(sample) * sample;
+            sum += static_cast<double>(sample) * static_cast<double>(sample);
         }
         return std::sqrt(sum / static_cast<double>(left.size()));
     };
@@ -1414,7 +1417,7 @@ TEST_CASE("CC#71 opens the filter's resonance, and the wrong way round", "[strea
 
         double sum = 0.0;
         for (const float sample : left) {
-            sum += static_cast<double>(sample) * sample;
+            sum += static_cast<double>(sample) * static_cast<double>(sample);
         }
         return std::sqrt(sum / static_cast<double>(left.size()));
     };
@@ -1445,7 +1448,7 @@ TEST_CASE("CC#71 reaches a note that is already sounding", "[stream][sccore]")
     const auto energy_of = [](std::span<const float> block) {
         double sum = 0.0;
         for (const float sample : block) {
-            sum += static_cast<double>(sample) * sample;
+            sum += static_cast<double>(sample) * static_cast<double>(sample);
         }
         return std::sqrt(sum / static_cast<double>(block.size()));
     };

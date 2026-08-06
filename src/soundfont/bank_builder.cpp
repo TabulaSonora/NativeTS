@@ -221,7 +221,8 @@ BankBuild build_bank(const PatchDirectory& directory,
         }
 
         std::vector<ToneZone> zones;
-        directory.tone_zones(tone_number, zones);
+        // The tone's name comes back too and is not wanted here; the zones are the whole point.
+        (void)directory.tone_zones(tone_number, zones);
 
         for (std::size_t partial_index = 0; partial_index < record->partials().size();
              ++partial_index) {
@@ -582,19 +583,19 @@ BankBuild build_bank(const PatchDirectory& directory,
             // It stays an approximation. The modulator's curve spans the whole 0-127 range while
             // the partial's crossfade spans only its window, so a narrow window is under-served.
             {
-                const auto [velocity_low, velocity_high] = partial.velocity_window();
-                const int tone_level = directory.tone_level(tone_number);
+                const auto [window_low, window_high] = partial.velocity_window();
+                const int level_for_tone = directory.tone_level(tone_number);
                 const int key = instrument.zones.empty() ? 60 : first_key;
 
-                const std::optional<int> low_level = levels.partial_level(partial, velocity_low);
-                const std::optional<int> high_level = levels.partial_level(partial, velocity_high);
+                const std::optional<int> low_level = levels.partial_level(partial, window_low);
+                const std::optional<int> high_level = levels.partial_level(partial, window_high);
                 if (low_level && high_level) {
                     const int zone_level = directory.zone_level(partial.multisample(), key,
                                                                 partial.key_center());
                     const double low_gain = levels.amp_of(
-                        levels.base_level(partial, *low_level, key, zone_level, tone_level));
+                        levels.base_level(partial, *low_level, key, zone_level, level_for_tone));
                     const double high_gain = levels.amp_of(
-                        levels.base_level(partial, *high_level, key, zone_level, tone_level));
+                        levels.base_level(partial, *high_level, key, zone_level, level_for_tone));
                     const int span = centibels(low_gain) - centibels(high_gain);
 
                     global.modulators.push_back(Modulator{velocity_attenuation_source(),

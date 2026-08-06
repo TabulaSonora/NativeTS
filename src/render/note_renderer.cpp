@@ -18,13 +18,13 @@ namespace ts {
 /// machine, so those have to be constructed first. The upstream C# gets this for free from the GC;
 /// here it is the member order.
 struct NoteRenderer::Impl {
-    explicit Impl(const RomImage& rom)
-        : rom(&rom),
-          tables(TableSet::from_rom(rom)),
+    explicit Impl(const RomImage& image)
+        : tables(TableSet::from_rom(image)),
           envelopes(tables),
           directory(tables),
-          drums(rom),
-          wave_rom(rom),
+          drums(image),
+          rom(&image),
+          wave_rom(image),
           interpolator(tables),
           sampler(wave_rom, interpolator),
           tva(tables, envelopes),
@@ -35,7 +35,7 @@ struct NoteRenderer::Impl {
     {
         // The effect coefficients come out of the same file as everything else, so opening the
         // renderer is what makes the send effects available -- there is no preset file to find.
-        EffectPresets::ensure_from(rom);
+        EffectPresets::ensure_from(image);
     }
 
     TableSet tables;

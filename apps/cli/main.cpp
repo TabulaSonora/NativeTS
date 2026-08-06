@@ -230,9 +230,9 @@ int pitch_command(const std::string& path, int program, int note, int velocity, 
         // The settled pitch envelope, which a traced increment carries and `base` does not. A
         // patch whose envelope sustains away from zero reads as a tuning error against the module
         // unless this is added in, and it sustains steadily, so no steadiness filter catches it.
-        const std::optional<ts::PitchEnvelope> envelope =
+        const std::optional<ts::PitchEnvelope> pitch_envelope =
             pitch.envelope_offsets(partial, note, velocity);
-        const int sustain = envelope ? envelope->targets.back() : 0;
+        const int sustain = pitch_envelope ? pitch_envelope->targets.back() : 0;
         const double native = descriptor.native_milli_semitones();
         const double first_only =
             (descriptor.root_key * 1000.0) + 1024.0 - descriptor.fine_tune;
@@ -826,8 +826,8 @@ int export_soundfont_command(const std::string& dll,
     const ts::sf2::WriteReport report = ts::sf2::write(output, built.bank, codec);
     std::cout << "  igen " << report.igen_count << ", pgen " << report.pgen_count << "; xdta is "
               << (report.needed_xdta() ? "load-bearing" : "not needed at these counts") << "\n";
-    std::cout << "  sample data " << (report.pcm_bytes / 1048576.0) << " MB, file "
-              << (report.file_bytes / 1048576.0) << " MB\n";
+    std::cout << "  sample data " << (static_cast<double>(report.pcm_bytes) / 1048576.0)
+              << " MB, file " << (static_cast<double>(report.file_bytes) / 1048576.0) << " MB\n";
 
     if (!write_maps) {
         return 0;

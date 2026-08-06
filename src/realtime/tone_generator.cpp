@@ -2081,8 +2081,9 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
         }
         for (int n = 0; n < block_size; ++n) {
             const auto i = static_cast<std::size_t>(n);
-            left[i] += static_cast<float>(wet_left[i] * level_gains[i]);
-            right[i] += static_cast<float>(wet_right[i] * level_gains[i]);
+            left[i] += static_cast<float>(static_cast<double>(wet_left[i]) * level_gains[i]);
+            right[i] +=
+                static_cast<float>(static_cast<double>(wet_right[i]) * level_gains[i]);
         }
     };
 

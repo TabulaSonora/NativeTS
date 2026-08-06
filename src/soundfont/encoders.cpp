@@ -178,11 +178,11 @@ std::vector<std::uint8_t> encode_vorbis(std::span<const float> samples,
     constexpr long chunk = 1024;
     for (std::size_t offset = 0; offset < samples.size(); offset += chunk) {
         const auto count = static_cast<long>(std::min<std::size_t>(chunk, samples.size() - offset));
-        float** buffer = vorbis_analysis_buffer(&dsp, count);
+        float** buffer = vorbis_analysis_buffer(&dsp, static_cast<int>(count));
         for (long i = 0; i < count; ++i) {
             buffer[0][i] = samples[offset + static_cast<std::size_t>(i)];
         }
-        vorbis_analysis_wrote(&dsp, count);
+        vorbis_analysis_wrote(&dsp, static_cast<int>(count));
         drain(false);
     }
 
