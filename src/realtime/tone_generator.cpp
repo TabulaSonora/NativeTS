@@ -183,6 +183,9 @@ struct ToneGenerator::Impl {
     /// deferral counted in host calls would drift with them.
     std::int64_t block_index = 0;
 
+    /// The module's output stage, run over each chunk on its way to the host.
+    OutputFilter output_filter;
+
     /// A channel message waiting for its chunk, exactly as the module holds one.
     ///
     /// The port and the raw status are kept rather than the resolved part, because the engine
@@ -1819,6 +1822,17 @@ void ToneGenerator::Impl::render_block()
     }
 
     mix_effects(left, right);
+
+    // The module's output stage, over the finished chunk. `TG_Process` runs it on everything it
+    // emits, at every host rate including the engine's own -- see `OutputFilter`.
+    if (!options.bypass_output_filter) {
+        for (int n = 0; n < block_size; ++n) {
+            const auto i = static_cast<std::size_t>(n);
+            const auto [l, r] = output_filter.process(left[i], right[i]);
+            left[i] = l;
+            right[i] = r;
+        }
+    }
 }
 
 void ToneGenerator::Impl::mix_voice(PartialVoice& voice,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "tabulasonora/note_renderer.hpp"
+#include "tabulasonora/output_filter.hpp"
 #include "tabulasonora/part.hpp"
 #include "tabulasonora/render_options.hpp"
 #include "tabulasonora/smf_reader.hpp"
@@ -63,6 +64,18 @@ struct ToneGeneratorOptions {
     /// host rate already matches the engine's, and any group delay it carries would sit in the same
     /// measurement. Pinning the split is what the next measurement is for.
     int event_delay_blocks = 0;
+
+    /// Whether to skip the module's output stage.
+    ///
+    /// `tg_output_filter` runs on every chunk `TG_Process` emits, at every host rate including the
+    /// engine's own -- see `OutputFilter`. At 1:1 it reduces to a single sample of delay, which is
+    /// a sample of the latency between this engine and the module and nothing else audible.
+    ///
+    /// Bypassing it is the default for the same reason the event pipeline is off by default: the
+    /// suite is written against renders that begin where they always have, and a stage whose whole
+    /// effect at this rate is one sample of delay is not worth shifting every pinned fixture for.
+    /// Turn it off -- that is, run the filter -- when lining a render up against the oracle.
+    bool bypass_output_filter = true;
 
     /// Which tone map program changes resolve against.
     ///
