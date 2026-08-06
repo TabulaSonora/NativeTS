@@ -23,6 +23,14 @@ public:
     /// Whether the wave has run out and is now silent.
     [[nodiscard]] bool finished() const noexcept { return finished_; }
 
+    /// Whether the read position has reached the wave's loop point.
+    ///
+    /// The module's decoder raises an event on that transition -- `voice_report_finished` turns it
+    /// into `voice+4`, and the control tick after that adopts the wave's second fine tune. See
+    /// `WaveDescriptor::second_fine_tune`. Latched, because the event fires once: a looping wave
+    /// crosses the point again every period and the module does not raise it again.
+    [[nodiscard]] bool passed_loop_start() const noexcept { return passed_loop_start_; }
+
     /// Starts a wave from its beginning.
     void start(const DecodedWave& wave);
 
@@ -51,6 +59,7 @@ private:
 
     double position_ = 0.0;
     bool finished_ = true;
+    bool passed_loop_start_ = false;
 
     std::array<float, ping_pong_window> ring_{};
     std::int64_t generated_ = 0;

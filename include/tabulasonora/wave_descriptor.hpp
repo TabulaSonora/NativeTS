@@ -96,12 +96,21 @@ struct WaveDescriptor {
     /// neutral never moves. An earlier note here claimed the copy only staged a value and did not
     /// retune. That was both of those mistakes at once, and it was wrong.
     ///
-    /// It is nonetheless **not modelled**, and the reason is worth stating precisely rather than
-    /// dressing up. Wiring it — the offline path walking its ratios to find the crossing, the
-    /// realtime path testing the reader at the tick — takes the 239-case oracle note gate from
-    /// clean to five failing assertions on programs 4, 38 and 66. The magnitudes say the fault is
+    /// **It is modelled, on the realtime path, and the wiring is what took two attempts.**
+    /// `WaveReader` latches the crossing and `PartialVoice::control` moves the offset between
+    /// forming the block's entry ratio and its exit ratio, so `PitchRamp` glides into the new tuning
+    /// exactly as the module's ramp is retargeted. The note gate's median tuning error is 0.09 cents
+    /// with it; leaving it out costs 0.37, and five of the gate's melodic rows depend on it. The
+    /// offline `NoteRenderer` path does *not* carry it — it resamples a whole note at one ratio and
+    /// has no reader to ask — so `render-note` renders a note's attack tuning for its whole length.
+    /// Every gate and every song goes through `ToneGenerator`, which does.
+    ///
+    /// The earlier attempt is worth keeping, because its failure was not the mechanism. Wiring it —
+    /// the offline path walking its ratios to find the crossing, the realtime path testing the
+    /// reader at the tick — took the 239-case oracle note gate from clean to five failing assertions
+    /// on programs 4, 38 and 66. The magnitudes said the fault was
     /// in the wiring, not the mechanism: program 38's term is **three** milli-semitones, 0.3 of a
-    /// cent, and no 0.3-cent retune moves an envelope window by 1.2 dB. What it does do is assign
+    /// cent, and no 0.3-cent retune moves an envelope window by 1.2 dB. What it did do was assign
     /// straight to the voice's root underneath `PitchRamp` and the pitch envelope, so the change
     /// arrives as a discontinuity rather than as a retarget the ramp glides into — which is
     /// precisely what the engine does *not* do.
@@ -109,7 +118,9 @@ struct WaveDescriptor {
     /// Doing it properly means routing the new root through the pitch ramp as a target, the way a
     /// bend or a TVP move goes, and finding the crossing as an event rather than predicting a tick
     /// — a glide, a real-time pitch change and the pitch envelope all move the rate the crossing
-    /// is reached at, so no precomputed tick survives them.
+    /// is reached at, so no precomputed tick survives them. That is what the realtime path does now:
+    /// the reader latches the crossing it actually reaches, and the tick that notices it moves the
+    /// offset where the ramp is already about to be armed.
     ///
     /// **This behaviour is more fragile than anything else in this header, and the fragility is in
     /// the timing rather than the law.** The law is one subtraction. What decides whether a render
@@ -126,9 +137,9 @@ struct WaveDescriptor {
     ///
     /// So the shape to copy is the engine's: the decoder raises an event exactly on the address
     /// transition, and the reaction is delayed only by however long this engine's own event ticking
-    /// takes to pick it up — no more, no less. Until the two pipelines line up sample for sample,
-    /// a test of this is a test of the alignment and not of the law, which is why the switch that
-    /// turns it off is worth having beside it and why the gate is green with it absent.
+    /// takes to pick it up — no more, no less. This engine's crossing is the read position reaching
+    /// `loop_start` and its reaction is the next control tick, which is the module's chain with one
+    /// step fewer; on `Clarinet` note 57 that is the same tick the module retargets on.
     ///
     /// Confirmed on the engine rather than inferred: `scdec pitchword` reads both words off live
     /// voices, and for a struck note they stay *different* — Atmosphere's first partial sits at
@@ -139,8 +150,14 @@ struct WaveDescriptor {
     /// not" and concluded that applying it unconditionally was the closest available. That was
     /// measured against the module's pitch word across cases that include voices well past their
     /// note-on, which is exactly where the flag does get set — so it counted the adopted state
-    /// without separating it from the struck one. Against rendered audio it is the wrong call: the
-    /// 239-case oracle note gate goes from nine failing assertions to none by leaving it out.
+    /// without separating it from the struck one. Applying it *on the crossing* is neither of those
+    /// choices and is what the trace shows.
+    ///
+    /// It also could not be judged against rendered audio until the playback rate went through the
+    /// module's own exponential table: that table is up to 4.66 cents flat, and this engine's exact
+    /// `pow(2, …)` was cancelling roughly a third of a semitone's worth of missing second fine tune
+    /// on some waves and doubling it on others. With both in place the note gate's median tuning
+    /// error is 0.09 cents; with the table alone it is 0.37. See \ref the-exponential-is-the-modules.
     int second_fine_tune = 1024;
     /// Raw flag byte. Bit 0 is bidirectional, bit 2 is reverse; bit 1 takes no part in the
     /// dispatch.

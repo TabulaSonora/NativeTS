@@ -270,6 +270,11 @@ private:
     double base_pitch_ = 0.0;
     double native_pitch_ = 0.0;
 
+    /// What adopting the wave's second fine tune is worth, in milli-semitones of native pitch.
+    double second_fine_offset_ = 0.0;
+    /// How much of it is in force: zero until the adoption, then all of it.
+    double second_fine_shift_ = 0.0;
+
     /// The pan the voice is aiming at, before the slew.
     [[nodiscard]] int pan_target(int part_pan) const noexcept;
 

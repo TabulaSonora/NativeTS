@@ -25,9 +25,10 @@
 // median bass-carrying case is under one. See \ref widening-the-note-sweep.
 //
 // What it said the first time it ran: level agrees to a median of 0.09 dB, the octave bands the
-// note actually reaches to a median of 0.17 dB, and **27 of the 36 programs need no allowance at
-// all**. The nine that do are in `known_deviations` below, and they are not a spread -- they are
-// two named causes and one outlier.
+// note actually reaches to a median of 0.17 dB, and 27 of the 36 programs needed no allowance at
+// all. **Thirty-two of them do now**, and tuning agrees to a median of 0.09 cents -- the nine rows
+// it opened with were largely one defect, and closing it emptied five of them. See
+// `known_deviations` below and \ref the-exponential-is-the-modules.
 //
 // **This replaces the C# fixture as the authority, and does not replace the test.** The
 // `[render][sccore][gate]` digest next door still compares against the archived engine bit for bit,
@@ -176,17 +177,18 @@ struct Deviation {
     double peak = 0.01;
     double band_db = 3.0;
     double envelope_db = 6.0;
-    /// Tuning, in cents. **This default is a debt, not a standard.** Two engines rendering the same
-    /// note from the same wave should agree to a small fraction of a cent -- `Trombone` at the
-    /// SC-88Pro map agrees with the module's own playback ratio to 0.001, so the machinery can --
-    /// and the median here is +2.2 cents with only 25 of 177 cases inside one. It is set at what
-    /// this engine currently manages so that nothing gets *worse* while the cause is found; see
-    /// \ref the-engine-plays-sharp. Tighten it, do not live with it.
+    /// Tuning, in cents.
     ///
-    /// Part of the spread is the measurement rather than the engine: a 0.5 Hz bin is 13 cents wide
-    /// at the sweep's lowest key, so the estimator is least able to speak exactly where the notes
-    /// are lowest. That is why `Tenor Sax`'s row is what it is.
-    double pitch_cents = 9.5;
+    /// This was 9.5 and documented as a debt: the median case sat 2.2 cents sharp of the module and
+    /// only 25 of them were inside one cent. The cause is found -- see \ref the-engine-plays-sharp
+    /// -- and the median is now 0.09 cents with 119 of 155 inside one, so the bound is what a
+    /// measurement can actually resolve rather than what the engine was managing.
+    ///
+    /// What is left is the measurement rather than the engine: a 0.5 Hz bin is 13 cents wide at the
+    /// sweep's lowest key, so the estimator is least able to speak exactly where the notes are
+    /// lowest, and every case still outside two cents is on a 65 Hz key. Five leaves that room and
+    /// nothing else.
+    double pitch_cents = 5.0;
 };
 
 struct Case {
@@ -226,45 +228,38 @@ struct KnownDrumDeviation {
 /// case would be twenty-odd bounds all restating one fact about one patch. Reading it back the
 /// other way is the point of the table: *Whistle is wrong*, not *these four renders are wrong*.
 ///
-/// Twenty-seven of the thirty-six programs in the sweep need no row at all.
+/// Thirty-two of the thirty-six programs in the sweep need no row at all.
 ///
-/// They fall into two groups, and the split is informative:
+/// **This table used to be twice as long, and what emptied it was one line of the engine.** Nine
+/// melodic rows became four when the playback rate started going through the module's own
+/// exponential table rather than around it -- see \ref the-engine-plays-sharp. The two families
+/// those rows described were the same defect seen from either end:
 ///
-///  - **Patches that deviate in *time* while their spectrum and level agree**, which is **beating
-///    between two detuned partials, at the wrong rate**. `Bass & Lead` was measured: the module's
-///    two partials sit at 1043.8 and 1045.5 Hz, 1.7 Hz apart, and this engine's at 1045.9 and
-///    1048.3 Hz, 2.4 Hz apart. Their envelopes then modulate at 1.75 and 2.33 Hz respectively --
-///    the beat, not an LFO -- so the dips land in different windows and the envelope metric reads
-///    12 dB while the spectrum stays inside 2.6 dB and the level inside 0.5 dB.
+///  - **Patches that deviated in *time* while their spectrum and level agreed**, which was beating
+///    between two detuned partials at the wrong rate. `Bass & Lead` was the measured case: the
+///    module's partials 1.7 Hz apart against this engine's 2.4 Hz, because both of ours sat sharp
+///    by 3.5 and 4.6 cents and a detune error is a beat-rate error. Its partials now agree with the
+///    module's to a tenth of a cent and its envelope is inside the default; what is left is its
+///    peak. `Syn.Bass 1` and `Nylon Gt.` were the same story and are gone from the table entirely.
+///  - **Patches read as out of tune**: `Violin`, `Harp`, `Tenor Sax` at 23 cents, `Atmosphere`.
+///    All four are now inside a cent, and `Whistle` -- the row this file called the sharpest lead
+///    it produced, 21 dB in a band the note reaches -- passes every default it was excused from.
 ///
-///    It looked like an LFO starting phase and is not. `Bass & Lead`'s LFO1 carries a TVA depth of
-///    682 against a 0x7F00 full scale, which is 0.18 dB, and runs at 6 Hz -- too shallow to see and
-///    far too fast to survive an 87 ms RMS window. Traced live with `scdec lfotrace`.
-///
-///    The beat is wrong because **the partials are**: both of this engine's sit sharp of the
-///    module's, by 3.5 and 4.6 cents, and a detune error is a beat-rate error. See
-///    `docs/articles/verification.md` for how far that generalises -- it is not confined to this
-///    patch, and it is the largest thing this gate found.
-///  - **Patches with a noise component**: `Whistle`, `Synth Drum`, `Seashore`, `Atmosphere`. The
-///    obvious explanation is that the shared pseudo-random source is at a different point when the
-///    note starts, and **that was measured and is not it** -- returning the generator to its seed
-///    for every case, which is what `render_case` now does, moves these four by hundredths of a dB
-///    and makes `Whistle` slightly *worse*. Whatever the cause is, it is not the generator's phase
-///    between cases. `Whistle` is the outlier of the four by a wide margin: 21 dB in a band the
-///    note genuinely reaches and 2 dB of overall level. It is the sharpest lead this gate produced.
+/// What remains is genuinely something else: two peaks, one band, and two unpitched noise patches
+/// whose pitch bound is not a check at all.
 ///
 /// `TS_STRICT_NOTES=1` holds every program to the defaults, which is how a row's current deviation
 /// is read off when it is due to be tightened. Not a test mode -- a ruler.
-constexpr std::array<KnownDeviation, 11> known_deviations{{
+constexpr std::array<KnownDeviation, 6> known_deviations{{
     {11, {1.0, 0.06, 3.0, 6.0}, "Vibraphone; peak alone -- level, spectrum and envelope all pass"},
-    {24, {1.6, 0.01, 7.0, 11.5}, "Nylon Gt.; decays about 1.5x too fast, 20 dB into the tail"},
-    {38, {1.3, 0.01, 3.0, 11.5}, "Syn.Bass 1; beat rate, and the sweep's highest noise floor"},
-    {40, {1.0, 0.01, 3.0, 6.0, 10.5}, "Violin; tuning only"},
-    {46, {1.0, 0.01, 3.0, 6.0, 12.0}, "Harp; tuning only"},
-    {66, {1.0, 0.04, 3.0, 6.0, 24.5}, "Tenor Sax; 23 cents, and only on the 65 Hz key"},
-    {78, {2.5, 0.13, 23.0, 6.0}, "Whistle; lead -- 21 dB in a band the note reaches"},
-    {87, {1.0, 0.02, 3.0, 13.5}, "Bass & Lead; beats at 2.33 Hz where the module beats at 1.75"},
-    {99, {1.6, 0.01, 4.5, 9.0, 11.0}, "Atmosphere; noise layer"},
+    {24, {1.0, 0.01, 3.6, 6.0}, "Nylon Gt.; one band, 37 dB under the note's loudest"},
+    // Not a tuning error. `Square Wave` is two partials 137 units of the pitch word apart -- ten
+    // cents -- and both of ours match the module's to one unit. What differs is which of the pair
+    // each estimator calls the fundamental, and picking the other one is worth exactly the detune.
+    // The bound is that detune plus headroom, so a real move still fails it.
+    {80, {1.0, 0.01, 3.0, 6.0, 10.5}, "Square Wave; the estimator picks the other partial of the "
+                                      "pair, which is the ten cents between them"},
+    {87, {1.0, 0.02}, "Bass & Lead; peak alone -- the beat rate it missed is now the module's"},
     // Unpitched. The estimator finds the loudest peak near the note in each render and there is no
     // fundamental there to find, so what these two compare is one noise peak against another. The
     // bound says "not checked" out loud rather than skipping them where nobody would notice.
@@ -274,7 +269,7 @@ constexpr std::array<KnownDeviation, 11> known_deviations{{
     // 90 Hz. Two unpitched noise patches disagreeing in the bottom octave is the same finding as
     // the rest of their rows, one octave lower than it could previously be seen.
     {118, {1.0, 0.045, 10.5, 6.0, 110.0}, "Synth Drum; unpitched -- the pitch bound is not a check"},
-    {122, {1.0, 0.01, 12.5, 6.0, 38.0}, "Seashore; unpitched -- the pitch bound is not a check"},
+    {122, {1.0, 0.01, 12.5, 6.0, 41.0}, "Seashore; unpitched -- the pitch bound is not a check"},
 }};
 
 /// The kit keys that do not yet match, kept apart from the melodic table rather than folded in.

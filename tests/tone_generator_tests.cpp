@@ -1288,6 +1288,12 @@ TEST_CASE("a send level slews rather than switching", "[stream][sccore]")
         g.send_channel(0xB0, 7, 127);
         g.send_channel(0xB0, 91, 0);
         g.send_channel(0xB0, 93, 0);
+        // A *sustaining* voice, and that matters more than it looks. This held the default piano
+        // for a long time, whose level falls twenty decibels across the two seconds measured here
+        // -- so the wet return was the send's slew multiplied by the note's decay, and the shape
+        // the assertions below read was half decay. `Church Org.` holds its level, which leaves the
+        // slew as the only thing moving.
+        g.send_channel(0xC0, 19, 0);
         g.send_channel(0x90, 72, 110);
     };
     setup(wet);

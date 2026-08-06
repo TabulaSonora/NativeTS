@@ -12,6 +12,7 @@ void WaveReader::start(const DecodedWave& wave)
     wave_ = &wave;
     position_ = 0.0;
     finished_ = false;
+    passed_loop_start_ = false;
     buffer_ = wave.is_looping() ? std::span<const float>{wave.loop_buffer}
                                 : std::span<const float>{wave.samples};
 
@@ -49,6 +50,12 @@ float WaveReader::next(double ratio) noexcept
     const float sample =
         wave->mode == SamplerMode::ping_pong ? read_ping_pong() : read_linear(*wave);
     position_ += ratio;
+
+    // Tested before the wrap, and against the position the reader walks: every mode's first leg
+    // runs forward from zero through the loop point, so this is the same transition in all three.
+    if (!passed_loop_start_ && position_ >= static_cast<double>(wave->loop_start)) {
+        passed_loop_start_ = true;
+    }
 
     if (wave->is_looping()) {
         // Subtracting the period is the same wrap the offline path takes modulo, and it keeps the

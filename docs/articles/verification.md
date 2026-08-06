@@ -578,6 +578,13 @@ over to attribute.
 
 ### The engine plays sharp {#the-engine-plays-sharp}
 
+\note **This is a record of an investigation that is now closed**, kept because the eliminations in
+it are what the answer rests on. The engine no longer plays sharp: the median case sits 0.09 cents
+from the module against the 2.2 cents below. The two things that closed it are the second fine
+tune, fired on the loop crossing (\ref the-second-fine-tune-is-per-voice), and the module's own
+approximated exponential (\ref the-exponential-is-the-modules). Numbers below the fold are the ones
+measured at the time.
+
 `Bass & Lead` deviates in the envelope and nowhere else, which looked like an LFO starting at a
 phase this port cannot derive — the same thing the song gate names for the effect LFOs. It is not.
 Tracing the module's own LFO object with `scdec lfotrace` shows LFO1 running at 6 Hz with a TVA
@@ -801,12 +808,66 @@ wrong place — including this article's own "Alto Sax and Piano 1 want the term
 Gt. and Trumpet do not". That was never a patch property. It is the runtime flag above: the copy
 runs when `voice+4` is set and `voice+0x1b0` is clear, and what sets `voice+4` is still unknown.
 
-Applying it unconditionally remains the best of the choices available — 84 exact against 45 — and
-that is what this engine does.
+**What sets `voice+4` is the decoder reaching the wave's loop point**, and that is now measured
+rather than guessed. `scdec postrace` with `TS_POSTRACE_BLOCK=32` on `Clarinet` note 57, whose wave
+carries a second fine tune of 1274, reads the ramp word settled at 218182 for the first two control
+ticks and then, at sample 352:
+
+```
+320: v0 pos=142.378 | pitchramp flags=0000 cur=218182 tgt=218182 step=0    inc=40778
+352: v0 pos=162.289 | pitchramp flags=0001 cur=218182 tgt=218522 step=169  inc=40778
+384: v0 pos=182.451 | pitchramp flags=0000 cur=218522 tgt=218522 step=0    inc=41367
+```
+
+340 units is 250 milli-semitones, which is exactly `1274 − 1024`. Two things follow, and both matter
+to a port. The term is **retargeted, not assigned**: `flags=0001` with a step is the ordinary pitch
+ramp, gliding over two slots the way a bend does, so an engine that writes the new native straight
+into the voice produces a discontinuity the module does not have. And the trigger is a *position*,
+not a clock — the same trace on `Atmosphere` fires at sample 13440, because its loop is longer — so
+nothing computed from a nominal rate survives a glide, a bend or a pitch envelope. This engine
+latches the crossing in the wave reader and moves the offset between forming the block's entry ratio
+and its exit ratio, which is that retarget by construction.
 
 \note A pitch envelope is sufficient but not necessary: 8 of the 9 cases whose block carries a
 non-zero depth at `+0x18` apply the term, but so do 76 of the 208 that do not. It is a clue about
 which voices get their ramp recomputed, not the rule.
+
+### The module's exponential is part of the instrument {#the-exponential-is-the-modules}
+
+The section above treats the approximated `exp2` as a hazard to measure *around*. It is also the
+pitch the module plays, and for a long time this engine did not play it.
+
+`ramp_env_step_eval` decodes the ramp word into a 16.16 increment out of `g_ramp_exp_tbl` — 257
+entries, linearly interpolated, one octave — every eight samples, for the whole life of every voice.
+The table is **not** a true exponential. Against one it drifts linearly to **4.66 cents flat** across
+the octave and snaps back at the boundary:
+
+| table index | 0 | 64 | 128 | 192 | 255 | 256 |
+|---|---|---|---|---|---|---|
+| against `2^(i/256)` | 0.00 | −1.17 | −2.34 | −3.51 | −4.66 | 0.00 |
+
+So the module's sounding pitch carries a sawtooth of that size against equal temperament, reset at
+every octave of the ramp word. This engine used to hand a *settled* voice the exact `pow(2, …)` and
+reserve the table for the glide, on the reasoning that a steady note should render as it always had.
+That spends the sawtooth as a **disagreement**: two parts whose pitch words sit at different points
+of the octave are put a different distance out, and they beat against each other at a rate the
+module does not have. It is also what made the two engines' partials 3.5 and 4.6 cents apart at the
+top of this section — the same 4.66, seen through one patch.
+
+Taking every voice through the table closes it. On the 155 pitched cases of the note gate, against
+the module's own render of each:
+
+| | before | with the table | and the second fine tune |
+|---|---|---|---|
+| median error | 2.44 cents | 0.37 | **0.09** |
+| inside one cent | 24 of 155 | 100 | **119** |
+| inside three cents | 88 | 133 | **148** |
+
+Five of the note gate's nine melodic rows closed outright — `Whistle`, `Syn.Bass 1`, `Nylon Gt.`,
+`Violin`, `Harp`, `Tenor Sax` at 23 cents and `Atmosphere` — and `Bass & Lead`'s partials, the case
+this section opens with, now agree with the module's to a tenth of a cent. What reported it was a
+song rather than a gate: `earthbnd.mid` at the SC-55 map, where a clarinet and a square lead hold
+the same line and beat against each other in this engine and not in Sound Canvas VA.
 
 ### What is left, and what it is not {#what-is-left-in-the-pitch-chain}
 

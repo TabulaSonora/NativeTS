@@ -200,7 +200,12 @@ int pitch_ramp_word(int milli_semitones)
 /// the module's own chain (`partial_compute_pitch` @ `18005fc20`) is `native = root×1000 − fine +
 /// 0x400` against `base = key×1000 + weight + key-follow curve + coarse`, and each of those is a
 /// place this port could differ.
-int pitch_command(const std::string& path, int program, int note, int velocity, int map)
+int pitch_command(const std::string& path,
+                  int program,
+                  int note,
+                  int velocity,
+                  int map,
+                  int bank)
 {
     const ts::RomImage rom = ts::RomImage::open(path, ts::RomVerification::quick);
     ts::NoteRenderer renderer{rom};
@@ -209,11 +214,12 @@ int pitch_command(const std::string& path, int program, int note, int velocity, 
     const ts::PitchChain pitch{renderer.tables(), envelope};
 
     const auto tone_map = static_cast<ts::ToneMap>(map);
-    const int tone_number = directory.program_to_tone(program, tone_map, /*bank=*/0);
+    const int tone_number = directory.program_to_tone(program, tone_map, bank);
     const ts::ResolvedTone resolved = directory.resolve(tone_number, note, velocity);
 
     std::cout << "program " << program << " note " << note << " velocity " << velocity
-              << " map " << map << " -> tone " << tone_number << " \"" << resolved.name << "\"\n";
+              << " map " << map << " bank " << bank << " -> tone " << tone_number << " \""
+              << resolved.name << "\"\n";
 
     for (const ts::ResolvedPartial& sounding : resolved.partials) {
         const ts::PartialParameters partial =
@@ -912,6 +918,7 @@ int main(int argc, char** argv)
     int velocity = 100;
     double hold_seconds = 1.0;
     int map = 4;
+    int lookup_bank = 0;
     fs::path output_file;
     CLI::App* render_note =
         app.add_subcommand("render-note", "Render one note to raw interleaved float32.");
@@ -993,6 +1000,7 @@ int main(int argc, char** argv)
     pitch->add_option("note", note, "MIDI note, 0-127")->required();
     pitch->add_option("velocity", velocity, "MIDI velocity, 1-127")->required();
     pitch->add_option("map", map, "Tone map, 1-4")->required();
+    pitch->add_option("--bank", lookup_bank, "Lookup bank, as CC#0 selects it (default 0)");
 
     int iterations = 3;
     CLI::App* bench = app.add_subcommand("bench", "Time the render path stage by stage.");
@@ -1063,7 +1071,7 @@ int main(int argc, char** argv)
                 dll, program, note, velocity, hold_seconds, output_file, map);
         }
         if (pitch->parsed()) {
-            return pitch_command(dll, program, note, velocity, map);
+            return pitch_command(dll, program, note, velocity, map, lookup_bank);
         }
     } catch (const ts::RomIdentityError& error) {
         std::cerr << "tabula-sonora: " << error.what() << '\n';

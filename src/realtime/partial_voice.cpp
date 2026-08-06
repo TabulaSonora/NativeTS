@@ -77,6 +77,14 @@ void PartialVoice::start(VoiceSetup&& setup)
         native_pitch_ = setup.descriptor.native_milli_semitones();
     }
 
+    // A note starts at `voice+0x1fc` and moves to `voice+0x200` once its decoder passes the loop
+    // point -- see `WaveDescriptor::second_fine_tune`. One offset serves both pitch routes, because
+    // the drum's native is baked into `drum_base_ratio_` against the same word. Zero for the four
+    // records in five whose term is neutral, which costs those voices nothing.
+    second_fine_offset_ = setup.descriptor.adopted_milli_semitones()
+                          - setup.descriptor.native_milli_semitones();
+    second_fine_shift_ = 0.0;
+
     pitch_modulation_ = 0.0;
     tremolo_ = 1.0;
     ratio_ = 1.0;
@@ -254,11 +262,19 @@ void PartialVoice::render(std::span<float> destination,
 
     for (std::size_t i = 0; i < destination.size(); ++i) {
         if (slot_remaining_ <= 0) {
-            // A settled ramp hands back the exact ratio rather than the table's decode of it, so a
-            // steady note renders as it did before this existed; only the glide is new.
-            slot_ratio_ = pitch_ramp_.is_active()
-                              ? static_cast<double>(pitch_ramp_.next_slot()) / 65536.0
-                              : ratio_;
+            // Through the table whether the ramp is gliding or settled, because the module has no
+            // other route to a playback rate: `ramp_env_step_eval` writes an increment out of
+            // `g_ramp_exp_tbl` every eight samples for the whole life of every voice.
+            //
+            // The table is not a true exponential. Measured against one it drifts linearly to
+            // **4.66 cents flat** across an octave and snaps back at the boundary, so the module's
+            // sounding pitch carries a sawtooth of that size against equal temperament. Handing a
+            // settled note the exact ratio instead spends that sawtooth as a *disagreement*: two
+            // parts whose pitch words sit at different points of the octave are put a different
+            // distance out, and the pair beats against each other at a rate the module does not
+            // have. That is what SC-55 mode sounded like on `earthbnd.mid` -- the clarinet against
+            // the square lead -- and it is why the shortcut this replaces cost more than it saved.
+            slot_ratio_ = static_cast<double>(pitch_ramp_.next_slot()) / 65536.0;
             slot_remaining_ = PitchRamp::samples_per_slot;
         }
         --slot_remaining_;
@@ -350,6 +366,18 @@ void PartialVoice::control(double bend_milli_semitones,
                               : std::max(0.0, glide_ - glide_step_);
     }
 
+    // The second fine tune, adopted between the block's two endpoints so the ramp glides into it.
+    //
+    // `voices_control_update` copies `voice+0x200` over `voice+0x1fc` on the first tick after the
+    // decoder has passed the loop point, and the pitch ramp is *retargeted* rather than reassigned:
+    // traced on the module, the target moves and the current value chases it over two slots. Doing
+    // it here -- after `entry_ratio_` was formed from the old tuning and before `ratio_` is formed
+    // from the new -- is that retarget, because `render` arms the ramp between the two. Assigning
+    // it underneath the ramp instead is what made an earlier attempt at this fail.
+    if (second_fine_shift_ != second_fine_offset_ && reader_.passed_loop_start()) {
+        second_fine_shift_ = second_fine_offset_;
+    }
+
     pitch_modulation_ = envelope + lfo_pitch + glide_;
     ratio_ = ratio(bend_milli_semitones);
 
@@ -421,11 +449,12 @@ double PartialVoice::ratio_with(double modulation, double bend_milli_semitones) 
     if (is_drum_) {
         // Drums take a different pitch route: the note does not transpose the sample, so there is
         // no key-follow and no absolute-pitch accumulator to clamp.
-        return drum_base_ratio_ * std::pow(2.0, modulation / 12000.0);
+        return drum_base_ratio_ * std::pow(2.0, (modulation - second_fine_shift_) / 12000.0);
     }
 
     const double pitch = base_pitch_ + modulation + bend_milli_semitones;
-    return std::pow(2.0, (PitchChain::clamp(pitch) - native_pitch_) / 12000.0);
+    return std::pow(2.0,
+                    (PitchChain::clamp(pitch) - native_pitch_ - second_fine_shift_) / 12000.0);
 }
 
 } // namespace ts
