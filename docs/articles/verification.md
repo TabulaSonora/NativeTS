@@ -327,6 +327,11 @@ batched path behind `--batch` for a quick look only. When reproducing any of thi
 the **first** case in a `notebatch` file is genuinely isolated — a two-case file has its second case
 inheriting from its first, which is its own way of getting a wrong answer confidently.
 
+The song oracle was checked for the same fault and does not have it: `dump_song_renders_oracle.py`
+already spawns one process per song. Re-rendering `panwet.mid` and `test_poly_bend.mid` alone
+reproduced their fixture audio byte for byte, and both sit tenth and eleventh in the sweep with nine
+songs rendered before them, so the test had something to find.
+
 The rule that falls out is short. *Tier 3 says the render moved. Tier 2 says whether it should have
 — provided the tier 2 case was harvested in isolation.* Neither instrument is trustworthy about the
 question it was not built to answer.
