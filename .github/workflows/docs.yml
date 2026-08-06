@@ -25,7 +25,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Ubuntu's own package is usually a release or two behind, and this project's pages rely on
       # native Mermaid rendering, which is recent. Take the official binary and verify it.
@@ -45,7 +45,9 @@ jobs:
       - name: Build the documentation
         run: doxygen docs/Doxyfile
 
-      - uses: actions/upload-pages-artifact@v3
+      # v4 stopped including dotfiles in the artifact. Doxygen emits none here, so the default
+      # stands; a page that ever needs one wants `include-hidden-files: true`.
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: build/docs
 
@@ -57,4 +59,4 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5

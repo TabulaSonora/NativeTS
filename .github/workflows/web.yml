@@ -30,7 +30,7 @@ jobs:
     steps:
       # Full history is not needed, but the working tree must be a git repository: vite.config.ts
       # stamps the page with `git rev-parse HEAD` and a dirty flag.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
@@ -42,7 +42,7 @@ jobs:
       # It lives outside the checkout on purpose. An untracked emsdk/ in the work tree would show up
       # in the `git status --porcelain` vite.config.ts runs, and the page would be stamped dirty.
       - name: Cache the Emscripten SDK
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/emsdk
           key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
@@ -69,7 +69,7 @@ jobs:
           cmake --preset web
           cmake --build --preset web
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '26'
           cache: npm
