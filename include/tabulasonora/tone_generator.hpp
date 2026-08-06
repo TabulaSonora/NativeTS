@@ -42,6 +42,8 @@ struct ToneGeneratorOptions {
     /// 1, 2 or 4 are rejected: the part index is formed by masking, which needs a power of two.
     int ports = 2;
 
+    /// Internal 32-sample chunks a MIDI message waits before it reaches a part.
+    ///
     /// **Anything compared against the oracle wants these three on.** `event_delay_blocks = 4`,
     /// `bypass_output_filter = false`, and real sample offsets on the sends. The module has no
     /// switch for any of them: it always stages, always runs its output stage, and always stamps a
@@ -53,8 +55,6 @@ struct ToneGeneratorOptions {
     /// always have, and because being able to take a stage out of the picture is what makes a
     /// failure attributable. That is a convenience for tests of *laws*; it is the wrong setting for
     /// a test of a *render*.
-    ///
-    /// Internal 32-sample chunks a MIDI message waits before it reaches a part.
     ///
     /// The module never applies a message on arrival. `TG_ShortMidiIn` only puts it in a ring;
     /// `TG_Process` walks it from there into a staging ring, raises a task bit, and dispatches that
