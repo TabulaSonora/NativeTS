@@ -90,6 +90,7 @@ tabula-sonora render song.mid out.wav --map 4
 | `--volume G` | linear gain on the finished mix |
 | `--drum-map 0..5` | drum map row, when you want one the vintage would not pick |
 | `--no-reverb`, `--no-chorus`, `--no-delay`, `--no-efx` | effects are on by default, as the module has them |
+| `--gsws` | what the Microsoft GS Wavetable Synth gives you: the SC-55 map with all four effect blocks off. It supplies the map rather than forcing it, so an explicit `--map` still wins |
 | `--loops N` | play-throughs of the loop body; `1` is the default, `-1` never stops |
 | `--fade SEC` | the fade that follows a finite loop count, so it ends rather than cutting |
 | `--stream` | limit polyphony to the hardware's 64 voices |

@@ -271,6 +271,7 @@ int main(int argc, char** argv)
     ts::RenderOptions options;
     ts::player::DeviceOptions device;
     bool prerender = false;
+    bool gsws = false;
     bool no_reverb = false;
     bool no_chorus = false;
     bool no_delay = false;
@@ -278,10 +279,11 @@ int main(int argc, char** argv)
     std::vector<std::string> muted;
     std::vector<std::string> soloed;
 
-    app.add_option("--map", map,
-                   "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820, or xg to start in XG mode "
-                   "(names accepted: sc55, sc88, sc88pro, sc8820, xg)")
-        ->transform(CLI::CheckedTransformer(ts::tone_map_choices(), CLI::ignore_case));
+    CLI::Option* map_option =
+        app.add_option("--map", map,
+                       "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820, or xg to start in XG "
+                       "mode (names accepted: sc55, sc88, sc88pro, sc8820, xg)")
+            ->transform(CLI::CheckedTransformer(ts::tone_map_choices(), CLI::ignore_case));
     app.add_option("--device", device.name, "Output device; an index or a substring of its name");
     app.add_option("--buffer", device.period_frames, "Device period, in frames");
     app.add_option("--latency", device.latency_ms, "How far ahead to keep the device fed, in ms");
@@ -293,6 +295,9 @@ int main(int argc, char** argv)
     app.add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     app.add_flag("--no-delay", no_delay, "Disable the delay send");
     app.add_flag("--no-efx", no_efx, "Disable the insertion EFX block");
+    app.add_flag("--gsws", gsws,
+                 "Play it the way the Microsoft GS Wavetable Synth does: the SC-55 map, with "
+                 "reverb, chorus, delay and EFX all off. An explicit --map still wins");
     app.add_option("--mute", muted,
                    "Silence these channels, as a mixer labels them (1-32; 17+ are port B)");
     app.add_option("--solo", soloed, "Hear only these channels");
@@ -312,6 +317,19 @@ int main(int argc, char** argv)
         const ts::RomLocation rom = ts::locate_rom(dll_path);
         if (!rom.found()) {
             throw std::runtime_error(ts::rom_not_found_message(rom));
+        }
+
+        // The GS Wavetable Synth is the SC-55 sound set with none of the effect blocks, so the
+        // flag is those five settings at once. It only supplies the map, rather than forcing it,
+        // so that --map keeps meaning what it says when the two are given together.
+        if (gsws) {
+            if (map_option->count() == 0) {
+                map = static_cast<int>(ts::ToneMap::sc55);
+            }
+            no_reverb = true;
+            no_chorus = true;
+            no_delay = true;
+            no_efx = true;
         }
 
         options.map = static_cast<ts::ToneMap>(map);

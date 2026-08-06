@@ -935,6 +935,7 @@ int main(int argc, char** argv)
 
     fs::path midi_path;
     ts::RenderOptions render_options;
+    bool gsws = false;
     bool no_reverb = false;
     bool no_chorus = false;
     bool no_delay = false;
@@ -946,10 +947,11 @@ int main(int argc, char** argv)
     add_dll(render);
     render->add_option("midi", midi_path, "Input .mid path")->required();
     render->add_option("output", output_file, "Output .wav path")->required();
-    render->add_option("--map", map,
-                   "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820, or xg to start in XG mode "
-                   "(names accepted: sc55, sc88, sc88pro, sc8820, xg)")
-        ->transform(CLI::CheckedTransformer(ts::tone_map_choices(), CLI::ignore_case));
+    CLI::Option* render_map =
+        render->add_option("--map", map,
+                           "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820, or xg to start in "
+                           "XG mode (names accepted: sc55, sc88, sc88pro, sc8820, xg)")
+            ->transform(CLI::CheckedTransformer(ts::tone_map_choices(), CLI::ignore_case));
     render->add_option(
         "--tail", render_options.tail_seconds, "Seconds to render past the last note");
     render->add_option("--end", render_options.end_seconds, "Stop at this many seconds");
@@ -959,6 +961,9 @@ int main(int argc, char** argv)
     render->add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     render->add_flag("--no-delay", no_delay, "Disable the delay send");
     render->add_flag("--no-efx", no_efx, "Disable the insertion EFX block");
+    render->add_flag("--gsws", gsws,
+                     "Render it the way the Microsoft GS Wavetable Synth does: the SC-55 map, "
+                     "with reverb, chorus, delay and EFX all off. An explicit --map still wins");
     // Every render goes through the block loop now; what `--stream` selects is the hardware's
     // voice limit, so the stealing can be heard as the module would do it. The default is
     // unlimited, where every note in the file sounds.
@@ -1042,6 +1047,20 @@ int main(int argc, char** argv)
                                             !no_gs_modulators);
         }
         if (render->parsed()) {
+            // The GS Wavetable Synth is the SC-55 sound set with none of the effect blocks, so
+            // the flag is those five settings at once. It only supplies the map, rather than
+            // forcing it, so that --map keeps meaning what it says when the two are given
+            // together.
+            if (gsws) {
+                if (render_map->count() == 0) {
+                    map = static_cast<int>(ts::ToneMap::sc55);
+                }
+                no_reverb = true;
+                no_chorus = true;
+                no_delay = true;
+                no_efx = true;
+            }
+
             render_options.reverb = !no_reverb;
             render_options.chorus = !no_chorus;
             render_options.delay = !no_delay;
