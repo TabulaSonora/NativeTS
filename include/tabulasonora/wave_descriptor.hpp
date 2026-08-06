@@ -111,6 +111,25 @@ struct WaveDescriptor {
     /// — a glide, a real-time pitch change and the pitch envelope all move the rate the crossing
     /// is reached at, so no precomputed tick survives them.
     ///
+    /// **This behaviour is more fragile than anything else in this header, and the fragility is in
+    /// the timing rather than the law.** The law is one subtraction. What decides whether a render
+    /// matches is *which sample* the crossing is noticed on, and that is a chain of three: the
+    /// decoder crossing `loop_start`, `voice_report_finished` turning that into `voice+4` on its
+    /// next sweep, and `voices_control_update` retargeting the pitch ramp on the tick after that.
+    /// The engine posts the middle step as an event — `(voice << 8) | 5` — rather than polling.
+    ///
+    /// Position is not a clock. It advances with the *waveform*, so TVP, the pitch ramp, a glide
+    /// and any real-time pitch change all move when the crossing arrives; two renders that differ
+    /// by a cent reach it at different samples. Anything that computes the crossing from a nominal
+    /// rate is wrong before it starts, and anything that polls it on a grid can be a whole tick out
+    /// depending on where the grid falls.
+    ///
+    /// So the shape to copy is the engine's: the decoder raises an event exactly on the address
+    /// transition, and the reaction is delayed only by however long this engine's own event ticking
+    /// takes to pick it up — no more, no less. Until the two pipelines line up sample for sample,
+    /// a test of this is a test of the alignment and not of the law, which is why the switch that
+    /// turns it off is worth having beside it and why the gate is green with it absent.
+    ///
     /// Confirmed on the engine rather than inferred: `scdec pitchword` reads both words off live
     /// voices, and for a struck note they stay *different* — Atmosphere's first partial sits at
     /// `0x1fc = 60243` against `0x200 = 60191`, and Synth Drum at `56316` against `56356`. Equal
