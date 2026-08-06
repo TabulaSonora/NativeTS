@@ -201,6 +201,38 @@ struct ToneGenerator::Impl {
 
     std::vector<PendingChannel> pending_channel;
 
+    /// A SysEx message waiting for its chunk. The bytes are copied because the caller's span is
+    /// only good for the call.
+    struct PendingSysex {
+        std::int64_t due = 0;
+        int port = 0;
+        std::vector<std::uint8_t> bytes;
+    };
+
+    std::vector<PendingSysex> pending_sysex;
+
+    /// Applies a SysEx message.
+    void dispatch_sysex(int port, std::span<const std::uint8_t> bytes);
+
+    /// The chunk index the current buffer began on, which is what a stamp is measured from.
+    ///
+    /// `TG_flushMidi` zeroes the module's counter and `TG_Process` advances it a chunk at a time,
+    /// so a stamp is milliseconds into the buffer being rendered rather than absolute time.
+    std::int64_t flush_index = 0;
+
+    /// A sample offset in the host's rate, as the milliseconds the module stamps a message with.
+    ///
+    /// `offset * 1000 / host_sample_rate`, truncated -- and a millisecond is one 32-sample chunk at
+    /// the engine's rate, which is why the module can compare the stamp against a chunk count.
+    [[nodiscard]] int stamp_milliseconds(int sample_offset) const noexcept
+    {
+        if (sample_offset <= 0 || options.host_sample_rate <= 0) {
+            return 0;
+        }
+        return static_cast<int>((static_cast<std::int64_t>(sample_offset) * 1000)
+                                / options.host_sample_rate);
+    }
+
     /// Applies a channel message to whichever parts are listening.
     void dispatch_channel(int port, int status, int data1, int data2);
 
@@ -686,20 +718,33 @@ void ToneGenerator::send(int port, const MidiEvent& message)
 
 void ToneGenerator::send_channel(int status, int data1, int data2)
 {
-    send_channel(0, status, data1, data2);
+    send_channel_at(immediately, 0, status, data1, data2);
+}
+
+void ToneGenerator::send_channel_at(int sample_offset, int status, int data1, int data2)
+{
+    send_channel_at(sample_offset, 0, status, data1, data2);
 }
 
 void ToneGenerator::send_channel(int port, int status, int data1, int data2)
 {
+    send_channel_at(immediately, port, status, data1, data2);
+}
+
+void ToneGenerator::send_channel_at(int sample_offset, int port, int status, int data1, int data2)
+{
     // Held for the pipeline when one is configured, applied on arrival when it is not. The module
     // always holds: `TG_ShortMidiIn` only puts the message in a ring, and nothing reaches a part
     // until `TG_Process` walks it out. See `ToneGeneratorOptions::event_delay_blocks`.
-    if (impl_->options.event_delay_blocks > 0) {
-        // Due one past the count, because the drain runs after the chunk counter has already
-        // advanced -- without it, a delay of one would land in the very next chunk and cost
-        // nothing, and every setting would read one short.
+    const int stamp = impl_->stamp_milliseconds(sample_offset);
+    if (impl_->options.event_delay_blocks > 0 || stamp > 0) {
+        // Two separate waits, because the module has two. The stamp decides which chunk the message
+        // is *released* on -- `TG_Process` walks the ring only as far as its counter has reached --
+        // and the staging count is how long it then takes to reach a part. Due one past the sum,
+        // because the drain runs after the chunk counter has already advanced.
         impl_->pending_channel.push_back(
-            Impl::PendingChannel{impl_->block_index + impl_->options.event_delay_blocks + 1,
+            Impl::PendingChannel{impl_->flush_index + stamp
+                                     + impl_->options.event_delay_blocks + 1,
                                  port,
                                  status,
                                  data1,
@@ -727,6 +772,25 @@ void ToneGenerator::Impl::dispatch_channel(int port, int status, int data1, int 
 
 void ToneGenerator::Impl::drain_events()
 {
+    // SysEx before channel messages within a chunk. The module's ring is one queue in arrival
+    // order, and this is not that -- but the case it decides is a reset or a mode change arriving
+    // alongside notes, where acting on the mode first is what the module does by virtue of the
+    // host having sent it first.
+    if (!pending_sysex.empty()) {
+        std::size_t kept = 0;
+        for (std::size_t i = 0; i < pending_sysex.size(); ++i) {
+            if (pending_sysex[i].due > block_index) {
+                if (kept != i) {
+                    pending_sysex[kept] = std::move(pending_sysex[i]);
+                }
+                ++kept;
+                continue;
+            }
+            dispatch_sysex(pending_sysex[i].port, pending_sysex[i].bytes);
+        }
+        pending_sysex.resize(kept);
+    }
+
     if (pending_channel.empty()) {
         return;
     }
@@ -1071,10 +1135,35 @@ void ToneGenerator::Impl::xg_sysex(std::span<const std::uint8_t> bytes)
 
 void ToneGenerator::send_sysex(std::span<const std::uint8_t> bytes)
 {
-    send_sysex(0, bytes);
+    send_sysex_at(immediately, 0, bytes);
+}
+
+void ToneGenerator::send_sysex_at(int sample_offset, std::span<const std::uint8_t> bytes)
+{
+    send_sysex_at(sample_offset, 0, bytes);
 }
 
 void ToneGenerator::send_sysex(int port, std::span<const std::uint8_t> bytes)
+{
+    send_sysex_at(immediately, port, bytes);
+}
+
+void ToneGenerator::send_sysex_at(int sample_offset,
+                                  int port,
+                                  std::span<const std::uint8_t> bytes)
+{
+    const int stamp = impl_->stamp_milliseconds(sample_offset);
+    if (impl_->options.event_delay_blocks > 0 || stamp > 0) {
+        impl_->pending_sysex.push_back(
+            Impl::PendingSysex{impl_->flush_index + stamp + impl_->options.event_delay_blocks + 1,
+                               port,
+                               std::vector<std::uint8_t>{bytes.begin(), bytes.end()}});
+        return;
+    }
+    impl_->dispatch_sysex(port, bytes);
+}
+
+void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t> bytes)
 {
     // Universal master volume: F0 7F 7F 04 01 ll mm F7.
     if (bytes.size() >= 8 && bytes[0] == 0xF0 && bytes[1] == 0x7F && bytes[3] == 0x04
@@ -1707,6 +1796,12 @@ void ToneGenerator::render(std::span<float> left, std::span<float> right)
     if (left.size() != right.size()) {
         throw std::invalid_argument("The two channels must be the same length.");
     }
+
+    // Where this buffer's stamps are measured from. `TG_flushMidi` zeroes the module's counter
+    // between buffers and `TG_Process` advances it a chunk at a time, so a stamp is milliseconds
+    // into the buffer about to be rendered rather than absolute time. Anything still queued from
+    // the last buffer keeps the due chunk it was already given.
+    impl_->flush_index = impl_->block_index;
 
     std::size_t written = 0;
     while (written < left.size()) {

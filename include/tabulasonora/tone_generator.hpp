@@ -42,6 +42,18 @@ struct ToneGeneratorOptions {
     /// 1, 2 or 4 are rejected: the part index is formed by masking, which needs a power of two.
     int ports = 2;
 
+    /// **Anything compared against the oracle wants these three on.** `event_delay_blocks = 4`,
+    /// `bypass_output_filter = false`, and real sample offsets on the sends. The module has no
+    /// switch for any of them: it always stages, always runs its output stage, and always stamps a
+    /// message to the millisecond. A comparison made with them off is measuring this engine against
+    /// a differently-timed one, and every latency it turns up has to be explained away by hand --
+    /// which is how the loop-crossing retune was misread twice.
+    ///
+    /// They default off because the existing suite is written against renders that begin where they
+    /// always have, and because being able to take a stage out of the picture is what makes a
+    /// failure attributable. That is a convenience for tests of *laws*; it is the wrong setting for
+    /// a test of a *render*.
+    ///
     /// Internal 32-sample chunks a MIDI message waits before it reaches a part.
     ///
     /// The module never applies a message on arrival. `TG_ShortMidiIn` only puts it in a ring;
@@ -76,6 +88,19 @@ struct ToneGeneratorOptions {
     /// effect at this rate is one sample of delay is not worth shifting every pinned fixture for.
     /// Turn it off -- that is, run the filter -- when lining a render up against the oracle.
     bool bypass_output_filter = true;
+
+    /// The rate a message's sample offset is read against, when one is given.
+    ///
+    /// `TG_ShortMidiIn` does not keep the offset it is handed. It converts it straight to
+    /// milliseconds — `offset * 1000 / g_host_sample_rate` — and stamps the message with that, and
+    /// `TG_Process` then releases a message once its stamp is reached. The comparison works because
+    /// the counter it is measured against ticks once per 32-sample chunk, and 32 samples at the
+    /// engine's 32 kHz is exactly one millisecond.
+    ///
+    /// So the resolution of event placement inside a buffer is a millisecond, and the rate here is
+    /// the *host's* — the offset is in the host's samples, not the engine's. Defaults to the
+    /// engine's own rate, which is what this engine renders at.
+    int host_sample_rate = OutputFilter::engine_rate;
 
     /// Which tone map program changes resolve against.
     ///
@@ -297,6 +322,15 @@ public:
     /// Silences everything and returns every part to its power-on state.
     void reset();
 
+    /// Where in the buffer a message lands, in the host's samples.
+    ///
+    /// The module stamps every message with `offset * 1000 / host_sample_rate` milliseconds and
+    /// releases it when the chunk counter reaches that, so a buffer's worth of messages arrive
+    /// spread across it rather than all at its start. Zero — the default — is "at the top of the
+    /// buffer", which is what a caller that has always sent its events immediately before rendering
+    /// is really saying.
+    static constexpr int immediately = 0;
+
     /// Applies one MIDI event on port A; its position is ignored, since it applies now.
     void send(const MidiEvent& message);
 
@@ -317,8 +351,25 @@ public:
     /// nothing carries the field over from one message to the next.
     void send_channel(int port, int status, int data1, int data2);
 
+    /// Applies one MIDI event at a position inside the buffer about to be rendered.
+    ///
+    /// The offset leads rather than trails so that this cannot be confused with `send_channel`:
+    /// with a trailing offset, a four-argument call would match both "port, status, data1, data2"
+    /// and "status, data1, data2, offset", and every existing caller would quietly rebind.
+    ///
+    /// `sample_offset` is in the *host's* samples. See `ToneGeneratorOptions::host_sample_rate`.
+    void send_channel_at(int sample_offset, int status, int data1, int data2);
+
+    /// The same, on a given port.
+    void send_channel_at(int sample_offset, int port, int status, int data1, int data2);
+
     /// Applies one system-exclusive message on port A, including the leading `F0`.
     void send_sysex(std::span<const std::uint8_t> bytes);
+
+    /// Applies a SysEx message at a position inside the buffer about to be rendered.
+    ///
+    /// Offset first, for the same reason `send_channel_at` puts it there.
+    void send_sysex_at(int sample_offset, std::span<const std::uint8_t> bytes);
 
     /// Applies one system-exclusive message on a port.
     ///
@@ -327,6 +378,9 @@ public:
     /// into the high nibble of its current-channel global and selecting the part array from it, so
     /// the same address means a different part on each port.
     void send_sysex(int port, std::span<const std::uint8_t> bytes);
+
+    /// The same, on a given port.
+    void send_sysex_at(int sample_offset, int port, std::span<const std::uint8_t> bytes);
 
     /// Applies one USB-MIDI Event Packet: `(port << 4) | class` in the low byte, then the MIDI
     /// message in the three above it, least-significant first.

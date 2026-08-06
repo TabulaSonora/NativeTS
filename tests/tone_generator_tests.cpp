@@ -1543,3 +1543,48 @@ TEST_CASE("the event pipeline holds a message for whole chunks", "[stream][sccor
     // state slots, and its delay has not been separated out yet.
     CHECK(four - onset_with(0) == 128);
 }
+
+TEST_CASE("a message is placed inside the buffer by its sample offset", "[stream][sccore]")
+{
+    // `TG_ShortMidiIn` does not keep the offset it is handed. It converts it to milliseconds --
+    // `offset * 1000 / g_host_sample_rate` -- and stamps the message with that; `TG_Process` then
+    // releases the message once its chunk counter reaches the stamp. The comparison works because
+    // a 32-sample chunk at the engine's 32 kHz is exactly one millisecond.
+    //
+    // So placement inside a buffer is quantised to the millisecond, and that quantisation is the
+    // module's rather than an approximation: an offset of 1000 samples is 31 ms, not 31.25, and
+    // lands at 992.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    const auto onset_at = [&](int offset) {
+        ToneGenerator generator{notes};
+        generator.send_channel(0xB0, 7, 127);
+        generator.send_channel(0xB0, 91, 0);
+        generator.send_channel(0xB0, 93, 0);
+        generator.send_channel(0xC0, 99, 0);
+        generator.send_channel_at(offset, 0x90, 48, 127);
+
+        std::vector<float> left(16000);
+        std::vector<float> right(16000);
+        generator.render(left, right);
+
+        for (std::size_t i = 0; i < left.size(); ++i) {
+            if (std::abs(left[i]) > 1e-4F) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    };
+
+    const int base = onset_at(ToneGenerator::immediately);
+    REQUIRE(base == 1);
+
+    // One chunk per millisecond of the offset, and the truncation is the module's own.
+    CHECK(onset_at(32) - base == 32);
+    CHECK(onset_at(100) - base == 96);
+    CHECK(onset_at(320) - base == 320);
+    CHECK(onset_at(1000) - base == 992);
+    CHECK(onset_at(3200) - base == 3200);
+}
