@@ -4,12 +4,183 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 
 namespace ts {
 namespace {
 
 /// Samples per control tick — the grid coefficients refresh on.
 constexpr int control_block = NoteRenderer::control_block;
+
+/// Diagnostic probes for a single voice, selected by `TS_TVF_TRACE=<channel>:<note>`.
+///
+/// Scoped to one channel *and* one MIDI note, and reported against the voice's own sample offset
+/// rather than render time. A voice does not know the absolute position of the render, and a
+/// file-wide maximum answers the wrong question: it reports the loudest thing anywhere in 290
+/// seconds when what is wanted is what happened during one second of one note. Several voices on a
+/// channel also interleave their calls, so a probe that is not note-scoped differences one voice's
+/// output against another's and reports a step neither of them took.
+struct Watch {
+    int channel = -1;
+    int note = -1;
+};
+
+[[nodiscard]] Watch watched() noexcept
+{
+    static const Watch instance = [] {
+        Watch w;
+        const char* spec = std::getenv("TS_TVF_TRACE");
+        if (spec == nullptr) {
+            return w;
+        }
+        w.channel = std::atoi(spec);
+        if (const char* colon = std::strchr(spec, ':')) {
+            w.note = std::atoi(colon + 1);
+        }
+        return w;
+    }();
+    return instance;
+}
+
+/// The pitch chain, term by term, at the tick where the ratio is highest.
+///
+/// `ratio_with` sums `base_pitch_ + envelope + lfo + glide + bend`, clamps once, and takes the
+/// exponential against the wave's native pitch. Every term is in milli-semitones, so 12000 is an
+/// octave and the ratio is what the resampler is finally driven at. Recording all of them at the
+/// worst tick says which one moved rather than that something did.
+void pitch_trace(int channel,
+                 int note,
+                 std::int64_t at,
+                 double base,
+                 double envelope,
+                 double lfo,
+                 double glide,
+                 double bend,
+                 double native,
+                 double ratio) noexcept
+{
+    const Watch w = watched();
+    if (w.channel < 0 || channel != w.channel || (w.note >= 0 && note != w.note)) {
+        return;
+    }
+    static double peak = 0.0;
+    static std::int64_t peak_at = 0;
+    static double b = 0.0;
+    static double e = 0.0;
+    static double l = 0.0;
+    static double g = 0.0;
+    static double bd = 0.0;
+    static double nat = 0.0;
+    static double first_ratio = -1.0;
+    if (first_ratio < 0.0) {
+        first_ratio = ratio;
+    }
+    if (ratio > peak) {
+        peak = ratio;
+        peak_at = at;
+        b = base;
+        e = envelope;
+        l = lfo;
+        g = glide;
+        bd = bend;
+        nat = native;
+    }
+    static const struct Report {
+        ~Report()
+        {
+            std::fprintf(stderr,
+                         "pitch:  ratio %.4f -> %.4f at %.3f s | base %.0f  env %+.0f  lfo %+.0f  "
+                         "glide %+.0f  bend %+.0f | native %.0f  sum %.0f\n",
+                         first_ratio, peak, static_cast<double>(peak_at) / 32000.0, b, e, l, g, bd,
+                         nat, b + e + l + g + bd);
+        }
+    } report;
+}
+
+/// Worst filter stability margin, and where in the note it fell.
+///
+/// The bound is the recurrence's own, derived rather than assumed: substituting the three lines of
+/// `StateVariableFilter::process` gives the characteristic polynomial
+/// `z^2 + (f^2 + f*q - 2)*z + (1 - f*q)`, and Jury's criterion on that is `f*q < 2` together with
+/// `f^2 + 2*f*q < 4`. `4 - (f^2 + 2*f*q)` is the margin, and a negative one puts a pole outside the
+/// unit circle -- heard as full-amplitude oscillation near Nyquist rather than as a filtered note.
+///
+/// The looser `f < 2 - q` usually quoted for this topology is not the stability boundary and
+/// reports breaches on ordinary material; it was tried first here and had to be discarded.
+void tvf_trace(int channel, int note, std::int64_t at, double f, double q) noexcept
+{
+    const Watch w = watched();
+    if (w.channel < 0 || channel != w.channel || (w.note >= 0 && note != w.note)) {
+        return;
+    }
+    static double worst = 4.0;
+    static std::int64_t worst_at = 0;
+    static double worst_f = 0.0;
+    static double worst_q = 0.0;
+    static std::int64_t breaches = 0;
+    const double margin = 4.0 - ((f * f) + (2.0 * f * q));
+    if (margin < worst) {
+        worst = margin;
+        worst_at = at;
+        worst_f = f;
+        worst_q = q;
+    }
+    if (margin <= 0.0) {
+        ++breaches;
+    }
+    static const struct Report {
+        ~Report()
+        {
+            std::fprintf(stderr,
+                         "tvf:    worst margin %.4f (f=%.4f q=%.4f) at %.3f s into the note; "
+                         "%lld breaches\n",
+                         worst, worst_f, worst_q, static_cast<double>(worst_at) / 32000.0,
+                         static_cast<long long>(breaches));
+        }
+    } report;
+}
+
+/// The resampler's own output, before the filter sees it.
+///
+/// Places the burst on one side of the filter or the other: a step this large in the *reader's*
+/// output is aliasing or a bad read, and nothing downstream would be the cause.
+void reader_trace(int channel, int note, std::int64_t at, double raw, double ratio) noexcept
+{
+    const Watch w = watched();
+    if (w.channel < 0 || channel != w.channel || (w.note >= 0 && note != w.note)) {
+        return;
+    }
+    static double previous = 0.0;
+    static double worst_step = 0.0;
+    static std::int64_t worst_at = 0;
+    static double worst_ratio = 0.0;
+    static double max_ratio = 0.0;
+    static std::int64_t max_ratio_at = 0;
+    const double step = std::abs(raw - previous);
+    previous = raw;
+    if (step > worst_step) {
+        worst_step = step;
+        worst_at = at;
+        worst_ratio = ratio;
+    }
+    if (ratio > max_ratio) {
+        max_ratio = ratio;
+        max_ratio_at = at;
+    }
+    static const struct Report {
+        ~Report()
+        {
+            std::fprintf(stderr,
+                         "reader: worst step %.4f at %.3f s into the note (ratio %.4f); "
+                         "peak ratio %.4f at %.3f s\n",
+                         worst_step, static_cast<double>(worst_at) / 32000.0, worst_ratio,
+                         max_ratio, static_cast<double>(max_ratio_at) / 32000.0);
+        }
+    } report;
+}
 
 /// Pan units the position may move in one control tick.
 constexpr int pan_slew_per_tick = 2;
@@ -280,12 +451,19 @@ void PartialVoice::render(std::span<float> destination,
         --slot_remaining_;
 
         auto value = static_cast<double>(reader_.next(slot_ratio_));
+        reader_trace(channel_, note_, sample_, value, slot_ratio_);
 
         if (tap_ != FilterTap::bypass) {
             // Stepped per sample rather than held for the block: the engine glides its frequency
             // coefficient, and at high resonance a per-block step relocates a ringing filter's pole
             // and re-excites it once every control tick.
-            value = filter_.process(value, frequency_ramp_.step(), damping_ramp_.step(), tap_);
+            //
+            // The two ramps are separate objects, so pulling them into locals fixes an order the
+            // language left unspecified without changing what either one yields.
+            const double f = frequency_ramp_.step();
+            const double q = damping_ramp_.step();
+            tvf_trace(channel_, note_, sample_, f, q);
+            value = filter_.process(value, f, q, tap_);
         }
 
         double gain =
@@ -380,6 +558,8 @@ void PartialVoice::control(double bend_milli_semitones,
 
     pitch_modulation_ = envelope + lfo_pitch + glide_;
     ratio_ = ratio(bend_milli_semitones);
+    pitch_trace(channel_, note_, sample_, base_pitch_, envelope, lfo_pitch, glide_,
+                bend_milli_semitones, native_pitch_, ratio_);
 
     // Amplitude modulation folds in as a fraction of 0x7f00, clamped first.
     //
