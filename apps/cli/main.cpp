@@ -13,6 +13,7 @@
 #include "tabulasonora/sequence_player.hpp"
 #include "tabulasonora/smf_reader.hpp"
 #include "tabulasonora/table_manifest.hpp"
+#include "tabulasonora/tone_generator.hpp"
 #include "tabulasonora/wav_writer.hpp"
 #include "tabulasonora/wave_rom.hpp"
 
@@ -137,6 +138,97 @@ int extract_tables_command(const std::string& path, const fs::path& output)
 ///
 /// The fastest way to A/B a single patch against the reference build: same arguments, same output
 /// format, so the two files diff directly.
+void write_interleaved(const fs::path& output,
+                       std::span<const float> left,
+                       std::span<const float> right)
+{
+    std::ofstream stream{output, std::ios::binary};
+    if (!stream) {
+        throw std::runtime_error("Cannot write '" + output.string() + "'.");
+    }
+    for (std::size_t i = 0; i < left.size(); ++i) {
+        const float frame[2]{left[i], right[i]};
+        stream.write(reinterpret_cast<const char*>(frame), sizeof(frame));
+    }
+    if (!stream) {
+        throw std::runtime_error("Short write to '" + output.string() + "'.");
+    }
+}
+
+/// Renders one note through the block loop, the way the oracle gate does.
+///
+/// **This is the path to compare against `notebatch`'s output**, and the reason it exists is that
+/// the per-note renderer below is not. That one takes the ideal `pow(2, x/12000)` for its playback
+/// rate; every voice in the block loop goes through `g_ramp_exp_tbl`, which is not a true
+/// exponential and sits up to 4.66 cents flat of one across an octave. A single-note render taken
+/// from the retired path and held against an oracle case therefore disagrees by a few cents for
+/// reasons that have nothing to do with what is being investigated -- which has already cost this
+/// project an afternoon once.
+///
+/// The setup mirrors `note_oracle_tests.cpp` exactly, down to the eight discarded 512-frame blocks
+/// the harness runs after its reset and the module's own event staging, so the two renders are
+/// comparable sample for sample rather than approximately.
+int render_note_block_loop(const std::string& path,
+                           int program,
+                           int note,
+                           int velocity,
+                           double hold_seconds,
+                           double tail_seconds,
+                           int channel,
+                           const fs::path& output,
+                           int map)
+{
+    const ts::RomImage rom = ts::RomImage::open(path, ts::RomVerification::quick);
+    ts::NoteRenderer notes{rom};
+
+    ts::ToneGeneratorOptions options;
+    options.ports = 1;
+    options.map = static_cast<ts::ToneMap>(map);
+    options.event_delay_blocks = 4;
+    options.bypass_output_filter = false;
+    ts::ToneGenerator generator{notes, options};
+
+    std::vector<float> discard_left(512);
+    std::vector<float> discard_right(512);
+    for (int i = 0; i < 8; ++i) {
+        generator.render(discard_left, discard_right);
+    }
+
+    generator.send_channel(0xB0 | channel, 0, 0);
+    generator.send_channel(0xB0 | channel, 32, 0);
+    generator.send_channel(0xB0 | channel, 7, 127);
+    generator.send_channel(0xB0 | channel, 10, 64);
+    generator.send_channel(0xB0 | channel, 91, 0);
+    generator.send_channel(0xB0 | channel, 93, 0);
+    generator.send_channel(0xC0 | channel, program, 0);
+
+    const auto rate = static_cast<double>(ts::ToneGenerator::sample_rate);
+    const auto total = static_cast<std::size_t>((hold_seconds + tail_seconds) * rate);
+    const auto off_at = static_cast<std::size_t>(hold_seconds * rate);
+
+    std::vector<float> left(total);
+    std::vector<float> right(total);
+
+    generator.send_channel(0x90 | channel, note, velocity);
+    std::size_t position = 0;
+    bool released = false;
+    while (position < total) {
+        if (!released && position >= off_at) {
+            generator.send_channel(0x80 | channel, note, 0);
+            released = true;
+        }
+        const std::size_t count =
+            std::min<std::size_t>(ts::NoteRenderer::control_block, total - position);
+        generator.render(std::span{left}.subspan(position, count),
+                         std::span{right}.subspan(position, count));
+        position += count;
+    }
+
+    write_interleaved(output, left, right);
+    std::cout << "block loop: " << left.size() << " frames\n";
+    return 0;
+}
+
 int render_note_command(const std::string& path,
                         int program,
                         int note,
@@ -151,19 +243,7 @@ int render_note_command(const std::string& path,
     const ts::RenderedNote voice = renderer.render_note(
         program, note, velocity, hold_seconds, /*tail_seconds=*/1.8, static_cast<ts::ToneMap>(map));
 
-    std::ofstream stream{output, std::ios::binary};
-    if (!stream) {
-        throw std::runtime_error("Cannot write '" + output.string() + "'.");
-    }
-
-    for (std::size_t i = 0; i < voice.left.size(); ++i) {
-        const float frame[2]{voice.left[i], voice.right[i]};
-        stream.write(reinterpret_cast<const char*>(frame), sizeof(frame));
-    }
-    if (!stream) {
-        throw std::runtime_error("Short write to '" + output.string() + "'.");
-    }
-
+    write_interleaved(output, voice.left, voice.right);
     std::cout << voice.name << ": " << voice.left.size() << " frames\n";
     return 0;
 }
@@ -938,6 +1018,9 @@ int main(int argc, char** argv)
     fs::path output_file;
     CLI::App* render_note =
         app.add_subcommand("render-note", "Render one note to raw interleaved float32.");
+    double note_tail_seconds = 1.8;
+    int note_channel = 0;
+    bool per_note_renderer = false;
     add_dll(render_note);
     render_note->add_option("program", program, "Program number, 0-127")->required();
     render_note->add_option("note", note, "MIDI note, 0-127")->required();
@@ -948,6 +1031,15 @@ int main(int argc, char** argv)
                    "Tone map: 1 SC-55, 2 SC-88, 3 SC-88Pro, 4 SC-8820, or xg to start in XG mode "
                    "(names accepted: sc55, sc88, sc88pro, sc8820, xg)")
         ->transform(CLI::CheckedTransformer(ts::tone_map_choices(), CLI::ignore_case));
+    render_note->add_option("--tail", note_tail_seconds,
+                            "Seconds rendered past the note-off; 1.8 matches the oracle sweep");
+    render_note->add_option("--channel", note_channel,
+                            "0-based channel; 9 makes it a drum part, as the oracle's kit cases are");
+    render_note->add_flag("--per-note", per_note_renderer,
+                          "Use the retired per-note renderer instead of the block loop. It takes "
+                          "the ideal pow(2,x/12000) for its rate where every voice in the block "
+                          "loop goes through g_ramp_exp_tbl, so its pitch sits up to 4.66 cents "
+                          "off the module's -- do not compare its output against an oracle case");
 
     fs::path midi_path;
     ts::RenderOptions render_options;
@@ -1110,8 +1202,12 @@ int main(int argc, char** argv)
             return dump_effect_command(dll, effect_kind, effect_type, effect_samples, output_file);
         }
         if (render_note->parsed()) {
-            return render_note_command(
-                dll, program, note, velocity, hold_seconds, output_file, map);
+            if (per_note_renderer) {
+                return render_note_command(
+                    dll, program, note, velocity, hold_seconds, output_file, map);
+            }
+            return render_note_block_loop(dll, program, note, velocity, hold_seconds,
+                                          note_tail_seconds, note_channel, output_file, map);
         }
         if (pitch->parsed()) {
             return pitch_command(dll, program, note, velocity, map, lookup_bank);
