@@ -84,9 +84,21 @@ struct WaveDescriptor {
     /// caught the term depended on how far into the note it looked and how fast that wave loops,
     /// which is exactly why "the same wave does both on different notes".
     ///
-    /// The switch itself is **not modelled**: a note here plays at the attack pitch throughout. The
-    /// 239-case oracle gate is green that way, so the error it leaves is small over a note, but it
-    /// is a real difference on any wave whose `second_fine_tune` is not neutral.
+    /// **The adoption does not retune a running voice**, which is why nothing here acts on it. The
+    /// copy stages a value; it does not recompute the sampler increment. Traced with `scdec
+    /// postrace` at 32-sample resolution straight through the crossing, the increment holds at one
+    /// value for the whole note — Atmosphere's is 42588 at every reading either side of its loop
+    /// point and its adoption tick, and program 4's holds 61656 the same way.
+    ///
+    /// So a note with no pitch modulation sounds at the attack pitch from beginning to end, and
+    /// `native_milli_semitones` is the whole story for it. Modelling the switch as a retune was
+    /// tried and is wrong: it moves the pitch mid-note where the engine does not, and it takes the
+    /// oracle note gate from clean to five failing assertions across three layered tones, where a
+    /// couple of cents on one partial is enough to move how the layers interfere.
+    ///
+    /// What the staged value is *for* is the next recomputation of the increment — a bend, a pitch
+    /// envelope or an LFO would pick it up. That path is unmodelled and its effect is confined to
+    /// notes that modulate their pitch after passing their loop.
     ///
     /// Confirmed on the engine rather than inferred: `scdec pitchword` reads both words off live
     /// voices, and for a struck note they stay *different* — Atmosphere's first partial sits at
