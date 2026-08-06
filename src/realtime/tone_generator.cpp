@@ -124,6 +124,51 @@ struct ToneGenerator::Impl {
     VoicePool pool;
     std::vector<Part> parts;
 
+    /// One voice of a note that has been allocated but whose parameters have not been read yet.
+    ///
+    /// The module splits a note-on in two. `note_assign_poly` runs in the note-on handler, at
+    /// dispatch, in the order the messages arrived: it allocates the group, steals if it must, and
+    /// hangs the note off the part at +0x270. Nothing reads the note's parameters there. That waits
+    /// for `tg_start_pending_voices @ 18008f020` at the top of the chunk, which walks the **part
+    /// array by index** -- indexed by GS *block*, so part 10 first, then channels 1-9, then 11-16.
+    ///
+    /// Everything draw-free is built at dispatch and kept here; the three fields the shared
+    /// generator feeds -- the base pitch's jitter, the pitch envelope's start, and the random pan --
+    /// are filled in by the block-ordered pass, the only place they can be drawn in the module's
+    /// order.
+    struct PendingVoice {
+        int slot = -1;
+        VoiceSetup setup;
+        int key = 0;
+        int velocity = 0;
+        /// Melodic: the base pitch before its random offset and before the engine's clamp at zero.
+        int base_pitch_raw = 0;
+        double scale_offset = 0.0;
+        /// Drum: the plane-derived pitch before the same offset, and the sample's own rate.
+        int drum_pitch_raw = 0;
+        double native = 0.0;
+    };
+
+    struct PendingNote {
+        int part = 0;
+        bool random_pan = false;
+        std::vector<PendingVoice> voices;
+    };
+
+    std::vector<PendingNote> pending_notes;
+
+    /// The order `tg_start_pending_voices` visits parts in: by port, then by GS block number.
+    [[nodiscard]] static int block_order_key(int part, int channels) noexcept
+    {
+        const int port = part / channels;
+        const int channel = part % channels;
+        const int block = channel == 9 ? 0 : (channel < 9 ? channel + 1 : channel);
+        return (port * channels) + block;
+    }
+
+    /// Reads the parameters of everything allocated this chunk, part by part in block order.
+    void start_pending_voices();
+
     /// The chunk each part last opened a note-on batch on, or -1.
     ///
     /// `note_on_voice_setup` runs once for a part and walks everything waiting on it, so notes that
@@ -495,7 +540,10 @@ struct ToneGenerator::Impl {
     void start_note(int channel, int note, int velocity);
     void start_drum(int channel, int note, int velocity);
     void spend_voice_setup_draws(int channel, int voice_count);
-    void begin(int channel, int note, int velocity, int group, VoiceSetup&& setup);
+    /// Takes a slot for a voice, stealing if the pool is full. Dispatch-time, arrival order.
+    [[nodiscard]] int allocate_slot(int channel, int note, int velocity, int group);
+    /// Puts a fully-read voice into the slot `allocate_slot` returned. Block-ordered pass.
+    void install(int slot, VoiceSetup&& setup);
 
     struct Envelopes {
         SegmentEnvelope amplitude;
@@ -762,6 +810,12 @@ void ToneGenerator::send_channel_at(int sample_offset, int port, int status, int
         return;
     }
     impl_->dispatch_channel(port, status, data1, data2);
+
+    // Undelayed messages are applied on arrival rather than waiting for a chunk, so their notes
+    // start on arrival too. Holding them for the next `render_block` would delay every note landing
+    // on a chunk boundary by a chunk. `event_delay_blocks` at zero means there is no chunk for the
+    // messages to share, so there is nothing to order them within.
+    impl_->start_pending_voices();
 }
 
 void ToneGenerator::Impl::dispatch_channel(int port, int status, int data1, int data2)
@@ -1843,6 +1897,11 @@ void ToneGenerator::Impl::render_block()
     ++block_index;
     drain_events();
 
+    // Everything this chunk allocated now reads its parameters, part by part in block order. The
+    // module's halves are a note-on handler that allocates in arrival order and a separate pass
+    // that reads parameters in block order; doing either in the other's order moves every draw.
+    start_pending_voices();
+
     // The parts' chorus and delay sends are matrix coefficients, one a part, and move on the
     // control tick like everything else. Ten blocks to a tick.
     if (block_tick == 0) {
@@ -2160,15 +2219,8 @@ void ToneGenerator::Impl::recycle(int index)
     pool.free_slot(index);
 }
 
-void ToneGenerator::Impl::begin(int channel, int note, int velocity, int group, VoiceSetup&& setup)
+int ToneGenerator::Impl::allocate_slot(int channel, int note, int velocity, int group)
 {
-    // The voice's part fader starts *at* the part's volume rather than gliding up to it, so a note
-    // struck part-way through a slide is already where the slide has got to. Set here, for both
-    // callers, because it is a property of the part rather than of the tone being started.
-    setup.volume_word = parts[static_cast<std::size_t>(channel)].volume_word();
-    setup.volume_mask = volume_ramp_mask;
-    setup.part_resonance = parts[static_cast<std::size_t>(channel)].tvf_resonance;
-
     // Allocating may steal, which hands whatever was sounding to the dying list and empties the
     // slot; anything still there was already finished.
     const Voice slot = pool.allocate(channel, note, velocity, group);
@@ -2181,6 +2233,20 @@ void ToneGenerator::Impl::begin(int channel, int note, int velocity, int group, 
     }
 
     release_slot(slot.index);
+    return slot.index;
+}
+
+void ToneGenerator::Impl::install(int slot, VoiceSetup&& setup)
+{
+    // Read here rather than at allocation, because the module reads them here: its setup pass runs
+    // after the whole chunk's messages have reached their parts, so a volume or resonance change
+    // that arrived after the note-on in the same chunk is already in force by the time the voice
+    // takes its value. The fader starts *at* the part's volume rather than gliding up to it --
+    // `tvf_env_prep` writes the same value into the ramp's source and target slots.
+    const Part& part = parts[static_cast<std::size_t>(setup.channel)];
+    setup.volume_word = part.volume_word();
+    setup.volume_mask = volume_ramp_mask;
+    setup.part_resonance = part.tvf_resonance;
 
     std::unique_ptr<PartialVoice> voice;
     if (!spare.empty()) {
@@ -2191,11 +2257,72 @@ void ToneGenerator::Impl::begin(int channel, int note, int velocity, int group, 
     }
 
     voice->start(std::move(setup));
-    slots[static_cast<std::size_t>(slot.index)] = std::move(voice);
+    slots[static_cast<std::size_t>(slot)] = std::move(voice);
+}
+
+void ToneGenerator::Impl::start_pending_voices()
+{
+    if (pending_notes.empty()) {
+        return;
+    }
+
+    // Stable, so two notes queued for the same part keep the order they arrived in: the module's
+    // per-part list preserves that, and only the order *between* parts is the block's business.
+    std::stable_sort(pending_notes.begin(), pending_notes.end(),
+                     [](const PendingNote& left, const PendingNote& right) {
+                         return block_order_key(left.part, Sequence::channel_count)
+                                < block_order_key(right.part, Sequence::channel_count);
+                     });
+
+    std::vector<PendingNote> starting;
+    starting.swap(pending_notes);
+
+    for (PendingNote& note : starting) {
+        if (note.voices.empty()) {
+            continue;
+        }
+        spend_voice_setup_draws(note.part, static_cast<int>(note.voices.size()));
+
+        // One pan for the whole note, drawn at the end of the first voice's parameter load -- after
+        // that voice's own two pitch draws, which is where `tvf_env_prep` sits in
+        // `partial_load_params`.
+        std::optional<int> random_pan;
+        for (PendingVoice& pending : note.voices) {
+            const int jitter =
+                notes->pitch().base_pitch_jitter_milli_semitones(pending.setup.partial);
+            if (pending.setup.is_drum) {
+                pending.setup.drum_base_ratio =
+                    std::pow(2.0,
+                             (std::max(0, pending.drum_pitch_raw + jitter) - pending.native)
+                                 / 12000.0);
+            } else {
+                pending.setup.base_pitch =
+                    std::max(0, pending.base_pitch_raw + jitter) + pending.scale_offset;
+            }
+
+            pending.setup.pitch_envelope = notes->pitch().create_envelope_runner(
+                pending.setup.partial, pending.key, pending.velocity);
+
+            if (note.random_pan && !random_pan) {
+                random_pan = notes->noise().next_pan();
+            }
+            pending.setup.random_pan = random_pan;
+
+            install(pending.slot, std::move(pending.setup));
+        }
+    }
 }
 
 bool ToneGenerator::Impl::any_voice_on(int channel) const
 {
+    // A note allocated earlier in this chunk counts as sounding even though its slot is still
+    // empty: the module hangs the group off the part the moment it allocates, so a second note-on
+    // in the same chunk already sees the part as busy.
+    for (const PendingNote& queued : pending_notes) {
+        if (queued.part == channel && !queued.voices.empty()) {
+            return true;
+        }
+    }
     for (const auto& slot : slots) {
         if (slot && !slot->finished() && slot->channel() == channel) {
             return true;
@@ -2277,21 +2404,18 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
         }
     }
 
-    // Resolved before anything draws, because the number of voices the note will take is itself
-    // what the first draws are counted from -- see `spend_voice_setup_draws`.
+    // Resolved at dispatch, because allocation happens here even though nothing is read yet: the
+    // count of voices the note takes is what `spend_voice_setup_draws` is later counted from, and
+    // it comes from the queued list rather than being carried separately.
     std::vector<ResolvedTone> layers;
     layers.reserve(tones.size());
-    int voice_count = 0;
     for (int tone_number : tones) {
         if (!notes->directory().tone(tone_number)) {
             layers.emplace_back();
             continue;
         }
         layers.push_back(notes->directory().resolve(tone_number, note, velocity));
-        voice_count += static_cast<int>(layers.back().partials.size());
     }
-    spend_voice_setup_draws(channel, voice_count);
-
     // A part panpot of zero is GS RND: the engine repositions the note outright rather than
     // offsetting the partial's own pan, and redraws for every note. Only the SysEx panpot can set
     // it -- CC#10 clamps zero to one, so the wheel cannot reach this.
@@ -2300,8 +2424,9 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     // per-voice pass that computes the pitch (`tvf_env_prep @ 180060620`, at the end of
     // `partial_load_params`), so the first partial's own two pitch draws come first and only then
     // the pan. Drawing it up front placed it one or two values early on every randomly-panned note.
-    const bool random_pan_part = part.pan == 0;
-    std::optional<int> random_pan;
+    PendingNote queued;
+    queued.part = channel;
+    queued.random_pan = part.pan == 0;
 
     // Portamento. CC#84 names the source key outright, is consumed by this one note, and glides
     // whatever else the part is doing. CC#65 is the sustained mode, and the engine only arms it
@@ -2346,13 +2471,8 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             // else is folded in -- `partial_compute_pitch` again, and the first of the two draws a
             // voice can make. Scale tuning folds in after it rather than riding with the bend: it
             // is per-key, so it is latched at note-on like the rest of the note's pitch.
-            const int jitter = notes->pitch().base_pitch_jitter_milli_semitones(partial);
-            const double base_pitch =
-                std::max(0,
-                         notes->pitch().base_pitch_milli_semitones(
-                             partial, note, partial.key_center())
-                             + jitter)
-                + part.scale_offset_milli_semitones(key);
+            const int base_pitch_raw =
+                notes->pitch().base_pitch_milli_semitones(partial, note, partial.key_center());
 
             VoiceSetup setup;
             setup.channel = channel;
@@ -2363,16 +2483,11 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             setup.amplitude = std::move(built.amplitude);
             setup.cutoff = std::move(built.cutoff);
             setup.cutoff_base = built.cutoff_base;
-            setup.pitch_envelope = notes->pitch().create_envelope_runner(partial, key, velocity);
 
             // Where the pan is actually drawn: the end of the first voice's parameter load, after
             // that voice's own two pitch draws. `pitch_env_rand_init @ 180060560` writes the
             // position onto every voice of the group and latches it, so the rest of the note reads
             // it rather than drawing again.
-            if (random_pan_part && !random_pan) {
-                random_pan = notes->noise().next_pan();
-            }
-
             setup.lfo1 = std::move(lfo1);
             setup.lfo2 = std::move(lfo2);
             setup.envelope_hold_samples = notes->envelopes().hold_samples(
@@ -2381,20 +2496,26 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             setup.glide_milli_semitones =
                 glide_from < 0
                     ? 0.0
-                    : PitchChain::portamento_offset(glide_from, static_cast<int>(base_pitch));
+                    : PitchChain::portamento_offset(glide_from, base_pitch_raw);
             setup.glide_step = glide_step;
-            setup.base_pitch = base_pitch;
             setup.pan = partial.pan();
             setup.pan_follows_part = true;
-            setup.random_pan = random_pan;
             setup.level_gain = 1.0;
 
-            begin(channel, note, velocity, group, std::move(setup));
+            PendingVoice pending;
+            pending.slot = allocate_slot(channel, note, velocity, group);
+            pending.key = key;
+            pending.velocity = velocity;
+            pending.base_pitch_raw = base_pitch_raw;
+            pending.scale_offset = part.scale_offset_milli_semitones(key);
+            pending.setup = std::move(setup);
+            queued.voices.push_back(std::move(pending));
             sounded = true;
         }
     }
 
     if (sounded) {
+        pending_notes.push_back(std::move(queued));
         ++note_count;
     }
 }
@@ -2473,10 +2594,9 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     // writes drum panpot 0 by NRPN on four cymbals and leaves the part's own panpot centred. The
     // pan setup reads `part[0x3dd]` first and the plane byte `kit[0x280 + key]` second, and either
     // being zero sends it to the same draw -- one draw, not one for each.
-    const bool random_pan_note = part.pan == 0 || key.pan == 0;
-    std::optional<int> random_pan;
-
-    spend_voice_setup_draws(channel, static_cast<int>(resolved.partials.size()));
+    PendingNote queued;
+    queued.part = channel;
+    queued.random_pan = part.pan == 0 || key.pan == 0;
 
     const int group = pool.begin_note_group();
     bool sounded = false;
@@ -2514,7 +2634,6 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         // pitch-cents cases either way, and the song oracle gains one -- `dreaming_i_was_dreaming`
         // map 4's peak passes with the jitter and fails without it. Nothing regresses. So the DLL
         // does not contradict what the decompilation plainly says, and the decompilation decides.
-        const int jitter = notes->pitch().base_pitch_jitter_milli_semitones(partial);
 
         VoiceSetup setup;
         setup.channel = channel;
@@ -2525,25 +2644,11 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.amplitude = std::move(built.amplitude);
         setup.cutoff = std::move(built.cutoff);
         setup.cutoff_base = built.cutoff_base;
-        setup.pitch_envelope = notes->pitch().create_envelope_runner(partial, 60, velocity);
-
-        // Same place as the melodic path: the end of the first voice's parameter load, after that
-        // voice's own pitch draws.
-        if (random_pan_note && !random_pan) {
-            random_pan = notes->noise().next_pan();
-        }
-
         setup.lfo1 = std::move(lfo1);
         setup.lfo2 = std::move(lfo2);
         setup.envelope_hold_samples = notes->envelopes().hold_samples(
             partial, velocity, part.envelope_delay + part.envelope_delay_tone);
         setup.is_drum = true;
-        setup.drum_base_ratio =
-            std::pow(2.0,
-                     (std::max(0, PitchChain::drum_pitch_milli_semitones(partial, key.pitch)
-                                      + jitter)
-                      - native)
-                         / 12000.0);
         // The kit's pan plane is an OFFSET from centre, not an absolute position: the engine bases
         // a drum voice on the part panpot exactly as it does a melodic one and folds the plane in
         // on top (`pan = clamp(part[0x3dd] + (kit[0x280 + key] - 0x40))`, the pan setup at
@@ -2551,16 +2656,23 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         // clap across the field with nothing else, and treating the plane as absolute pinned it.
         setup.pan = key.pan;
         setup.pan_follows_part = true;
-        setup.random_pan = random_pan;
         setup.level_gain = level_gain;
         setup.mute_group = key.group;
         setup.drum_receives_note_off = key.receives_note_off;
 
-        begin(channel, note, velocity, group, std::move(setup));
+        PendingVoice pending;
+        pending.slot = allocate_slot(channel, note, velocity, group);
+        pending.key = 60;
+        pending.velocity = velocity;
+        pending.drum_pitch_raw = PitchChain::drum_pitch_milli_semitones(partial, key.pitch);
+        pending.native = native;
+        pending.setup = std::move(setup);
+        queued.voices.push_back(std::move(pending));
         sounded = true;
     }
 
     if (sounded) {
+        pending_notes.push_back(std::move(queued));
         ++note_count;
     }
 }
