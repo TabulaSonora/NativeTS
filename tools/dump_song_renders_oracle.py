@@ -30,7 +30,9 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import pathlib
+import shlex
 import struct
 import subprocess
 import sys
@@ -201,13 +203,28 @@ def main():
     parser.add_argument("--testdata", type=pathlib.Path, default=pathlib.Path("testdata"))
     parser.add_argument("--tail", type=float, default=1.5)
     parser.add_argument("--rate", type=int, default=32000)
+    # How to launch a Windows binary, when the host is not Windows. Plain `wine` is the default and
+    # is what a Linux box wants. macOS has no system wine; CrossOver's launcher takes the bottle as
+    # its own argument, so the whole command line is given here rather than guessed:
+    #
+    #   --runner "/Applications/CrossOver.app/Contents/SharedSupport/CrossOver/bin/cxstart
+    #             --bottle tabulasonora"
+    #
+    # A render taken this way is not interchangeable with one from a real x86_64 host -- see the
+    # note in the fixture about which oracle produced it -- so point `--output` and `--audio-dir`
+    # somewhere of their own rather than overwriting the authoritative harvest.
+    parser.add_argument("--runner", default=None,
+                        help="command that launches a Windows .exe; defaults to 'wine' off Windows")
     arguments = parser.parse_args()
 
     if not arguments.scdec.exists():
         sys.exit(f"harness not found at {arguments.scdec}")
 
     arguments.audio_dir.mkdir(parents=True, exist_ok=True)
-    runner = [] if sys.platform == "win32" else ["wine"]
+    if arguments.runner is not None:
+        runner = shlex.split(arguments.runner)
+    else:
+        runner = [] if sys.platform == "win32" else ["wine"]
     cases = []
 
     for midi, tone_map in SONGS:
@@ -224,9 +241,13 @@ def main():
                             str(tone_map), str(arguments.tail)]
         # The pared-down environment is for wine, which is noisy and picks up the host's PATH.
         # Windows runs the harness directly and needs its own environment intact -- handing it a
-        # POSIX PATH and nothing else fails before the DLL is even opened.
-        environment = None if sys.platform == "win32" else {"WINEDEBUG": "-all",
-                                                            "PATH": "/usr/bin:/bin"}
+        # POSIX PATH and nothing else fails before the DLL is even opened. A custom runner keeps
+        # the host's environment for the same reason Windows does: CrossOver's launcher resolves
+        # its bottle through `HOME` and its own support paths, and starves without them.
+        if sys.platform == "win32" or arguments.runner is not None:
+            environment = None if sys.platform == "win32" else {**os.environ, "WINEDEBUG": "-all"}
+        else:
+            environment = {"WINEDEBUG": "-all", "PATH": "/usr/bin:/bin"}
         result = subprocess.run(command, capture_output=True, text=True, env=environment)
         if result.returncode != 0 or not audio.exists():
             # One bad file must not cost the whole sweep. The reference itself faults on some
