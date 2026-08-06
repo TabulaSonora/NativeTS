@@ -102,6 +102,7 @@ struct ToneGenerator::Impl {
         // One per part, which is what XG needs; GS uses only the first `ports * 2` of them.
         // The two indexings overlap, and may because every mode change resets the array.
         drum_kit.assign(parts.size(), 0);
+        note_batch_chunk.assign(parts.size(), -1);
         for (std::size_t i = 0; i < parts.size(); ++i) {
             parts[i].rx_channel = static_cast<int>(i) % Sequence::channel_count;
         }
@@ -122,6 +123,15 @@ struct ToneGenerator::Impl {
 
     VoicePool pool;
     std::vector<Part> parts;
+
+    /// The chunk each part last opened a note-on batch on, or -1.
+    ///
+    /// `note_on_voice_setup` runs once for a part and walks everything waiting on it, so notes that
+    /// arrive together are seeded together and only the first of them pays -- see
+    /// `spend_voice_setup_draws`. Chunks are the grid the module's own MIDI ring dispatches on, and
+    /// they are what separates "together" from "one after another" here: a probe whose two notes
+    /// sat twelve ticks apart paid twice, and the same two notes on one tick paid once.
+    std::vector<std::int64_t> note_batch_chunk;
 
     /// One voice per slot, or empty. Recycled through `spare` rather than reallocated per note.
     /// One voice per slot, sized to the pool. A growing pool resizes this alongside itself.
@@ -484,6 +494,7 @@ struct ToneGenerator::Impl {
     void stop_note(int channel, int note, int damper = 0);
     void start_note(int channel, int note, int velocity);
     void start_drum(int channel, int note, int velocity);
+    void spend_voice_setup_draws(int channel, int voice_count);
     void begin(int channel, int note, int velocity, int group, VoiceSetup&& setup);
 
     struct Envelopes {
@@ -2266,11 +2277,31 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
         }
     }
 
+    // Resolved before anything draws, because the number of voices the note will take is itself
+    // what the first draws are counted from -- see `spend_voice_setup_draws`.
+    std::vector<ResolvedTone> layers;
+    layers.reserve(tones.size());
+    int voice_count = 0;
+    for (int tone_number : tones) {
+        if (!notes->directory().tone(tone_number)) {
+            layers.emplace_back();
+            continue;
+        }
+        layers.push_back(notes->directory().resolve(tone_number, note, velocity));
+        voice_count += static_cast<int>(layers.back().partials.size());
+    }
+    spend_voice_setup_draws(channel, voice_count);
+
     // A part panpot of zero is GS RND: the engine repositions the note outright rather than
     // offsetting the partial's own pan, and redraws for every note. Only the SysEx panpot can set
     // it -- CC#10 clamps zero to one, so the wheel cannot reach this.
-    const std::optional<int> random_pan =
-        part.pan == 0 ? std::optional{notes->noise().next_pan()} : std::nullopt;
+    //
+    // **Drawn inside the first partial's setup, not here.** The pan is resolved by the same
+    // per-voice pass that computes the pitch (`tvf_env_prep @ 180060620`, at the end of
+    // `partial_load_params`), so the first partial's own two pitch draws come first and only then
+    // the pan. Drawing it up front placed it one or two values early on every randomly-panned note.
+    const bool random_pan_part = part.pan == 0;
+    std::optional<int> random_pan;
 
     // Portamento. CC#84 names the source key outright, is consumed by this one note, and glides
     // whatever else the part is doing. CC#65 is the sustained mode, and the engine only arms it
@@ -2291,8 +2322,9 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     const int group = pool.begin_note_group();
     bool sounded = false;
 
-    for (int tone_number : tones) {
-        const ResolvedTone resolved = notes->directory().resolve(tone_number, note, velocity);
+    for (std::size_t layer = 0; layer < layers.size(); ++layer) {
+        const int tone_number = tones[layer];
+        const ResolvedTone& resolved = layers[layer];
         const std::optional<Tone> tone = notes->directory().tone(tone_number);
         if (!tone) {
             continue;
@@ -2310,10 +2342,16 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             Envelopes built = envelopes(tone_number, partial, key, velocity, part.modifiers());
             auto [lfo1, lfo2] = notes->lfo().create_runners(tone_number, partial, part.modifiers());
 
-            // Scale tuning folds in here rather than riding with the bend: it is per-key, so it
-            // is latched at note-on like the rest of the note's pitch.
+            // The base pitch's own random offset, which the module clamps at zero before anything
+            // else is folded in -- `partial_compute_pitch` again, and the first of the two draws a
+            // voice can make. Scale tuning folds in after it rather than riding with the bend: it
+            // is per-key, so it is latched at note-on like the rest of the note's pitch.
+            const int jitter = notes->pitch().base_pitch_jitter_milli_semitones(partial);
             const double base_pitch =
-                notes->pitch().base_pitch_milli_semitones(partial, note, partial.key_center())
+                std::max(0,
+                         notes->pitch().base_pitch_milli_semitones(
+                             partial, note, partial.key_center())
+                             + jitter)
                 + part.scale_offset_milli_semitones(key);
 
             VoiceSetup setup;
@@ -2326,6 +2364,15 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             setup.cutoff = std::move(built.cutoff);
             setup.cutoff_base = built.cutoff_base;
             setup.pitch_envelope = notes->pitch().create_envelope_runner(partial, key, velocity);
+
+            // Where the pan is actually drawn: the end of the first voice's parameter load, after
+            // that voice's own two pitch draws. `pitch_env_rand_init @ 180060560` writes the
+            // position onto every voice of the group and latches it, so the rest of the note reads
+            // it rather than drawing again.
+            if (random_pan_part && !random_pan) {
+                random_pan = notes->noise().next_pan();
+            }
+
             setup.lfo1 = std::move(lfo1);
             setup.lfo2 = std::move(lfo2);
             setup.envelope_hold_samples = notes->envelopes().hold_samples(
@@ -2390,9 +2437,12 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         return;
     }
 
+    // The key's panpot is resolved without drawing. A zero here means random, but it is the *pan
+    // setup* that decides that and draws for it, once, alongside the part's own panpot -- see
+    // below. Drawing here as well spent two values on a hit the module spends one on.
     const DrumKey key = DrumKeyOverrides::apply(kit_key,
                                                 part.drum_keys.pitch_offset(note),
-                                                part.drum_keys.pan_for_hit(note, notes->noise()));
+                                                part.drum_keys.pan(note));
     const int rate_key =
         NoteRenderer::envelope_rate_key(kit_key, part.drum_keys.pitch_offset(note));
 
@@ -2418,8 +2468,15 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     // the engine draws and returns before it ever folds the offset in, so eight identical hits
     // land at eight unrelated positions. Only the SysEx panpot reaches it -- CC#10 clamps zero to
     // one -- and the draw is once per note, shared by every partial of it.
-    const std::optional<int> random_pan =
-        part.pan == 0 ? std::optional{notes->noise().next_pan()} : std::nullopt;
+    //
+    // **A zero on the kit plane means the same thing**, which is the path STREETS.MID takes: it
+    // writes drum panpot 0 by NRPN on four cymbals and leaves the part's own panpot centred. The
+    // pan setup reads `part[0x3dd]` first and the plane byte `kit[0x280 + key]` second, and either
+    // being zero sends it to the same draw -- one draw, not one for each.
+    const bool random_pan_note = part.pan == 0 || key.pan == 0;
+    std::optional<int> random_pan;
+
+    spend_voice_setup_draws(channel, static_cast<int>(resolved.partials.size()));
 
     const int group = pool.begin_note_group();
     bool sounded = false;
@@ -2441,6 +2498,23 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         // and the tone's own key-follow decides what a step of it is worth.
         const double native = sounding.descriptor.native_milli_semitones();
 
+        // **No base-pitch jitter here, and the omission is measured rather than assumed.**
+        //
+        // `partial_compute_pitch` does not ask whether a voice is a drum, so on the face of it a
+        // percussion partial with a non-zero +0x12 should jitter and draw exactly as a melodic one
+        // does -- and this path did that at first. It is wrong: `canyon.mid` reproduces the
+        // reference to within one LSB across 7.9M samples on all four maps, and adding the drum
+        // jitter took that to 1,183,722 samples differing by up to 2,354 LSB. The melodic jitter
+        // alone leaves the gate bit-exact, and every random-pan probe agrees either way.
+        //
+        // A spurious *draw* would shift the generator for every voice after it, so the gate staying
+        // bit-exact without one says the module makes no draw for these voices -- which means the
+        // +0x12 this path would read is not the byte the module reads. The drum route resolves its
+        // tone separately (`resolve(key.tone, 60, velocity)`), so the suspicion is the partial
+        // block's base rather than the offset. Left out until that is settled; drawing here on a
+        // guess would desynchronise every later consumer.
+        const int jitter = 0;
+
         VoiceSetup setup;
         setup.channel = channel;
         setup.note = note;
@@ -2451,13 +2525,24 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.cutoff = std::move(built.cutoff);
         setup.cutoff_base = built.cutoff_base;
         setup.pitch_envelope = notes->pitch().create_envelope_runner(partial, 60, velocity);
+
+        // Same place as the melodic path: the end of the first voice's parameter load, after that
+        // voice's own pitch draws.
+        if (random_pan_note && !random_pan) {
+            random_pan = notes->noise().next_pan();
+        }
+
         setup.lfo1 = std::move(lfo1);
         setup.lfo2 = std::move(lfo2);
         setup.envelope_hold_samples = notes->envelopes().hold_samples(
             partial, velocity, part.envelope_delay + part.envelope_delay_tone);
         setup.is_drum = true;
-        setup.drum_base_ratio = std::pow(
-            2.0, (PitchChain::drum_pitch_milli_semitones(partial, key.pitch) - native) / 12000.0);
+        setup.drum_base_ratio =
+            std::pow(2.0,
+                     (std::max(0, PitchChain::drum_pitch_milli_semitones(partial, key.pitch)
+                                      + jitter)
+                      - native)
+                         / 12000.0);
         // The kit's pan plane is an OFFSET from centre, not an absolute position: the engine bases
         // a drum voice on the part panpot exactly as it does a melodic one and folds the plane in
         // on top (`pan = clamp(part[0x3dd] + (kit[0x280 + key] - 0x40))`, the pan setup at
@@ -2477,6 +2562,41 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     if (sounded) {
         ++note_count;
     }
+}
+
+void ToneGenerator::Impl::spend_voice_setup_draws(int channel, int voice_count)
+{
+    // What `note_on_voice_setup @ 18005f5c0` takes from the shared generator before a single one of
+    // the note's own parameters is read: one value per voice it initialises, seeded into the
+    // voice's +0x7a, plus one more.
+    //
+    // **The count is measured, not read off the decompilation.** A part whose SysEx panpot is zero
+    // repositions every note from the generator, so a probe of well-separated notes on such a part
+    // reads the sequence back out and the spacing between the positions is the consumption. Four
+    // shapes, all exact over 40-48 notes:
+    //
+    //   one-partial tone, alone           pan at draw 2, every 3   -> 2 before the pan
+    //   two-partial tone, alone           pan at draw 3, every 4   -> 3 before the pan
+    //   plus one one-partial note elsewhere        every 5         -> that note cost 2
+    //   plus one two-partial note elsewhere        every 6         -> that note cost 3
+    //
+    // so the cost is `partials + 1`, and the pan is the draw after it. The last two shapes also say
+    // what a batch is: two notes struck on the same tick cost the same as one (a third made no
+    // difference either), while the same two twelve ticks apart cost twice. The module runs this
+    // pass once for a part and walks every note waiting on it, so simultaneous notes are seeded
+    // together -- which is why this is charged per part per chunk.
+    //
+    // The values themselves are discarded. Where they land is not established; that they are taken
+    // is, and that is what every later draw depends on.
+    const auto index = static_cast<std::size_t>(channel);
+    if (index >= note_batch_chunk.size()) {
+        return;
+    }
+    if (note_batch_chunk[index] == block_index) {
+        return;
+    }
+    note_batch_chunk[index] = block_index;
+    notes->noise().discard(voice_count + 1);
 }
 
 void ToneGenerator::Impl::release_sustained(int channel, Part& part)

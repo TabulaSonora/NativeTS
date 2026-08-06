@@ -32,6 +32,21 @@ public:
         return static_cast<std::uint16_t>(walk_ ^ shift_);
     }
 
+    /// Steps the generator `count` times and throws the values away.
+    ///
+    /// For the draws the module makes but does nothing this port can hear with. `note_on_voice_setup
+    /// @ 18005f5c0` seeds every voice it initialises from the generator before any of the note's
+    /// parameters are read; the value lands in a per-voice field, and what it is worth is not
+    /// established here -- but *that* it is taken shifts every later draw, which is audible on any
+    /// randomly-panned part. Skipping the draws reproduces the shift without inventing a use for
+    /// them.
+    void discard(int count) noexcept
+    {
+        for (int i = 0; i < count; ++i) {
+            static_cast<void>(next());
+        }
+    }
+
     /// Draws a random pan position, 0 to 127, on the same scale as CC#10.
     ///
     /// The engine takes the top seven bits of a draw. This is what GS random pan resolves to — a
