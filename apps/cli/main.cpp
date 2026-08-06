@@ -179,8 +179,14 @@ int pitch_ramp_word(int milli_semitones)
 {
     const auto shifted = static_cast<std::int32_t>(
         static_cast<std::uint32_t>(milli_semitones) << 9U);
-    return ((milli_semitones & 0x7FFFFF) >> 22) + 0x38000 + (shifted / 0x177)
-           + (shifted < 0 ? -1 : 0);
+    //
+    // Masked even, because `voice_pitch_block_init` ends `*(uint *)(param_1 + 0xb8) = uVar4 &
+    // 0xfffffffe` and `PitchRamp` does the same. Without it this diagnostic prints a number one
+    // above what the module holds and what this engine actually renders with, which reads as a
+    // discrepancy when there is none -- it cost an afternoon once.
+    return (((milli_semitones & 0x7FFFFF) >> 22) + 0x38000 + (shifted / 0x177)
+            + (shifted < 0 ? -1 : 0))
+           & ~1;
 }
 
 /// Prints the pitch chain for one note, term by term, without rendering anything.
