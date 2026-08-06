@@ -204,7 +204,21 @@ RenderedNote NoteRenderer::render_drum_note(int note,
     // indexed from the stored plane plus the NRPN offset in semitones, not from the plane after the
     // override has doubled that offset into it.
     const DrumKey kit_key = impl_->drums.key(note, kit);
-    const DrumKey key = DrumKeyOverrides::apply(kit_key, drum_pitch, drum_pan);
+    DrumKey key = DrumKeyOverrides::apply(kit_key, drum_pitch, drum_pan);
+
+    // A zero on the pan plane is GS RND, and the plane is only whole here -- the override has just
+    // been folded onto the kit's own value, which is what `tvf_env_prep @ 180060620` reads. Most of
+    // the cymbals in the GM kits ship a zero and so reposition on every hit with no override sent;
+    // measured against the module, a Standard-kit crash struck fourteen times lands on fourteen
+    // different positions, and they are the top seven bits of successive draws.
+    //
+    // One draw per hit, and only for a zero plane: a key that sits anywhere else must leave the
+    // shared generator where it found it. This path renders one note at a time, so the draw is the
+    // only consumer and its position in the sequence is not in question the way it is under
+    // polyphony -- see `ToneGenerator::Impl::spend_voice_setup_draws` for that side.
+    if (key.pan == DrumKeyOverrides::random_pan) {
+        key.pan = impl_->noise.next_pan();
+    }
 
     // The ring stretches with the coarse pitch, and the hold has to stretch with it: the hold is
     // where note-off lands, and both the TVA and TVF envelopes are sized from it. Leaving it at the

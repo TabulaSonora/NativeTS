@@ -1,7 +1,6 @@
 #pragma once
 
 #include "tabulasonora/drum_kit_table.hpp"
-#include "tabulasonora/engine_noise.hpp"
 #include "tabulasonora/smf_reader.hpp"
 
 #include <array>
@@ -47,6 +46,18 @@ private:
 /// Per-part coarse-pitch and panpot overrides, set by NRPN.
 ///
 /// Drum keys only: a melodic part never reaches these.
+///
+/// **Random pan is not resolved here**, and once was. A `pan_for_hit` on this class drew a position
+/// whenever the *override* was `random_pan`, which is the wrong place for the decision twice over.
+/// The engine tests the pan plane *after* the override has been folded onto it (`tvf_env_prep @
+/// 180060620` reads `kit[0x280 + key]`), so a key whose kit record already ships a zero repositions
+/// on every hit with no override in sight -- which is most of the cymbals in the GM kits, and which
+/// this class cannot see because it never reads a kit record. The part's own panpot reaches the same
+/// draw first, and this class cannot see that either.
+///
+/// So the draw belongs where the plane is whole: `ToneGenerator::Impl::start_drum` on the realtime
+/// path, `NoteRenderer::render_drum_note` on the offline one. What this class stores is the
+/// override, which is what `NoteRecord::drum_pan` has always said it was.
 class DrumKeyOverrides {
 public:
     /// Data-entry value meaning no change.
@@ -119,15 +130,6 @@ public:
     /// The receive-switch overrides for a key, or nothing when it follows the kit.
     [[nodiscard]] std::optional<bool> rx_note_off(int note) const noexcept;
     [[nodiscard]] std::optional<bool> rx_note_on(int note) const noexcept;
-
-    /// Resolves the panpot for one strike, spreading a randomly-panned key.
-    ///
-    /// The spread is the engine's own: a draw from the shared generator, reduced to a pan position
-    /// by its top seven bits. What still cannot match is the *sequence* under polyphony, since that
-    /// depends on how many voices consume draws and in what order.
-    ///
-    /// Consumes a draw for a randomly-panned key, so call it once per strike.
-    [[nodiscard]] std::optional<int> pan_for_hit(int note, EngineNoise& noise) const;
 
     /// Layers a latched pair of overrides over a key read from the kit record.
     ///

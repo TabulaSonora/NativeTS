@@ -192,15 +192,6 @@ std::optional<int> DrumKeyOverrides::pan(int note) const noexcept
     return pan_[static_cast<std::size_t>(note)];
 }
 
-std::optional<int> DrumKeyOverrides::pan_for_hit(int note, EngineNoise& noise) const
-{
-    const std::optional<int> held = pan(note);
-    if (!held) {
-        return std::nullopt;
-    }
-    return *held != random_pan ? *held : noise.next_pan();
-}
-
 DrumKey
 DrumKeyOverrides::apply(DrumKey key, int pitch_offset_steps, std::optional<int> pan_value) noexcept
 {
@@ -254,10 +245,6 @@ struct State {
     std::array<int, Sequence::channel_count> nrpn_lsb{};
     std::array<bool, Sequence::channel_count> data_entry_is_nrpn{};
     std::array<DrumKeyOverrides, Sequence::channel_count> drum_keys;
-    // Random pan is resolved while the sequence is built rather than at render time, so this path
-    // needs its own generator. It starts from the engine's reset state, which keeps a render of the
-    // same file reproducible.
-    EngineNoise noise;
     std::int64_t last_position = 0;
 
     void close_note(int channel, int note, std::int64_t off_position);
@@ -609,7 +596,7 @@ Sequence build(std::span<const MidiEvent> events)
                                               event.position,
                                               event.data2,
                                               overrides.pitch_offset(event.data1),
-                                              overrides.pan_for_hit(event.data1, state.noise)});
+                                              overrides.pan(event.data1)});
                 break;
             }
             [[fallthrough]];
