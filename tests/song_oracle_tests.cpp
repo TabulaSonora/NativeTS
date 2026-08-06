@@ -222,10 +222,27 @@ constexpr std::array<KnownDeviation, 19> known_deviations{{
     // it is not obviously the same lead as the three above. Worth noting that this is also the row
     // carrying the worst 63 Hz band: a song can be light in the low end and misplaced across the
     // image for one reason or for two, and nothing measured here yet says which.
-    {"bigben.mid", {1.6, 0.03, 8.7, 6.0, 0.294}, "lead; worst 63 Hz band and worst stereo balance"},
+    {"bigben.mid", {1.6, 0.03, 8.7, 6.0, 0.294},
+     "lead; worst 63 Hz band, worst stereo balance, and clicks on note boundaries"},
     {"it_must_have_been_love.mid", {1.7, 0.025, 3.0, 6.0}, "lead"},
     {"rainy.mid", {1.3, 0.03, 3.3, 6.0, 0.080}, "lead"},
-    {"dreaming_i_was_dreaming.mid", {1.0, 0.02, 3.0, 6.0}, "lead"},
+
+    // **Both of these click on note boundaries, and the module does not.** Heard rather than
+    // measured, and that is the point worth recording: `dreaming_i_was_dreaming` is inside every
+    // bound on this table and still audibly wrong, so its row is a debt the numbers here cannot
+    // see. A click is a step discontinuity -- broadband, and over in a sample or two. None of the
+    // five measures can catch that. The octave bands average across a window a quarter of the way
+    // in, the RMS envelope is 64 windows over a whole song, and peak is a single sample that a
+    // click can raise without anything else moving. `bigben` is the one where it shows at all: its
+    // peak reads 0.791 against the module's 0.716, which is what a transient the module does not
+    // have looks like from the outside.
+    //
+    // So this is a lead for the *engine* and a gap in the *gate* at once, and neither should wait
+    // on the other. Somewhere a level or a phase is stepping where the module ramps -- a voice
+    // starting without its envelope's first ramp applied, or a steal cutting one without release.
+    // Whatever finds it will need a measure that sees sample-to-sample discontinuity, since by
+    // construction nothing here will.
+    {"dreaming_i_was_dreaming.mid", {1.0, 0.02, 3.0, 6.0}, "lead; clicks on note boundaries"},
     {"onestop.mid", {1.0, 0.015, 3.0, 6.0}, "peak only, and only since drums ring their full length"},
 
     {"roland_sc88_y03.mid", {5.0, 0.33, 9.8, 7.0}, "bass missing, same at every map"},
