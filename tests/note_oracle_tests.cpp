@@ -395,6 +395,14 @@ constexpr std::array<KnownDrumDeviation, 18> known_drum_deviations{{
     // reach port A, and a single note never approaches the voice limit anyway.
     options.ports = 1;
     options.map = static_cast<ToneMap>(which.map);
+
+    // The module's timing, because the module is what this is being compared against and it has no
+    // switch for any of it. It always stages a message through its rings before a part sees it, and
+    // it always runs its output stage even at its own rate. Rendering without those and then
+    // explaining the difference by hand is how two separate findings got misattributed; the point
+    // of a gate against the oracle is that it does not need explaining.
+    options.event_delay_blocks = 4;
+    options.bypass_output_filter = false;
     ToneGenerator generator{notes, options};
 
     // The harness renders 8 x 512 frames after the reset and throws them away. Nothing sounds yet,

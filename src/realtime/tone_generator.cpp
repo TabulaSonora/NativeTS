@@ -707,13 +707,18 @@ void ToneGenerator::send(const MidiEvent& message)
 
 void ToneGenerator::send(int port, const MidiEvent& message)
 {
+    send_at(immediately, port, message);
+}
+
+void ToneGenerator::send_at(int sample_offset, int port, const MidiEvent& message)
+{
     if (message.kind == MidiEventKind::sysex) {
         if (!message.sysex.empty()) {
-            send_sysex(port, message.sysex);
+            send_sysex_at(sample_offset, port, message.sysex);
         }
         return;
     }
-    send_channel(port, message.status, message.data1, message.data2);
+    send_channel_at(sample_offset, port, message.status, message.data1, message.data2);
 }
 
 void ToneGenerator::send_channel(int status, int data1, int data2)

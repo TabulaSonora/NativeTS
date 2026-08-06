@@ -337,6 +337,13 @@ public:
     /// Applies one MIDI event on a port. Anything past `ports()` folds onto the ports that exist.
     void send(int port, const MidiEvent& message);
 
+    /// Applies one MIDI event at a position inside the buffer about to be rendered.
+    ///
+    /// The form a sequencer wants: it knows where each event falls, and handing that over lets the
+    /// engine place it the way the module does rather than quantising it to a render boundary
+    /// first. Offset leads, as it does on the other stamped sends.
+    void send_at(int sample_offset, int port, const MidiEvent& message);
+
     /// Applies one channel voice message on port A.
     ///
     /// The equivalent of the module's `TG_ShortMidiIn`, which builds a packet with the port field

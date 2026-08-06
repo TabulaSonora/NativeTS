@@ -63,8 +63,24 @@ void SequencePlayer::all_notes_off()
 
 void SequencePlayer::dispatch()
 {
-    while (cursor_ < events_.size() && events_[cursor_].position <= position_) {
-        generator_->send(events_[cursor_].port, events_[cursor_]);
+    dispatch_within(0);
+}
+
+void SequencePlayer::dispatch_within(std::int64_t samples)
+{
+    // Everything falling inside the stretch about to be rendered, each stamped with where it falls
+    // relative to that stretch's start.
+    //
+    // This is the shape the module is driven in: a host hands `TG_ShortMidiIn` a buffer's worth of
+    // messages with their offsets and then calls `TG_Process` once, and the engine places them
+    // itself. Dispatching on a render boundary instead -- which is what this did, a block at a time
+    // -- quantises every event to that boundary before the engine ever sees it, so the engine's own
+    // placement can never be observed and any error in it is silently absorbed.
+    const std::int64_t limit = position_ + samples;
+    while (cursor_ < events_.size() && events_[cursor_].position <= limit) {
+        const auto offset = static_cast<int>(
+            std::max<std::int64_t>(0, events_[cursor_].position - position_));
+        generator_->send_at(offset, events_[cursor_].port, events_[cursor_]);
         ++cursor_;
     }
 }
@@ -127,22 +143,33 @@ void SequencePlayer::render(std::span<float> left, std::span<float> right)
         throw std::invalid_argument("The two channels must be the same length.");
     }
 
-    for (std::size_t start = 0; start < left.size(); start += ToneGenerator::block_size) {
-        const auto count = std::min<std::size_t>(ToneGenerator::block_size, left.size() - start);
+    for (std::size_t start = 0; start < left.size();) {
+        // How far this pass can run. Not a fixed block: events are handed over with the offset
+        // they fall at, and the engine stamps that to the millisecond -- a 32-sample pass is under
+        // one, so everything would round to the top of it and the engine's own placement would
+        // never be exercised. The bound is the loop end instead, which is the only position that
+        // has to land exactly.
+        auto count = left.size() - start;
+        if (loop_ && position_ < loop_->end) {
+            count = std::min<std::size_t>(count,
+                                          static_cast<std::size_t>(loop_->end - position_));
+        }
+        count = std::max<std::size_t>(count, 1);
 
         if (finished_) {
             std::fill_n(left.begin() + static_cast<std::ptrdiff_t>(start), count, 0.0F);
             std::fill_n(right.begin() + static_cast<std::ptrdiff_t>(start), count, 0.0F);
+            start += count;
             continue;
         }
 
-        // Events land on the block boundary, which is the grid the engine itself quantises them
-        // to. A loop jump lands between blocks, and dispatches again from wherever it left the
-        // cursor.
-        dispatch();
+        // Everything inside this pass, each stamped where it falls -- the shape the module is
+        // driven in, and the only one that lets it place an event itself. A loop jump lands on the
+        // pass boundary and dispatches again from wherever it left the cursor.
         if (handle_loop_point()) {
-            dispatch();
+            count = std::min(count, left.size() - start);
         }
+        dispatch_within(static_cast<std::int64_t>(count) - 1);
 
         generator_->render(left.subspan(start, count), right.subspan(start, count));
 
@@ -166,6 +193,7 @@ void SequencePlayer::render(std::span<float> left, std::span<float> right)
 
         position_ += static_cast<std::int64_t>(count);
         rendered_ += static_cast<std::int64_t>(count);
+        start += count;
     }
 }
 

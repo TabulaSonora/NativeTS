@@ -120,6 +120,9 @@ private:
     /// Dispatches every pending event at the current position.
     void dispatch();
 
+    /// Dispatches everything inside the next `samples`, stamped by where each event falls.
+    void dispatch_within(std::int64_t samples);
+
     /// Handles a loop-end arrival: counts the pass, starts the fade when the target is reached,
     /// and jumps. Returns whether a jump happened.
     bool handle_loop_point();
