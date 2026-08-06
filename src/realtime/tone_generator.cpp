@@ -1173,7 +1173,7 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
     // Universal master volume: F0 7F 7F 04 01 ll mm F7.
     if (bytes.size() >= 8 && bytes[0] == 0xF0 && bytes[1] == 0x7F && bytes[3] == 0x04
         && bytes[4] == 0x01) {
-        for (Part& part : impl_->parts) {
+        for (Part& part : parts) {
             part.set_master(bytes[6]);
         }
         return;
@@ -1187,20 +1187,20 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
         if (bytes[4] == 0x01 || bytes[4] == 0x03) {
             // A GM reset leaves XG mode as well as resetting, and `leave_xg_mode` already resets,
             // so the two must not both run.
-            if (impl_->xg_mode) {
-                impl_->leave_xg_mode();
+            if (xg_mode) {
+                leave_xg_mode();
             } else {
-                impl_->stream_reset();
+                stream_reset();
             }
         } else if (bytes[4] == 0x02) {
-            impl_->leave_xg_mode();
+            leave_xg_mode();
         }
         return;
     }
 
     // Yamaha XG: F0 43 1n 4C <3-byte address> <data...> F7.
     if (bytes.size() >= 8 && bytes[0] == 0xF0 && bytes[1] == 0x43) {
-        impl_->xg_sysex(bytes);
+        xg_sysex(bytes);
         return;
     }
 
@@ -1212,7 +1212,7 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
     // Any Roland message ends XG mode, before it is itself acted on. The module does this without
     // inspecting the message at all, so a file that interleaves the two dialects does not layer
     // them -- it flips the instrument back and forth, resetting every part each time.
-    impl_->leave_xg_mode();
+    leave_xg_mode();
 
     // RQ1 asks for a dump, and the engine has no MIDI output to answer on.
     if (bytes[4] != 0x12) {
@@ -1240,7 +1240,7 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
 
     // System mode set: 00 00 7F selects mode 1 or 2, and either way arrives as a full reset.
     if (a1 == 0x00 && a2 == 0x00 && a3 == 0x7F) {
-        impl_->stream_reset();
+        stream_reset();
         return;
     }
 
@@ -1257,26 +1257,26 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
                 if (data.size() >= 4) {
                     const int raw =
                         ((data[0] * 0x100 + data[2]) * 0x10) + (data[1] * 0x100) + data[3];
-                    impl_->master_tune = std::clamp(raw, 0x18, 0x7E8);
+                    master_tune = std::clamp(raw, 0x18, 0x7E8);
                 }
                 break;
             case 0x04:
-                for (Part& part : impl_->parts) {
+                for (Part& part : parts) {
                     part.set_master(value);
                 }
                 break;
             case 0x05:
                 // Master key shift, clamped to +-24 semitones (`sysex_master_key_shift`).
-                impl_->master_key_shift = std::clamp(value, 0x28, 0x58);
+                master_key_shift = std::clamp(value, 0x28, 0x58);
                 break;
             case 0x06:
                 // Latched but not yet consumed -- the mixer has no master pan stage.
-                impl_->master_pan = value;
+                master_pan = value;
                 break;
             case 0x7F:
                 // GS reset (00). The other defined value, 7F, exits GS mode; both return the
                 // stream state to power-on.
-                impl_->stream_reset();
+                stream_reset();
                 break;
             default:
                 break;
@@ -1288,33 +1288,33 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
             // Patch common: the effect macros with their engine-checked ranges, and the parameter
             // blocks behind them.
             if ((a3 == 0x30 || a3 == 0x31) && value <= 7) {
-                impl_->reverb_type =
-                    impl_->options.reverb_type ? impl_->options.reverb_type : std::optional{value};
-                impl_->load_macro_rows();
+                reverb_type =
+                    options.reverb_type ? options.reverb_type : std::optional{value};
+                load_macro_rows();
             } else if (a3 == 0x38 && value <= 7) {
-                impl_->chorus_type =
-                    impl_->options.chorus_type ? impl_->options.chorus_type : std::optional{value};
-                impl_->load_macro_rows();
+                chorus_type =
+                    options.chorus_type ? options.chorus_type : std::optional{value};
+                load_macro_rows();
             } else if (a3 == 0x50 && value <= 9) {
-                impl_->delay_type =
-                    impl_->options.delay_type ? impl_->options.delay_type : std::optional{value};
+                delay_type =
+                    options.delay_type ? options.delay_type : std::optional{value};
             } else if (a3 >= 0x31 && a3 <= 0x37) {
                 // Reverb parameters, straight into the row the macro filled in. Level is byte [2]
                 // and is kept out of the network -- see `reverb_level`.
-                impl_->reverb_row[static_cast<std::size_t>(a3 - 0x31)] =
+                reverb_row[static_cast<std::size_t>(a3 - 0x31)] =
                     static_cast<std::uint8_t>(value);
                 if (a3 == 0x33) {
-                    impl_->reverb_level = value;
+                    reverb_level = value;
                 } else {
-                    impl_->reverb_row_edited = true;
+                    reverb_row_edited = true;
                 }
             } else if (a3 >= 0x39 && a3 <= 0x40) {
-                impl_->chorus_row[static_cast<std::size_t>(a3 - 0x39)] =
+                chorus_row[static_cast<std::size_t>(a3 - 0x39)] =
                     static_cast<std::uint8_t>(value);
                 if (a3 == 0x3A) {
-                    impl_->chorus_level = value;
+                    chorus_level = value;
                 } else {
-                    impl_->chorus_row_edited = true;
+                    chorus_row_edited = true;
                 }
             }
             // Recognised and left alone: the patch name (00-0F) and voice reserve (10-1F) have no
@@ -1330,16 +1330,16 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
             // setter applies the engine's own range test and ignores anything outside it.
             switch (a3) {
             case 0x00:
-                impl_->equalizer.set_low_frequency(value);
+                equalizer.set_low_frequency(value);
                 break;
             case 0x01:
-                impl_->equalizer.set_low_gain(value);
+                equalizer.set_low_gain(value);
                 break;
             case 0x02:
-                impl_->equalizer.set_high_frequency(value);
+                equalizer.set_high_frequency(value);
                 break;
             case 0x03:
-                impl_->equalizer.set_high_gain(value);
+                equalizer.set_high_gain(value);
                 break;
             default:
                 break;
@@ -1353,18 +1353,18 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
             // the type's defaults — 03-16 are its twenty parameters, 17-19 the block's common
             // send levels, and 1B-1E the control assignments. A DT1 spanning several addresses
             // walks them a byte at a time, the way the engine's per-address state machine does.
-            if (!impl_->options.efx) {
+            if (!options.efx) {
                 return;
             }
-            impl_->ensure_efx();
+            ensure_efx();
             int address = a3;
             for (const std::uint8_t byte : data) {
                 if (address == 0x00) {
-                    impl_->efx_type_msb = byte;
+                    efx_type_msb = byte;
                 } else if (address == 0x01) {
-                    impl_->efx->select_type(impl_->efx_type_msb, byte);
+                    efx->select_type(efx_type_msb, byte);
                 } else if (address >= 0x03) {
-                    impl_->efx->set_parameter(address, byte);
+                    efx->set_parameter(address, byte);
                 }
                 ++address;
             }
@@ -1374,9 +1374,9 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
         if ((a2 & 0xF0) == 0x10) {
             // Part parameters, port-relative block addressing.
             const int index =
-                impl_->part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
-            impl_->gs_part_parameter(
-                index, impl_->parts[static_cast<std::size_t>(index)], a3, data);
+                part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+            gs_part_parameter(
+                index, parts[static_cast<std::size_t>(index)], a3, data);
             return;
         }
 
@@ -1385,8 +1385,8 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
             // through the insertion EFX instead of the dry mix. `00`/`01` are the SysEx form of
             // the tone map number, which this engine takes from its options and CC#32 instead.
             const int index =
-                impl_->part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
-            Part& part = impl_->parts[static_cast<std::size_t>(index)];
+                part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+            Part& part = parts[static_cast<std::size_t>(index)];
             if (a3 == 0x20) {
                 part.eq_enabled = value != 0;
             } else if (a3 == 0x38) {
@@ -1394,10 +1394,10 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
                 // fills the eight slots before it from the tone and forces this one back to
                 // centre, so unlike `40 1x 38` it does not survive a program change.
                 part.envelope_delay_tone = value;
-            } else if (a3 == 0x22 && impl_->options.efx) {
+            } else if (a3 == 0x22 && options.efx) {
                 part.efx_enabled = value != 0;
                 if (part.efx_enabled) {
-                    impl_->ensure_efx();
+                    ensure_efx();
                 }
             }
             return;
@@ -1407,8 +1407,8 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
             // The controller assignment matrix (`sysex_part_control_matrix`). The address splits
             // into a source in the high nibble and a destination in the low one.
             const int index =
-                impl_->part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
-            Part& part = impl_->parts[static_cast<std::size_t>(index)];
+                part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
+            Part& part = parts[static_cast<std::size_t>(index)];
 
             const int source = a3 >> 4;
             const int destination = a3 & 0x0F;
@@ -1437,7 +1437,7 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
         // Drum setup: a2 is (map << 4) | parameter, a3 the first key. The map nibble picks which
         // of the two per-map setup buffers the module writes -- bit 12 of the address index, so
         // only its low bit counts -- and parts read the buffer of the map they are assigned to.
-        impl_->gs_drum_setup(block_port, (a2 >> 4) & 1, a2 & 0x0F, a3, data);
+        gs_drum_setup(block_port, (a2 >> 4) & 1, a2 & 0x0F, a3, data);
         return;
     }
 }
