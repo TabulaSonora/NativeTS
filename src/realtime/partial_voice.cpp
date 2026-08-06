@@ -53,6 +53,10 @@ void PartialVoice::start(VoiceSetup&& setup)
 
     reader_.start(*setup.wave);
     filter_.reset();
+    // Along with the filter state: a slot that has just been stolen must not glide from the
+    // coefficient the previous note ended on.
+    frequency_ramp_ = CoefficientRamp{};
+    damping_ramp_ = DampingRamp{};
 
     amplitude_ = std::move(setup.amplitude);
     cutoff_ = std::move(setup.cutoff);
@@ -262,7 +266,10 @@ void PartialVoice::render(std::span<float> destination,
         auto value = static_cast<double>(reader_.next(slot_ratio_));
 
         if (tap_ != FilterTap::bypass) {
-            value = filter_.process(value, frequency_, damping_, tap_);
+            // Stepped per sample rather than held for the block: the engine glides its frequency
+            // coefficient, and at high resonance a per-block step relocates a ringing filter's pole
+            // and re-excites it once every control tick.
+            value = filter_.process(value, frequency_ramp_.step(), damping_ramp_.step(), tap_);
         }
 
         double gain =
@@ -376,8 +383,31 @@ void PartialVoice::control(double bend_milli_semitones,
 
         const int units = tvf_->cutoff_units(total / control_block, resonance_byte_);
         const auto coefficients = tvf_->coefficients(units, resonance_byte_, filter_type_);
-        frequency_ = coefficients.frequency;
-        damping_ = coefficients.damping;
+
+        // The ramp walks the accumulator the engine walks, not the decoded coefficient: the decode
+        // drops three bits, so gliding the double between the same two endpoints would trace a
+        // different curve.
+        //
+        // `coefficients` may have clamped `f` down to the stability ceiling `q` selects. Where it
+        // did, the ramp is aimed at the clamped value instead; the ramp only ever sits between its
+        // own start and its target, so a target under the ceiling keeps every step under it too.
+        const int raw = tvf_->frequency_accumulator(units);
+        const int target =
+            coefficients.frequency < CoefficientRamp::decode(raw)
+                ? static_cast<int>(coefficients.frequency * 16384.0) << CoefficientRamp::decode_shift
+                : raw;
+
+        const int damping = DampingRamp::encode(coefficients.damping);
+
+        if (frequency_ramp_.is_seeded()) {
+            frequency_ramp_.retarget(target);
+            damping_ramp_.retarget(damping);
+        } else {
+            // A voice's first block starts *at* its coefficients rather than gliding up from
+            // whatever the previous occupant of this slot left behind.
+            frequency_ramp_.seed(target);
+            damping_ramp_.seed(damping);
+        }
     }
 }
 

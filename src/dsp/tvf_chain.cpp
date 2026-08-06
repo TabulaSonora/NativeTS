@@ -79,7 +79,7 @@ int TvfChain::cutoff_units(double cutoff15, int resonance_byte_value) const noex
            << 2;
 }
 
-double TvfChain::frequency_coefficient(int units) const noexcept
+int TvfChain::frequency_accumulator(int units) const noexcept
 {
     const int x = std::clamp(units, 0, 0x3FFFF);
     const int index = (x >> 6) & 0xFF;
@@ -93,7 +93,12 @@ double TvfChain::frequency_coefficient(int units) const noexcept
         >> 6;
     value >>= 0xF - ((x >> 0xE) & 0xF);
 
-    return static_cast<double>(std::min<std::int64_t>(0x7FFF, value >> 3)) / 16384.0;
+    return static_cast<int>(value);
+}
+
+double TvfChain::frequency_coefficient(int units) const noexcept
+{
+    return CoefficientRamp::decode(frequency_accumulator(units));
 }
 
 int TvfChain::damping_raw(int units, int resonance_byte_value, int filter_type) const noexcept

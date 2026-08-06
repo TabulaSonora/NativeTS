@@ -252,6 +252,12 @@ private:
     /// cycles.
     double cutoff_offset_ = 0.0;
 
+    /// The filter's frequency coefficient, gliding rather than stepping -- `voice_ctrl_ramp_c`.
+    CoefficientRamp frequency_ramp_;
+
+    /// And its damping coefficient -- `voice_ctrl_ramp_d`, a different law on the same clock.
+    DampingRamp damping_ramp_;
+
     /// The partial's own resonance byte, kept so `set_part_resonance` can redo stage A.
     int partial_resonance_ = 0x40;
     int resonance_byte_ = 0x40;
@@ -337,8 +343,6 @@ private:
     double slot_ratio_ = 1.0;
     int slot_remaining_ = 0;
     double tremolo_ = 1.0;
-    double frequency_ = 0.0;
-    double damping_ = 0.0;
     double pitch_modulation_ = 0.0;
 };
 

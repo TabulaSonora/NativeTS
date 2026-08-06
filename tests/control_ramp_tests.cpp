@@ -224,3 +224,200 @@ TEST_CASE("a part's chorus and delay sends cross full scale in 127 ticks", "[con
     }
     CHECK(part.chorus_send_level() == Catch::Approx(64.0).margin(1e-9));
 }
+
+// The filter's frequency-coefficient ramp, against the engine's own trace.
+//
+// The oracle is `scdec svfslew 81 6 60 100 20 110 100 32 40 xg`: program 81 on XG bank LSB 6 -- the
+// OB saw two channels of `MM6_-_MrX2010XG.mid` play -- held while CC#74 steps from 20 to 110, with
+// `g_svf_f_coef` read every 32 samples. The same mode reads the ramp's own slot in
+// `g_voice_ramp_cutoff`, which is where the numbers below come from rather than being inferred from
+// the decoded trace.
+TEST_CASE("the coefficient ramp walks the engine's own line", "[dsp]")
+{
+    // Read off the live ramp mid-glide: current 62976, target 181070, rate 204, step 4194.
+    constexpr int start = 12648;
+    constexpr int target = 181070;
+
+    SECTION("the step is fixed when the target is set, and it is the engine's")
+    {
+        CoefficientRamp ramp;
+        ramp.seed(start);
+        ramp.retarget(target);
+
+        const int before = ramp.current();
+        for (int i = 0; i < CoefficientRamp::samples_per_update; ++i) {
+            (void)ramp.step();
+        }
+        CHECK(ramp.current() - before == 4194);
+
+        // And it stays fixed rather than rescaling from the shrinking distance, which is the whole
+        // difference between this ramp and `ControlRamp`. A second update moves exactly as far.
+        const int after_one = ramp.current();
+        for (int i = 0; i < CoefficientRamp::samples_per_update; ++i) {
+            (void)ramp.step();
+        }
+        CHECK(ramp.current() - after_one == 4194);
+    }
+
+    SECTION("the decoded coefficient advances by the engine's own increment")
+    {
+        CoefficientRamp ramp;
+        ramp.seed(start);
+        ramp.retarget(target);
+
+        // The trace advances 0.127991 every 32 samples -- four updates -- in even steps.
+        double previous = ramp.value();
+        for (int chunk = 0; chunk < 8; ++chunk) {
+            double value = 0.0;
+            for (int n = 0; n < 32; ++n) {
+                value = ramp.step();
+            }
+            INFO("chunk " << chunk);
+            CHECK(value - previous == Catch::Approx(0.127991).margin(1e-05));
+            previous = value;
+        }
+    }
+
+    SECTION("it arrives on the target and stops there")
+    {
+        CoefficientRamp ramp;
+        ramp.seed(start);
+        ramp.retarget(target);
+
+        // 168422 to close at 4194 an update is 41 updates, 328 samples.
+        for (int n = 0; n < 328; ++n) {
+            (void)ramp.step();
+        }
+        CHECK(ramp.current() == target);
+        CHECK_FALSE(ramp.is_active());
+
+        // And holds, rather than walking past it the way a fixed step would.
+        for (int n = 0; n < 320; ++n) {
+            (void)ramp.step();
+        }
+        CHECK(ramp.current() == target);
+    }
+
+    SECTION("only the climb needs a minimum step")
+    {
+        // Descending, the arithmetic shift of a negative product already rounds away from zero, so
+        // a tiny distance still moves. Climbing, it truncates to nothing and would stall, which is
+        // why the engine forces one and not the other.
+        CoefficientRamp climbing;
+        climbing.seed(1000);
+        climbing.retarget(1001);
+        for (int n = 0; n < CoefficientRamp::samples_per_update; ++n) {
+            (void)climbing.step();
+        }
+        CHECK(climbing.current() == 1001);
+
+        CoefficientRamp falling;
+        falling.seed(1001);
+        falling.retarget(1000);
+        for (int n = 0; n < CoefficientRamp::samples_per_update; ++n) {
+            (void)falling.step();
+        }
+        CHECK(falling.current() == 1000);
+    }
+
+    SECTION("a zero accumulator decodes to the engine's floor, not to silence")
+    {
+        CHECK(CoefficientRamp::decode(0) == CoefficientRamp::floor_value);
+        CHECK(CoefficientRamp::decode(start) == Catch::Approx(0.096497).margin(1e-06));
+        CHECK(CoefficientRamp::decode(target) == Catch::Approx(1.381409).margin(1e-06));
+    }
+}
+
+// The damping ramp, which shares `ControlRamp`'s law rather than its neighbour's.
+//
+// `scdec svfslew 81 6 60 100 64 64 100 32 14 xg 0` holds the cutoff and steps CC#71 from 100 to 0,
+// so only the resonance moves. The trace decays geometrically -- successive increments in a
+// constant ratio -- where the frequency ramp's are even, which is how the two laws tell themselves
+// apart. The rate read off the live slot is 0x100.
+TEST_CASE("the damping ramp approaches exponentially at the engine's rate", "[dsp]")
+{
+    SECTION("the rate predicts the trace's decay")
+    {
+        // Four updates to a 32-sample chunk, each closing 256/8192 of what is left.
+        const double per_update = 1.0 - (static_cast<double>(DampingRamp::rate_word) / 8192.0);
+        const double per_chunk = per_update * per_update * per_update * per_update;
+
+        // The measured ratio between successive 32-sample increments is 0.880.
+        CHECK(per_chunk == Catch::Approx(0.880).margin(0.002));
+    }
+
+    SECTION("successive increments shrink, rather than staying even")
+    {
+        // q at resonance byte 4 up to q at 127 -- 0.0625 to 1.984375, the range CC#71 spans.
+        DampingRamp ramp;
+        ramp.seed(DampingRamp::encode(0.0625));
+        ramp.retarget(DampingRamp::encode(1.984375));
+
+        std::array<double, 6> increments{};
+        double previous = ramp.value();
+        for (std::size_t i = 0; i < increments.size(); ++i) {
+            double value = 0.0;
+            for (int n = 0; n < 32; ++n) {
+                value = ramp.step();
+            }
+            increments[i] = value - previous;
+            previous = value;
+        }
+
+        for (std::size_t i = 1; i < increments.size(); ++i) {
+            INFO("increment " << i);
+            CHECK(increments[i] < increments[i - 1]);
+            // And by the rate's own ratio, which is what makes this the engine's curve rather than
+            // merely a decelerating one.
+            CHECK(increments[i] / increments[i - 1] == Catch::Approx(0.880).margin(0.02));
+        }
+    }
+
+    SECTION("it arrives, because the minimum step stops the approach stalling")
+    {
+        DampingRamp ramp;
+        ramp.seed(DampingRamp::encode(0.0625));
+        ramp.retarget(DampingRamp::encode(1.984375));
+
+        // A purely proportional approach never lands; the 0x400 floor is what makes it terminate.
+        for (int n = 0; n < 32000; ++n) {
+            (void)ramp.step();
+        }
+        CHECK_FALSE(ramp.is_active());
+        CHECK(ramp.value() == Catch::Approx(1.984375).margin(1e-04));
+    }
+
+    SECTION("the two coefficient ramps do not share a law")
+    {
+        // Same endpoints through both: the frequency ramp's increments are even and the damping
+        // ramp's decay. Reading the engine's two functions as one would have been the easy mistake.
+        CoefficientRamp linear;
+        linear.seed(DampingRamp::encode(0.0625));
+        linear.retarget(DampingRamp::encode(1.984375));
+
+        DampingRamp exponential;
+        exponential.seed(DampingRamp::encode(0.0625));
+        exponential.retarget(DampingRamp::encode(1.984375));
+
+        const auto advance = [](auto& ramp) {
+            double value = 0.0;
+            for (int n = 0; n < 32; ++n) {
+                value = ramp.step();
+            }
+            return value;
+        };
+
+        // On the accumulator rather than the decoded value: the decode drops three bits, so two
+        // exactly equal accumulator steps can still decode a single LSB apart.
+        const int linear_start = linear.current();
+        (void)advance(linear);
+        const int linear_first = linear.current() - linear_start;
+        (void)advance(linear);
+        const int linear_second = linear.current() - linear_start - linear_first;
+        CHECK(linear_second == linear_first);
+
+        const double exp_first = advance(exponential) - 0.0625;
+        const double exp_second = advance(exponential) - 0.0625 - exp_first;
+        CHECK(exp_second < exp_first * 0.95);
+    }
+}

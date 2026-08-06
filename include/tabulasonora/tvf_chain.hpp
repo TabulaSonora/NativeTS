@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tabulasonora/control_ramp.hpp"
 #include "tabulasonora/envelope_machine.hpp"
 #include "tabulasonora/part_modifiers.hpp"
 #include "tabulasonora/partial_parameters.hpp"
@@ -85,6 +86,13 @@ public:
     /// The ceiling at neutral resonance times four is 245,760 — the "fully open" constant an
     /// earlier calibration measured empirically. It is a ceiling, not a saturation of the sum.
     [[nodiscard]] int cutoff_units(double cutoff15, int resonance_byte) const noexcept;
+
+    /// The integer `f` is carried as between the exponential table and the filter.
+    ///
+    /// This is what `voice_ctrl_ramp_c` accumulates, so it is the quantity a ramp has to walk in:
+    /// gliding the decoded double instead would be a different curve, because the decode truncates
+    /// three bits off the bottom.
+    [[nodiscard]] int frequency_accumulator(int units) const noexcept;
 
     /// The filter's frequency coefficient `f`.
     ///

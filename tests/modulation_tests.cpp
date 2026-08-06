@@ -674,6 +674,22 @@ TEST_CASE("the part modify offsets reach the chains that consume them", "[dsp][s
         CHECK_THAT(tvf.damping_coefficient(units, 4, 0), WithinAbs(0.062500, 1e-09));
     }
 
+    SECTION("the frequency accumulator is the one the engine's ramp targets")
+    {
+        // `voice_ctrl_ramp_c` walks an integer accumulator, not the decoded coefficient, so the
+        // ramp is only exact if this integer is. Read off the live ramp slot with
+        // `scdec svfslew 81 6 60 100 20 110 100 32 3 xg`: at the cutoff units the DLL reports for
+        // that note (253428) its ramp targets exactly 181070.
+        //
+        // The decode drops three bits, so a coefficient that agrees to six places can still sit on
+        // a different accumulator -- which would make the ramp walk a slightly different line for
+        // the whole of a sweep. This pins the integer rather than the double.
+        CHECK(fixture.tvf().frequency_accumulator(253428) == 181070);
+
+        // And the decode of it is the coefficient the DLL's own trace ends on.
+        CHECK_THAT(fixture.tvf().frequency_coefficient(253428), WithinAbs(1.381409, 1e-06));
+    }
+
     SECTION("the cutoff offset is not in the base, because the live path adds it")
     {
         // `base_cutoff` is a property of the tone. The part's cutoff offset reaches the filter from

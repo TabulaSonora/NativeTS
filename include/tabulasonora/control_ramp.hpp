@@ -281,4 +281,241 @@ private:
     bool seeded_ = false;
 };
 
+/// The engine's anti-zipper smoother for the filter's frequency coefficient — `voice_ctrl_ramp_c`
+/// @`18005d8d0`.
+///
+/// The third kind of ramp in this file, and the third law. `ControlRamp` is exponential on a live
+/// error; this one is **linear**: the step is computed once when the target is set and then held,
+/// so the coefficient walks at a constant rate until it arrives. That is what the oracle trace
+/// shows — stepping CC#74 under a held note, `g_svf_f_coef` climbs in *even* increments of
+/// 0.127991 every 32 samples rather than in a decaying curve.
+///
+/// ```
+/// step    = (target − current) * rate >> 13,  at retarget, then held
+/// current += step, once per eight samples, clamped at the target
+/// f       = (current >> 3) / 16384
+/// ```
+///
+/// **The rate is one constant, not a per-partial word.** That mattered: an earlier port of these
+/// ramps was reverted partly because the rate lived in a voice field with no path back to any
+/// tone-table byte, so one guessed index had to stand for every partial. Read off the live ramp
+/// slot in `g_voice_ramp_cutoff` across six tones spanning five programs and four bank LSBs, the
+/// rate word is `0xCC` and the divider index zero every time. `0xCC` is the same 204 the part
+/// fader uses, and the eight-sample cadence is that ramp's too — the two differ in their law, not
+/// in their clock.
+///
+/// **Why it is audible.** Without it the coefficient jumps once per 320-sample control block. On a
+/// gentle filter that is a mild zipper, which is why it went unnoticed; at high resonance it is a
+/// different sound entirely, because each step relocates the pole of a ringing filter and
+/// re-excites it. `MM6_-_MrX2010XG.mid` drives CC#71 to 100 on its two saw channels, pinning the
+/// resonance byte on its floor of 4 — a Q of 16 — and then sweeps CC#74 3288 times per channel.
+/// Stepped, that is heard as the *resonance* sweeping rather than the cutoff.
+class CoefficientRamp {
+public:
+    /// The rate the engine closes the distance at, measured constant across tones.
+    static constexpr int rate_word = 0xCC;
+
+    /// The rate meets the distance thirteen bits down.
+    static constexpr int rate_shift = 13;
+
+    /// Samples between updates.
+    static constexpr int samples_per_update = 8;
+
+    /// The accumulator carries three bits below the coefficient's own.
+    static constexpr int decode_shift = 3;
+
+    /// The decoded coefficient is a 16-bit quantity over 2^14.
+    static constexpr int decode_max = 0x7FFF;
+    static constexpr double decode_scale = 1.0 / 16384.0;
+
+    /// What a zero accumulator decodes to. The engine spells this exception out rather than letting
+    /// it fall to 0.0, so a fully closed filter still has a coefficient the state matrix can use.
+    static constexpr double floor_value = 1e-05;
+
+    /// Turns an accumulator into the coefficient the filter runs on.
+    [[nodiscard]] static constexpr double decode(int accumulator) noexcept
+    {
+        if (accumulator == 0) {
+            return floor_value;
+        }
+        return static_cast<double>(std::min(decode_max, accumulator >> decode_shift)) * decode_scale;
+    }
+
+    /// Starts the ramp at an accumulator with no glide.
+    ///
+    /// A voice that begins part-way through a sweep starts where the sweep has got to, rather than
+    /// sliding up to it from wherever the previous voice in the slot left off.
+    void seed(int accumulator) noexcept
+    {
+        current_ = accumulator;
+        target_ = accumulator;
+        step_ = 0;
+        phase_ = 0;
+        active_ = false;
+        seeded_ = true;
+    }
+
+    [[nodiscard]] bool is_seeded() const noexcept { return seeded_; }
+
+    /// Points the ramp at a new accumulator and fixes the step it will walk at.
+    void retarget(int accumulator) noexcept
+    {
+        if (!seeded_) {
+            seed(accumulator);
+            return;
+        }
+        if (accumulator == target_) {
+            return;
+        }
+
+        target_ = accumulator;
+        step_ = static_cast<int>(
+            (static_cast<std::int64_t>(target_ - current_) * rate_word) >> rate_shift);
+
+        // Only the climb needs a floor. Descending, the arithmetic shift of a negative product
+        // already rounds away from zero, so the step can never stall at nothing; climbing, a small
+        // enough distance truncates to zero and would stall forever. The engine forces the one and
+        // not the other, and copying only half of that is what makes it exact.
+        if (step_ == 0 && current_ < target_) {
+            step_ = 1;
+        }
+        active_ = current_ != target_;
+    }
+
+    /// Advances one sample and returns the coefficient now in force.
+    [[nodiscard]] double step() noexcept
+    {
+        if (!active_) {
+            return decode(current_);
+        }
+        if (++phase_ < samples_per_update) {
+            return decode(current_);
+        }
+        phase_ = 0;
+
+        const int moved = current_ + step_;
+        current_ = step_ < 1 ? std::max(moved, target_) : std::min(moved, target_);
+        active_ = current_ != target_;
+        return decode(current_);
+    }
+
+    /// The coefficient in force, without advancing.
+    [[nodiscard]] double value() const noexcept { return decode(current_); }
+
+    /// The accumulator in force. Diagnostic — the oracle traces compare against this.
+    [[nodiscard]] int current() const noexcept { return current_; }
+
+    /// Whether a glide is still running.
+    [[nodiscard]] bool is_active() const noexcept { return active_; }
+
+private:
+    int current_ = 0;
+    int target_ = 0;
+    int step_ = 0;
+    int phase_ = 0;
+    bool active_ = false;
+    bool seeded_ = false;
+};
+
+/// The engine's anti-zipper smoother for the filter's damping coefficient — `voice_ctrl_ramp_d`
+/// @`18005dbf0`.
+///
+/// The fourth ramp, and it shares its *law* with `ControlRamp` rather than with its neighbour
+/// `CoefficientRamp`: exponential on a live error, `>> 13`, a `0x400` minimum step either way, and
+/// an accumulator ten bits below the value. Only the rate and the decode differ. So the filter's
+/// two coefficients are smoothed by two different laws — `f` linearly, `q` exponentially — which is
+/// why they are two classes and not one parameterised on a rate.
+///
+/// The rate is `0x100`, read off the live ramp slot the same way `CoefficientRamp`'s was. It
+/// predicts the trace: `(1 − 256/8192)^4` is 0.8804, against a measured 0.880 per 32 samples,
+/// confirming the same one-update-per-eight-samples clock the other three run on.
+///
+/// `q` only moves when the resonance byte does, so unlike `f` this is silent on most music — CC#71
+/// is usually set once before a note and left. It is here because the engine runs it, and because
+/// the stability ceiling `f` is clamped against is indexed by the `q` *actually reached* rather
+/// than the one aimed at, which only a ramp can express.
+class DampingRamp {
+public:
+    /// Measured on the live ramp slot, and the same for every tone tried.
+    static constexpr int rate_word = 0x100;
+
+    static constexpr int accumulator_shift = 10;
+    static constexpr int error_shift = 13;
+    static constexpr int minimum_step = 0x400;
+    static constexpr int samples_per_update = 8;
+
+    /// The value encoding is `CoefficientRamp`'s, so the two decode alike.
+    [[nodiscard]] static constexpr double decode(int current) noexcept
+    {
+        return CoefficientRamp::decode(current);
+    }
+
+    /// Turns a coefficient into the integer the ramp carries.
+    [[nodiscard]] static int encode(double value) noexcept
+    {
+        return static_cast<int>(value * 16384.0) << CoefficientRamp::decode_shift;
+    }
+
+    void seed(int current) noexcept
+    {
+        current_ = current;
+        target_ = current;
+        accumulator_ = current << accumulator_shift;
+        phase_ = 0;
+        active_ = false;
+        seeded_ = true;
+    }
+
+    [[nodiscard]] bool is_seeded() const noexcept { return seeded_; }
+
+    void retarget(int current) noexcept
+    {
+        if (!seeded_) {
+            seed(current);
+            return;
+        }
+        target_ = current;
+        active_ = current_ != target_;
+    }
+
+    /// Advances one sample and returns the coefficient now in force.
+    [[nodiscard]] double step() noexcept
+    {
+        if (!active_) {
+            return decode(current_);
+        }
+        if (++phase_ < samples_per_update) {
+            return decode(current_);
+        }
+        phase_ = 0;
+
+        const auto error = static_cast<std::int16_t>(
+            ((static_cast<std::int64_t>(target_) << accumulator_shift) - accumulator_)
+            >> error_shift);
+        int step = static_cast<int>(error) * rate_word;
+        if (step < 0) {
+            step = std::min(step, -minimum_step);
+        } else {
+            step = std::max(step, minimum_step);
+        }
+
+        accumulator_ += step;
+        current_ = static_cast<int>(accumulator_ >> accumulator_shift);
+        active_ = current_ != target_;
+        return decode(current_);
+    }
+
+    [[nodiscard]] double value() const noexcept { return decode(current_); }
+    [[nodiscard]] int current() const noexcept { return current_; }
+    [[nodiscard]] bool is_active() const noexcept { return active_; }
+
+private:
+    int current_ = 0;
+    int target_ = 0;
+    std::int64_t accumulator_ = 0;
+    int phase_ = 0;
+    bool active_ = false;
+    bool seeded_ = false;
+};
+
 } // namespace ts
