@@ -255,6 +255,46 @@ per-octave level and a coarse RMS envelope — the envelope catching a note that
 arrives late without being sensitive to phase. The oracle audio is kept beside the fixture so a
 failure can be measured rather than only counted.
 
+### A self-baseline reports drift, never correctness {#self-baselines-report-drift}
+
+Tier 3 fixtures are generated from **this engine**. `fixtures/stream_renders.json` says so itself:
+they "catch drift from the current engine, they do not confirm it is right", and a self-baseline
+"cannot catch a mistake both sides share". That is easy to agree with in the abstract and easy to
+forget the moment a gate turns red, so the rule is worth stating as a procedure.
+
+**Only tier 2 settles whether a change is right**, and only while the oracle generator itself has
+not moved since the fixture was rendered. Regenerate the oracle whenever `scdec`, the harness
+invocation or the DLL changes, and treat a comparison across such a change as no comparison at all.
+
+**A tier 3 gate going red is not a failure.** It is one bit of information — *the render moved since
+the last generation* — and that bit is genuinely useful, because a change that moves 500,000 samples
+has done something large that ought to be intended. But the sign is not in it. A red tier 3 is
+either a regression or a newly more accurate change, and nothing in the fixture can tell you which.
+
+So the procedure, when a change moves the render:
+
+1. Note what tier 3 says, as a magnitude only: how much moved, and whether the frame and note counts
+   held. Counts changing means a note went missing or arrived late, which is a different and worse
+   class of problem than samples shifting.
+2. Decide the sign against tier 2 — the note oracle first, since it is per-case and reports pitch in
+   cents, then the song oracle. Tabulate the final result against the oracle render, not against the
+   baseline.
+3. Only then regenerate the tier 3 baseline, and record in the commit what moved and why.
+
+**This was learned the expensive way.** A drum partial's random-pitch draw was disabled for weeks on
+the strength of a tier 3 gate reporting 1,183,722 samples differing, read as the reference
+disagreeing. It was not the reference. Re-measured against tier 2 the change was neutral on the note
+oracle and one case *better* on the song oracle, and it went back in. The same misreading was in the
+way of the GS block-order fix for two attempts: the implementation that finally landed was
+substantially the one that had been written and reverted, and the only thing that changed was asking
+the oracle instead of the baseline.
+
+**A corollary about instruments generally.** A probe built to measure one consumer of a shared
+resource is blind to the others, and passing it is not evidence about them. The random-pan probes
+that pin the note-on draw cadence use tones with no random LFO and a zero random-pitch depth, so
+they passed throughout both mistakes above. Agreement with an instrument you built is not agreement
+with the module.
+
 ### What the first authoritative measurement says
 
 `onestop.mid` at the SC-8820 map, this engine at the hardware's 64 voices against the DLL's own
