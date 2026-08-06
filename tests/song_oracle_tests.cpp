@@ -262,9 +262,7 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
              "fixtures/song_renders_oracle.json --scdec <path to scdec>");
     }
 
-    const RomImage rom =
-        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
-    NoteRenderer notes{rom};
+    const RomImage& rom = testdata::shared_rom();
 
     std::ifstream stream{index_path};
     REQUIRE(stream);
@@ -286,23 +284,56 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         CHECK(std::find(corpus.begin(), corpus.end(), known.song) != corpus.end());
     }
 
-    std::size_t compared = 0;
-    std::size_t unavailable = 0;
+    const auto& cases = document.at("cases");
 
-    for (const auto& entry : document.at("cases")) {
-        const std::string name = entry.at("midi").get<std::string>();
-        INFO("song " << name << " map " << entry.at("map").get<int>());
+    // Rendering the corpus is the whole cost of this gate -- it runs for minutes where the rest of
+    // the suite together runs for about two seconds -- and the songs are independent of one
+    // another, so they render across `TS_TEST_THREADS` workers here and are judged serially below.
+    //
+    // Nothing in this phase may assert. Catch2's macros are not thread-safe, and a `CHECK` firing
+    // from a worker would race the reporter and attribute itself to whichever case the main thread
+    // happened to be on. Each worker writes only to its own slot, which is why no lock appears.
+    //
+    // A `NoteRenderer` per song rather than per worker: it carries the noise source a render
+    // mutates, so it cannot be shared, and building one is nothing beside rendering a song. Only
+    // the ROM image is common, and that is immutable once open.
+    struct Outcome {
+        bool measured = false;
+        bool unavailable = false;
+        Metrics ours;
+    };
+    std::vector<Outcome> outcomes(cases.size());
+
+    // Longest song first. The corpus is severely lopsided -- one file is 59% of its 3372 seconds --
+    // so a worker that picks that one up last leaves every other worker idle while it finishes, and
+    // the gate takes as long as it did serially. Starting it first bounds the wall clock at roughly
+    // its own length instead. `frames` is what the fixture already records, and it does not have to
+    // be exact: it only has to order the queue.
+    std::vector<std::size_t> longest_first(cases.size());
+    for (std::size_t index = 0; index < cases.size(); ++index) {
+        longest_first[index] = index;
+    }
+    std::sort(longest_first.begin(), longest_first.end(),
+              [&](std::size_t left, std::size_t right) {
+                  return cases[left].value("frames", std::size_t{0})
+                         > cases[right].value("frames", std::size_t{0});
+              });
+
+    testdata::parallel_for(cases.size(), [&](std::size_t slot) {
+        const std::size_t index = longest_first[slot];
+        const auto& entry = cases[index];
 
         // The oracle faults on some inputs -- an access violation inside the DLL, recorded rather
         // than hidden. Nothing here can be asserted about a render that does not exist.
         if (entry.value("oracleFailed", false)) {
-            ++unavailable;
-            continue;
+            outcomes[index].unavailable = true;
+            return;
         }
 
-        const fs::path midi = testdata::repository_root() / "testdata" / name;
+        const fs::path midi =
+            testdata::repository_root() / "testdata" / entry.at("midi").get<std::string>();
         if (!fs::exists(midi)) {
-            continue;
+            return;
         }
 
         // At the hardware's voice limit, which is the tier that is comparable to the DLL at all:
@@ -316,6 +347,7 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         // here. It went unnoticed while the corpus was one single-port file: the first multi-port
         // song added put the low band 10 dB out and the level 4 dB down, and setting this took the
         // worst band to 1.3 dB.
+        NoteRenderer notes{rom};
         ToneGeneratorOptions options;
         options.ports = 1;
         options.map = static_cast<ToneMap>(entry.at("map").get<int>());
@@ -328,7 +360,27 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         std::transform(result.left.begin(), result.left.end(), left.begin(), to_pcm16);
         std::transform(result.right.begin(), result.right.end(), right.begin(), to_pcm16);
 
-        const Metrics ours = measure(left, right, rate);
+        outcomes[index].ours = measure(left, right, rate);
+        outcomes[index].measured = true;
+    });
+
+    std::size_t compared = 0;
+    std::size_t unavailable = 0;
+
+    for (std::size_t index = 0; index < cases.size(); ++index) {
+        const auto& entry = cases[index];
+        const std::string name = entry.at("midi").get<std::string>();
+        INFO("song " << name << " map " << entry.at("map").get<int>());
+
+        if (outcomes[index].unavailable) {
+            ++unavailable;
+            continue;
+        }
+        if (!outcomes[index].measured) {
+            continue;
+        }
+
+        const Metrics& ours = outcomes[index].ours;
         const auto expected_bands = entry.at("bands").get<std::vector<double>>();
         const auto expected_envelope = entry.at("envelope").get<std::vector<double>>();
 

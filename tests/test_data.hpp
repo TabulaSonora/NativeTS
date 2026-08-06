@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -12,7 +13,11 @@
 /// need one skip with an actionable message rather than failing: a clone with no DLL still builds
 /// and still runs the pure-logic tests, which is the property that keeps the suite useful to
 /// somebody who has not bought Sound Canvas VA.
-namespace ts::testdata {
+namespace ts {
+
+class RomImage;
+
+namespace testdata {
 
 /// The pinned `SCCore.dll`, if it can be found.
 ///
@@ -41,6 +46,41 @@ void require_effect_presets();
 /// The repository root, as baked in at configure time. Fixtures are resolved relative to it.
 [[nodiscard]] const std::filesystem::path& repository_root();
 
+/// The one `RomImage` for the whole process, opened on first use.
+///
+/// Skips the current test if the DLL is absent, exactly as `require_sccore` does.
+///
+/// It is the only object here that is shared rather than made per worker. An image is immutable
+/// once opened -- it owns the bytes and hands out spans into them -- so any number of threads may
+/// read it at once. Everything downstream of it is not: a `NoteRenderer` carries the engine's noise
+/// source and a `ToneGenerator` its voice pool, both of which a render mutates, so a worker builds
+/// its own from this and never shares one.
+///
+/// Opening it once also takes the 27 MB read and its verification out of the per-test cost, which
+/// is what makes the small gates cheap enough that only the sweeps are worth threading at all.
+[[nodiscard]] const RomImage& shared_rom();
+
+/// Worker threads a sweep gate should use, from `TS_TEST_THREADS`.
+///
+/// Defaults to the hardware's concurrency; 1 runs the sweep on the calling thread with no threads
+/// spawned at all, which is what a debugger or a sanitiser wants. Values below 1 are clamped up.
+///
+/// Set it deliberately on a memory-tight machine: a worker holds a whole song's render in float
+/// stereo while it measures it, so peak footprint scales with this and not with the corpus.
+[[nodiscard]] unsigned worker_count();
+
+/// Runs `body(index)` for every index in `[0, count)`, spread across `worker_count()` threads.
+///
+/// **Catch2's assertion macros are not thread-safe**, and neither is `INFO`. Nothing inside `body`
+/// may assert: a sweep collects its outcome per index into a vector the caller sized up front --
+/// one slot per index, so no locking is needed -- and asserts over that vector afterwards, on the
+/// thread Catch2 is expecting. That ordering is also what keeps a failure reported against the case
+/// that caused it rather than against whichever worker happened to reach it first.
+///
+/// An exception escaping `body` is re-thrown on the calling thread once every worker has finished,
+/// so a fixture that throws still fails the test rather than calling `std::terminate`.
+void parallel_for(std::size_t count, const std::function<void(std::size_t)>& body);
+
 /// SHA-256, as lower-case hex, of a run of 32-bit values serialised little-endian.
 ///
 /// Comparing a whole predictor stream literally would mean a fixture the size of the wave ROM, so
@@ -48,4 +88,5 @@ void require_effect_presets();
 /// generator writes, and the two have to agree byte for byte or the digest means nothing.
 [[nodiscard]] std::string sha256_of_le32(std::span<const std::int32_t> values);
 
-} // namespace ts::testdata
+} // namespace testdata
+} // namespace ts

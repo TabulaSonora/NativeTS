@@ -6,9 +6,14 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdlib>
+#include <exception>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifndef TS_REPOSITORY_ROOT
@@ -52,6 +57,91 @@ const fs::path& repository_root()
 {
     static const fs::path root{TS_REPOSITORY_ROOT};
     return root;
+}
+
+const RomImage& shared_rom()
+{
+    // `require_sccore` skips the test when the DLL is absent, so this runs only where there is one
+    // to open. Function-local static: the standard makes the initialisation itself thread-safe, and
+    // a second thread reaching here while the first is still reading waits rather than racing.
+    static const RomImage image =
+        RomImage::open(require_sccore().string(), RomVerification::quick);
+
+    // Computed from this image, once, and behind the presets' own mutex. Done here rather than left
+    // to whichever worker constructs its renderer first, so the lazy path is never the thing being
+    // raced on.
+    EffectPresets::ensure_from(image);
+    return image;
+}
+
+unsigned worker_count()
+{
+    static const unsigned count = [] {
+        if (const char* requested = std::getenv("TS_TEST_THREADS")) {
+            return static_cast<unsigned>(std::max(1, std::atoi(requested)));
+        }
+        return std::max(1U, std::thread::hardware_concurrency());
+    }();
+    return count;
+}
+
+void parallel_for(std::size_t count, const std::function<void(std::size_t)>& body)
+{
+    if (count == 0) {
+        return;
+    }
+
+    const auto workers =
+        static_cast<std::size_t>(std::min<std::size_t>(worker_count(), count));
+    if (workers <= 1) {
+        // No thread at all rather than one worker thread: a sanitiser run or a debugger session
+        // asking for one thread wants the work on the stack it is already watching.
+        for (std::size_t index = 0; index < count; ++index) {
+            body(index);
+        }
+        return;
+    }
+
+    // A shared cursor rather than a contiguous slice each: the sweeps this serves are wildly uneven
+    // -- one song can render for a minute and the next for a second -- and an even split would end
+    // with every worker but one already finished.
+    std::atomic<std::size_t> cursor{0};
+    std::mutex failure_gate;
+    std::exception_ptr failure;
+
+    const auto run = [&] {
+        for (;;) {
+            const std::size_t index = cursor.fetch_add(1);
+            if (index >= count) {
+                return;
+            }
+            try {
+                body(index);
+            } catch (...) {
+                // Recorded and re-thrown on the caller's thread. Letting it leave a worker would
+                // terminate the process and take the rest of the suite's results with it.
+                const std::lock_guard<std::mutex> guard{failure_gate};
+                if (!failure) {
+                    failure = std::current_exception();
+                }
+                return;
+            }
+        }
+    };
+
+    std::vector<std::thread> pool;
+    pool.reserve(workers - 1);
+    for (std::size_t i = 1; i < workers; ++i) {
+        pool.emplace_back(run);
+    }
+    run(); // The caller's thread is one of the workers.
+    for (std::thread& worker : pool) {
+        worker.join();
+    }
+
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
 }
 
 std::string sha256_of_le32(std::span<const std::int32_t> values)
