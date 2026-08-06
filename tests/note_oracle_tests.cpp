@@ -311,7 +311,7 @@ constexpr std::array<KnownDeviation, 11> known_deviations{{
 ///
 /// The remaining three rows are small and unattributed: a snare's peak, and two snares a hair over
 /// the band default.
-constexpr std::array<KnownDrumDeviation, 18> known_drum_deviations{{
+constexpr std::array<KnownDrumDeviation, 19> known_drum_deviations{{
     // Crash cymbals. What is left here is level, and only level: the envelope markers of 945 that
     // two of these carried are gone, because the cause was not the decay. See
     // \ref the-drum-ring-was-invented.
@@ -339,6 +339,13 @@ constexpr std::array<KnownDrumDeviation, 18> known_drum_deviations{{
     // The SFX kit. `Pick Scrape` used to be here at 38 dB and is not any more: it is one of the 52
     // keys in that kit which *do* answer a note-off, and it was being held for the ring instead.
     {56, 49, {10.5, 0.08, 17.5, 11.0}, "Gt.CutNoise; 10 dB quiet, spectrum tilted the wrong way"},
+
+    // Surfaced when the gate began rendering with the module's own timing -- 128 samples of event
+    // staging and its output stage, which this engine otherwise does not carry. Aligning the two
+    // renders is what made this visible; it was under the line before only because the hit sat 130
+    // samples earlier in the window than the module's does. 3.2 dB loud at 125 Hz on a band 18.6 dB
+    // below the kick's own loudest, and unattributed beyond that.
+    {24, 36, {1.0, 0.01, 3.3}, "Elec. BD; 3.2 dB loud at 125 Hz, seen once the timing lined up"},
 
     // Small, and so far unattributed.
     {24, 38, {1.0, 0.015}, "Elec. Snare; peak alone"},

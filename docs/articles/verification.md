@@ -565,8 +565,16 @@ than keeping its sample offset, which ts::ToneGenerator::send_channel_at reprodu
 being one 32-sample chunk at 32 kHz is why the module can compare a stamp against a chunk count at
 all.
 
-That accounts for 128 of staging and 1 of output stage. **19 samples remain unattributed**, and are
-recorded as unattributed rather than assigned to whichever component is nearest.
+Together those account for the whole of it. On the gate's own footing — the fixture's oracle audio
+against this engine with both settings on — the module's onset is 131 and this engine's is 130, and
+their peaks land at 1017 and 1018. **One sample apart on both measures.**
+
+An earlier reading of this put 19 samples beyond explanation and reached for the output stage to
+cover them. Both halves of that were wrong. The 19 came from comparing against a `voicesolo`
+capture, which is a different harness with a different pre-roll and was never on the same footing as
+the fixture; and the configuration it was measured in was not staging at all, because the queue took
+its origin from the previous buffer rather than the one about to be rendered. There was nothing left
+over to attribute.
 
 ### The engine plays sharp {#the-engine-plays-sharp}
 

@@ -214,12 +214,6 @@ struct ToneGenerator::Impl {
     /// Applies a SysEx message.
     void dispatch_sysex(int port, std::span<const std::uint8_t> bytes);
 
-    /// The chunk index the current buffer began on, which is what a stamp is measured from.
-    ///
-    /// `TG_flushMidi` zeroes the module's counter and `TG_Process` advances it a chunk at a time,
-    /// so a stamp is milliseconds into the buffer being rendered rather than absolute time.
-    std::int64_t flush_index = 0;
-
     /// A sample offset in the host's rate, as the milliseconds the module stamps a message with.
     ///
     /// `offset * 1000 / host_sample_rate`, truncated -- and a millisecond is one 32-sample chunk at
@@ -748,7 +742,7 @@ void ToneGenerator::send_channel_at(int sample_offset, int port, int status, int
         // and the staging count is how long it then takes to reach a part. Due one past the sum,
         // because the drain runs after the chunk counter has already advanced.
         impl_->pending_channel.push_back(
-            Impl::PendingChannel{impl_->flush_index + stamp
+            Impl::PendingChannel{impl_->block_index + stamp
                                      + impl_->options.event_delay_blocks + 1,
                                  port,
                                  status,
@@ -1160,7 +1154,7 @@ void ToneGenerator::send_sysex_at(int sample_offset,
     const int stamp = impl_->stamp_milliseconds(sample_offset);
     if (impl_->options.event_delay_blocks > 0 || stamp > 0) {
         impl_->pending_sysex.push_back(
-            Impl::PendingSysex{impl_->flush_index + stamp + impl_->options.event_delay_blocks + 1,
+            Impl::PendingSysex{impl_->block_index + stamp + impl_->options.event_delay_blocks + 1,
                                port,
                                std::vector<std::uint8_t>{bytes.begin(), bytes.end()}});
         return;
@@ -1801,12 +1795,6 @@ void ToneGenerator::render(std::span<float> left, std::span<float> right)
     if (left.size() != right.size()) {
         throw std::invalid_argument("The two channels must be the same length.");
     }
-
-    // Where this buffer's stamps are measured from. `TG_flushMidi` zeroes the module's counter
-    // between buffers and `TG_Process` advances it a chunk at a time, so a stamp is milliseconds
-    // into the buffer about to be rendered rather than absolute time. Anything still queued from
-    // the last buffer keeps the due chunk it was already given.
-    impl_->flush_index = impl_->block_index;
 
     std::size_t written = 0;
     while (written < left.size()) {
