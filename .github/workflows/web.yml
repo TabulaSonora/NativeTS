@@ -1,0 +1,109 @@
+name: Web player
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# One deploy at a time, and never cancel one mid-flight: a cancelled `netlify deploy --prod` can
+# leave the site pointing at a half-uploaded deploy. A newer commit queues behind the current one.
+concurrency:
+  group: netlify-prod
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  # Pinned so the published wasm is reproducible. Track the SDK this repository is developed
+  # against; bumping it changes the emitted module, so bump it deliberately and re-run the smoke
+  # test locally (which CI cannot do -- see below).
+  EMSDK_VERSION: 6.0.5
+  NETLIFY_CLI_VERSION: 27.1.0
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: netlify-production
+      url: https://tabula-sonora.kddlb.cl
+    steps:
+      # Full history is not needed, but the working tree must be a git repository: vite.config.ts
+      # stamps the page with `git rev-parse HEAD` and a dirty flag.
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ninja-build
+
+      # The SDK is ~1 GB unpacked, so it is cached whole and keyed on the version. `emsdk install`
+      # is a no-op against a populated cache; `activate` is cheap and has to run either way,
+      # because .emscripten is not in the cached tree.
+      #
+      # It lives outside the checkout on purpose. An untracked emsdk/ in the work tree would show up
+      # in the `git status --porcelain` vite.config.ts runs, and the page would be stamped dirty.
+      - name: Cache the Emscripten SDK
+        uses: actions/cache@v4
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
+
+      - name: Install the Emscripten SDK
+        run: |
+          set -euo pipefail
+          if [ ! -d ~/emsdk ]; then
+            git clone --depth 1 --branch "${EMSDK_VERSION}" \
+              https://github.com/emscripten-core/emsdk.git ~/emsdk
+          fi
+          cd ~/emsdk
+          ./emsdk install "${EMSDK_VERSION}"
+          ./emsdk activate "${EMSDK_VERSION}"
+
+      # No SCCore.dll and no vcpkg: the engine is pure code, the tables are read out of the user's
+      # own DLL in the browser at runtime, and the one dependency (nlohmann_json) is fetched during
+      # configure. emsdk_env.sh is sourced in-step rather than exported, so nothing leaks into the
+      # step that holds the Netlify token.
+      - name: Build the engine (WebAssembly)
+        run: |
+          set -eo pipefail
+          source ~/emsdk/emsdk_env.sh
+          cmake --preset web
+          cmake --build --preset web
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install the app's dependencies
+        working-directory: web
+        run: npm ci
+
+      # vue-tsc runs first, so a type error fails here rather than shipping. The build imports the
+      # engine module the previous step wrote into web/src/engine/generated/.
+      - name: Build the app
+        working-directory: web
+        run: npm run build
+
+      # Deployed from the repository root so the root netlify.toml is the one in scope -- that is
+      # where the /assets immutable caching and the SPA redirect come from. --dir pins the upload to
+      # what vite built, and --no-build stops the CLI from trying to build anything itself.
+      - name: Deploy to Netlify
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+          # Through the environment, never interpolated into the script: a commit message is
+          # attacker-controllable text, and `${{ }}` pastes it in before bash ever sees it.
+          COMMIT_SUBJECT: ${{ github.event.head_commit.message || 'manual dispatch' }}
+        run: |
+          set -eo pipefail
+          npx --yes "netlify-cli@${NETLIFY_CLI_VERSION}" deploy \
+            --prod \
+            --no-build \
+            --dir=web/dist \
+            --message "${GITHUB_SHA::8} $(printf '%s' "$COMMIT_SUBJECT" | head -n 1)"
+
+# What this workflow deliberately does not do: run apps/web/test/smoke.mjs. That test byte-compares
+# the wasm render against the native one and needs SCCore.dll, which is Roland's and is never
+# committed or handed to a runner. The web build stays verified on a developer machine, as
+# web/README.md describes.
