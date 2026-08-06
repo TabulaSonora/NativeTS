@@ -63,8 +63,8 @@ public:
     /// path would have to carry that difference before this could serve it.
     [[nodiscard]] std::pair<float, float> process(float left, float right) noexcept
     {
-        const double in_left = left;
-        const double in_right = right;
+        const double in_left = static_cast<double>(left);
+        const double in_right = static_cast<double>(right);
 
         // The allpass, per channel: the state takes the input less the fed-back state, and the
         // output leads with the coefficient. Half a sample of delay, which is the midpoint the

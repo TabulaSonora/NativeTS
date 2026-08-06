@@ -1,5 +1,7 @@
 #include "tabulasonora/soundfont_bank.hpp"
 
+#include "modulator_names.hpp"
+
 namespace ts::sf2 {
 namespace {
 
@@ -13,33 +15,6 @@ namespace {
                                       | ((negative ? 1 : 0) << 8) | ((is_cc ? 1 : 0) << 7)
                                       | index);
 }
-
-constexpr int curve_linear = 0;
-constexpr int curve_concave = 1;
-constexpr int curve_switch = 3;
-
-constexpr int cc_modulation = 1;
-constexpr int cc_volume = 7;
-constexpr int cc_balance = 8;
-constexpr int cc_pan = 10;
-constexpr int cc_expression = 11;
-constexpr int cc_sustain = 64;
-constexpr int cc_soft = 67;
-constexpr int cc_resonance = 71;
-constexpr int cc_release = 72;
-constexpr int cc_attack = 73;
-constexpr int cc_brightness = 74;
-constexpr int cc_decay = 75;
-constexpr int cc_vibrato_rate = 76;
-constexpr int cc_vibrato_depth = 77;
-constexpr int cc_vibrato_delay = 78;
-constexpr int cc_reverb = 91;
-constexpr int cc_chorus = 93;
-
-constexpr int velocity_source = 2;
-constexpr int channel_pressure_source = 13;
-constexpr int pitch_wheel_source = 14;
-constexpr int pitch_wheel_range_source = 16;
 
 constexpr int attenuation_amount = 960;
 

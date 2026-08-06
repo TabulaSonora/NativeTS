@@ -105,8 +105,8 @@ struct Metrics {
     double energy = 0.0;
     double peak = 0.0;
     for (std::size_t i = 0; i < left.size(); ++i) {
-        const double l = left[i];
-        const double r = right[i];
+        const double l = static_cast<double>(left[i]);
+        const double r = static_cast<double>(right[i]);
         peak = std::max({peak, std::abs(l), std::abs(r)});
         energy += l * l + r * r;
         mono[i] = (l + r) * 0.5;

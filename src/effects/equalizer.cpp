@@ -93,8 +93,8 @@ void Equalizer::process(std::span<float> left, std::span<float> right) noexcept
 
     const std::size_t count = left.size() < right.size() ? left.size() : right.size();
     for (std::size_t n = 0; n < count; ++n) {
-        double l = left[n];
-        double r = right[n];
+        double l = static_cast<double>(left[n]);
+        double r = static_cast<double>(right[n]);
 
         l = step(low_, low_left_, l);
         r = step(low_, low_right_, r);

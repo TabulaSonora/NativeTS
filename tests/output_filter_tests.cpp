@@ -48,7 +48,7 @@ TEST_CASE("the output filter is a half-sample allpass into a linear interpolator
         CHECK_THAT(output.front(), WithinAbs(0.0, 1e-6));
         for (std::size_t i = 1; i < input.size(); ++i) {
             INFO("sample " << i);
-            CHECK_THAT(output[i], WithinAbs(input[i - 1], 1e-6));
+            CHECK_THAT(output[i], WithinAbs(static_cast<double>(input[i - 1]), 1e-6));
         }
     }
 

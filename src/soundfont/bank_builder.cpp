@@ -6,6 +6,8 @@
 #include "tabulasonora/tvf_chain.hpp"
 #include "tabulasonora/tone.hpp"
 
+#include "modulator_names.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <map>
@@ -613,7 +615,7 @@ BankBuild build_bank(const PatchDirectory& directory,
             // where a single baked number cannot follow it.
             if (velocity_filter_depth != 0) {
                 global.modulators.push_back(
-                    Modulator{modulator_source(0, false, false, false, 2),
+                    Modulator{modulator_source(curve_linear, false, false, false, velocity_source),
                               Gen::mod_env_to_filter_fc,
                               static_cast<std::int16_t>(velocity_filter_depth), 0, 0});
                 ++built.velocity_filter_partials;
@@ -624,8 +626,8 @@ BankBuild build_bank(const PatchDirectory& directory,
             // ramp. A bank-wide default would lengthen the whole library's release.
             if (directory.half_damper(tone_number)) {
                 global.modulators.push_back(
-                    Modulator{modulator_source(0, false, false, true, 64), Gen::release_vol_env,
-                              1200, 0, 0});
+                    Modulator{modulator_source(curve_linear, false, false, true, cc_damper),
+                              Gen::release_vol_env, 1200, 0, 0});
                 ++built.half_damper_instruments;
             }
 
@@ -635,14 +637,14 @@ BankBuild build_bank(const PatchDirectory& directory,
             // amplitude envelope alone -- which is what the bank defaults already do.
             if (TvfChain::responds_to_env_modifiers(partial)) {
                 global.modulators.push_back(
-                    Modulator{modulator_source(0, true, false, true, 73), Gen::attack_mod_env,
-                              6000, 0, 0});
+                    Modulator{modulator_source(curve_linear, true, false, true, cc_attack),
+                              Gen::attack_mod_env, 6000, 0, 0});
                 global.modulators.push_back(
-                    Modulator{modulator_source(0, true, false, true, 75), Gen::decay_mod_env, 3600,
-                              0, 0});
+                    Modulator{modulator_source(curve_linear, true, false, true, cc_decay),
+                              Gen::decay_mod_env, 3600, 0, 0});
                 global.modulators.push_back(
-                    Modulator{modulator_source(0, true, false, true, 72), Gen::release_mod_env,
-                              3600, 0, 0});
+                    Modulator{modulator_source(curve_linear, true, false, true, cc_release),
+                              Gen::release_mod_env, 3600, 0, 0});
                 ++built.env_modifier_partials;
             }
 

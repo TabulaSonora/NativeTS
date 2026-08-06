@@ -50,7 +50,7 @@ TEST_CASE("the part-volume ramp closes a fixed fraction of the error per update"
     for (int call = 0; call < 12; ++call) {
         double first = 0.0;
         for (int i = 0; i < 32; ++i) {
-            const double gain = ramp.step();
+            const double gain = static_cast<double>(ramp.step());
             if (i == 0) {
                 first = gain;
             }
@@ -77,7 +77,7 @@ TEST_CASE("the part-volume ramp is eight samples to an update", "[control_ramp]"
 
     std::array<double, 24> gains{};
     for (double& gain : gains) {
-        gain = ramp.step();
+        gain = static_cast<double>(ramp.step());
     }
 
     // Three changes across twenty-four samples, and every run between them eight long.
@@ -115,7 +115,7 @@ TEST_CASE("a seeded ramp does not glide", "[control_ramp]")
     // up to it from wherever the recycled voice left off.
     ControlRamp ramp;
     ramp.seed(full_scale_target(), rate, no_hold);
-    const double first = ramp.step();
+    const double first = static_cast<double>(ramp.step());
     for (int i = 0; i < 200; ++i) {
         CHECK(std::abs(static_cast<double>(ramp.step()) - first) < 1e-4);
     }
