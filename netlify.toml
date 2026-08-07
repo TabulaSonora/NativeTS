@@ -1,11 +1,11 @@
-# Manual deploy only; no build command. The publish directory is pinned so a bare `netlify deploy`
-# from the repository root can never upload tables/, testdata/ or any other Roland-derived local
-# data — only what Vite built.
+# No build command: Netlify never builds this site. `.github/workflows/web.yml` builds the engine
+# and the app on a push to main and uploads the result with `--no-build`, so what lands here is
+# always something Vite produced on a runner.
 #
-# To publish:
-#   wsl cmake --preset web && wsl cmake --build --preset web   # the engine, from WSL
-#   cd web && npm run build                                    # the app
-#   netlify deploy --prod --dir=web/dist
+# The publish directory is pinned anyway, because that workflow is not the only way a deploy can
+# happen. A `netlify deploy` run by hand from the repository root — to check a branch, or when the
+# runner is unavailable — takes its scope from this file, and pinning it means such a deploy can
+# never upload tables/, testdata/ or any other Roland-derived local data.
 [build]
   publish = "web/dist"
 
@@ -15,6 +15,15 @@
   for = "/assets/*"
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
+
+# Netlify has no MIME mapping for .webmanifest and falls back to application/octet-stream. Every
+# browser in current use parses the manifest regardless of what it is served as, so this corrects
+# a spec violation rather than a fault — but it is the type the manifest spec names, and a stricter
+# client would be entitled to refuse the other one.
+[[headers]]
+  for = "/site.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json; charset=utf-8"
 
 # Client-side routing: a reload or a deep link on /live must answer 200 with the app shell.
 [[redirects]]
