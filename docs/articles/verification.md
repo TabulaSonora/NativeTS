@@ -370,7 +370,17 @@ The gate had to be built. `Stream` and `Bubble` sit at bank 4 and bank 5 of prog
 including the SC-55's, so one bank select reaches a multi-partial random-LFO1 tone; six one-note
 files at three keys, rendered through `scdec smf` and through this engine at one port and 64 voices,
 give twelve comparisons. They live in the spec repository under `testdata/lfo/`, with the recipe
-beside them.
+beside them, and `tools/compare_randlfo1_probes.py` is what runs them.
+
+It is a **tool rather than a suite gate**, and that was decided by trying the other thing first.
+Adding the six files to the song corpus put them through the song gate's five measures, and four of
+those measures are built for songs: the bands are taken from a window a quarter of the way in, the
+envelope splits the render into 64 windows, and the balance reports the worst of them. On a
+3.6-second one-note file driven by a random process the envelope and balance swing on the draw —
+0.39 and 0.41 against a 0.06 bound — for reasons that have nothing to do with LFO1. Six rows loose
+enough to pass would have said nothing, and `song_oracle_tests.cpp` is right that a row there is a
+debt rather than a dispensation. What answered cleanly was the octave bands over the *whole* render,
+which is the one measure the song gate does not take.
 
 | against the DLL, mean of 12 | per-partial LFO1 | shared LFO1 |
 |---|---|---|
@@ -388,6 +398,15 @@ change is in the binary; the numbers say it did not cost anything, and the spect
 \note A shared node has one phase and one random register but **per-partial depths** — the module
 keeps three shorts per partial inside the node itself at `+0x7c + i*8`. Sharing the runner without
 splitting the depths would have been a different and wrong change.
+
+The probes found something larger than what they were built for, which is the ordinary return on
+pointing a measurement somewhere nothing had looked. **`Bubble` is 14–20 dB loud in the 2 kHz band**
+on all three keys while its overall level agrees to within 0.15 dB, and **`Stream` sits 5–7 dB low
+at 500 Hz** on two of three. A single octave band that far out while the total level is right is
+energy in the wrong place rather than too much of it — the signature of a filter or a wave chosen
+wrong, not of a gain. Both are ordinary GS variation tones one bank select away, and neither the
+note sweep nor the song corpus covers either, so nothing else here would have found it. Sharing
+LFO1 improved both bands slightly and closed neither.
 
 ### What the first authoritative measurement says
 
