@@ -985,6 +985,18 @@ void ToneGenerator::Impl::program_change(int part_index, Part& part, int program
             // An undefined program leaves the current kit in place rather than falling back to
             // Standard.
             drum_kit[kit_slot(part_index)] = *kit;
+            // **And every per-key override goes with it.** A program change reloads the kit record
+            // into the part's per-key planes, so anything the drum-setup NRPNs or SysEx wrote there
+            // is overwritten. Measured on the module with `scdec gsdrumnrpn`: write pan 100 to key
+            // 49, strike it, send a program change, strike again -- the plane reads the kit's own
+            // 84. Level, coarse pitch, reverb and chorus all behave the same, and it happens even
+            // when the program selects the kit already loaded.
+            //
+            // Conditional on the kit resolving, which is why this sits inside the guard rather than
+            // beside it. Programs 0, 1 and 8 are Standard 1, Standard 2 and Room, and all three
+            // clear; 7 and 63 name no kit, and on those the overrides survive. So the reload is
+            // what clears them, not the program change.
+            part.drum_keys.reset();
         }
     }
 }
@@ -1029,6 +1041,8 @@ void ToneGenerator::Impl::xg_resolve_program(int part_index, Part& part, int pro
         notes->drums().kit_for_program(kit_program, drum_row_for(part));
     if (kit) {
         drum_kit[kit_slot(part_index)] = *kit;
+        // The kit reload takes the per-key overrides with it, as on the GS path above.
+        part.drum_keys.reset();
     }
 }
 

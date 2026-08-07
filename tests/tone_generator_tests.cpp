@@ -631,6 +631,58 @@ TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
     CHECK_FALSE(generator.part(9).drum_keys.level(51).has_value()); // and MAP1 writes no longer land
 }
 
+TEST_CASE("a program change on a drum part discards its per-key overrides", "[stream][sccore]")
+{
+    // Reloading the kit overwrites the per-key planes, so anything the drum-setup NRPNs or SysEx
+    // wrote into them is gone. Measured with `scdec gsdrumnrpn`: write pan 100 to key 49, strike
+    // it, send a program change, strike again -- the plane reads the kit's own 84. Level, coarse
+    // pitch, reverb and chorus behave the same.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    generator.send_sysex(dt1({0x41, 0x02, 40, 100}));
+    generator.send_sysex(dt1({0x41, 0x04, 40, 111}));
+    REQUIRE(generator.part(9).drum_keys.level(40) == 100);
+    REQUIRE(generator.part(9).drum_keys.pan(40) == 111);
+
+    SECTION("a program that names a kit clears them")
+    {
+        generator.send_channel(0xC9, 8, 0); // Room
+        CHECK_FALSE(generator.part(9).drum_keys.level(40).has_value());
+        CHECK_FALSE(generator.part(9).drum_keys.pan(40).has_value());
+    }
+
+    SECTION("even when it selects the kit already loaded")
+    {
+        // The module clears on the reload, not on the kit changing: program 0 into a part already
+        // on Standard still wipes them.
+        generator.send_channel(0xC9, 0, 0);
+        CHECK_FALSE(generator.part(9).drum_keys.level(40).has_value());
+    }
+
+    SECTION("a program that names no kit leaves them alone")
+    {
+        // The condition is that the kit resolves. On the SC-55 drum row programs 0, 1 and 8 are
+        // Standard 1, Standard 2 and Room and all three clear; 7 and 63 name nothing, and there
+        // the overrides survive -- measured both ways round on the module.
+        generator.send_channel(0xC9, 7, 0);
+        CHECK(generator.part(9).drum_keys.level(40) == 100);
+        generator.send_channel(0xC9, 63, 0);
+        CHECK(generator.part(9).drum_keys.pan(40) == 111);
+
+        generator.send_channel(0xC9, 1, 0); // Standard 2 -- resolves, so it clears
+        CHECK_FALSE(generator.part(9).drum_keys.level(40).has_value());
+    }
+
+    SECTION("a melodic part's program change touches nothing")
+    {
+        generator.send_channel(0xC0, 48, 0);
+        CHECK(generator.part(9).drum_keys.level(40) == 100);
+    }
+}
+
 TEST_CASE("each drum map carries its own kit", "[stream][sccore]")
 {
     // The module keeps a kit buffer per (port, map) -- part_assign_tone addresses

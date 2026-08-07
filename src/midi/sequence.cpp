@@ -612,6 +612,14 @@ Sequence build(std::span<const MidiEvent> events)
 
         case 0xC0:
             part.program.add(event.position, event.data1);
+            // **Not clearing the drum overrides here, deliberately.** On the module a program
+            // change that resolves to a kit reloads it and wipes the per-key planes with it --
+            // `ToneGenerator::Impl::program_change` does that, and the condition is that the kit
+            // resolves, since programs naming no kit leave the overrides standing. This builder
+            // has no ROM and so cannot ask whether a program names a kit, and clearing
+            // unconditionally would be wrong for exactly the programs the module spares. Its
+            // `drum_keys` reach nothing audible anyway -- the live path is the generator's, and
+            // what is built here feeds `bench` and the tests. Revisit if that changes.
             break;
 
         // Channel aftertouch. The offline path tracks it for one reason: the control matrix can
