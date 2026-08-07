@@ -36,7 +36,11 @@ struct VoiceSetup {
     int cutoff_base = 0;
 
     std::optional<PitchEnvelopeRunner> pitch_envelope;
-    std::optional<LfoRunner> lfo1;
+
+    /// The note's shared LFO1 node, and this partial's own depths into it.
+    std::shared_ptr<LfoRunner> lfo1;
+    LfoConfig lfo1_depths;
+
     std::optional<LfoRunner> lfo2;
 
     /// Absolute base pitch in milli-semitones, for a melodic voice.
@@ -233,7 +237,22 @@ private:
     std::optional<SegmentEnvelope> amplitude_;
     std::optional<SegmentEnvelope> cutoff_;
     std::optional<PitchEnvelopeRunner> pitch_envelope_;
-    std::optional<LfoRunner> lfo1_;
+
+    /// LFO1, shared with the other partials of this note. LFO2 is this partial's alone.
+    ///
+    /// `partial_alloc_node @ 1800029e0` claims **one** LFO1 node per note and sets its refcount at
+    /// `+3` to the number of enabled partials, then claims LFO2 nodes in a second loop, one per
+    /// partial. So a two-partial tone has one LFO1 and two LFO2s, and the shared pointer is that
+    /// refcount: the node outlives whichever partial is stolen first and dies with the last.
+    ///
+    /// It matters because the random shapes draw from the one engine generator when the phase
+    /// wraps. Two independent LFO1s would draw twice per wrap and walk apart; one draws once and
+    /// every partial of the note hears the same number.
+    std::shared_ptr<LfoRunner> lfo1_;
+
+    /// This partial's own LFO1 depths, which the shared node stores per partial rather than once.
+    LfoConfig lfo1_depths_;
+
     std::optional<LfoRunner> lfo2_;
     StateVariableFilter filter_;
 

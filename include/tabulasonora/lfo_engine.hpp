@@ -231,6 +231,27 @@ public:
     /// its early return with a configured rate of zero.
     void tick(int rate_offset = 0) noexcept;
 
+    /// Advances one control tick, but at most once per `stamp`.
+    ///
+    /// This is what makes a **shared** runner safe to drive from several voices. The module walks
+    /// its LFO node list once per tick, not once per voice; a note's partials all point at the same
+    /// LFO1 node, so whichever of them reaches a tick first must advance it and the rest must read
+    /// what it produced. `stamp` is the voice's own sample position, which is the note's age and so
+    /// is the same number on every partial of one note — an armed partial keeps counting samples
+    /// while it waits, so a staggered envelope delay does not desynchronise it.
+    ///
+    /// The one case this does not reproduce is a note whose partials are *all* armed: the module
+    /// advances the node anyway, and here nobody is running to advance it. No affected tone carries
+    /// an envelope delay, so it has never mattered.
+    void tick_at(std::int64_t stamp, int rate_offset = 0) noexcept
+    {
+        if (stamp == last_stamp_) {
+            return;
+        }
+        last_stamp_ = stamp;
+        tick(rate_offset);
+    }
+
     /// The modulation for one destination, after the last tick.
     ///
     /// `matrix_depth` is the control matrix's depth destination for this LFO, in the destination's
@@ -239,6 +260,16 @@ public:
     /// exactly the matrix's own full-scale figures, so a matrix depth alone can reach the rail but
     /// never exceed it.
     [[nodiscard]] double value(LfoDestination destination, int matrix_depth = 0) const noexcept;
+
+    /// The same, with the patch depth supplied rather than read from this runner's own config.
+    ///
+    /// A shared LFO1 node has one phase and one random register but **per-partial depths**: the
+    /// module stores them in the node itself, three shorts per partial at `+0x7c + i*8`, read from
+    /// `block[0x56]`, `block[0x34]/2` and `block[0x15]`. So the phase is the note's and the depth
+    /// is the partial's, and this is where the two meet.
+    [[nodiscard]] double value_at_depth(LfoDestination destination,
+                                        int patch_depth,
+                                        int matrix_depth = 0) const noexcept;
 
     /// The pitch modulation with a mod-wheel depth folded in, in milli-semitones.
     ///
@@ -261,6 +292,10 @@ private:
     int delay_ = 0;
     int fade_ = 0;
     bool applied_ = false;
+
+    /// The stamp of the last tick `tick_at` ran, so a shared runner advances once and not once per
+    /// partial pointing at it.
+    std::int64_t last_stamp_ = -1;
 
     /// The waveform value for the last tick — `g_lfo_out`.
     ///

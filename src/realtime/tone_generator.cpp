@@ -2455,6 +2455,12 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             continue;
         }
 
+        // One LFO1 node for the whole layer, claimed before its partials are walked, exactly as
+        // `partial_alloc_node` does. Its timing is all tone-header -- waveform, phase, rate, delay,
+        // fade -- so any partial of the tone configures it identically; only the three depths are
+        // the partial's, and those travel beside the node rather than in it.
+        std::shared_ptr<LfoRunner> shared_lfo1;
+
         for (const ResolvedPartial& sounding : resolved.partials) {
             const PartialParameters& partial =
                 tone->partials()[static_cast<std::size_t>(sounding.partial_index)];
@@ -2465,7 +2471,12 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
 
             const int key = std::clamp(note, 0, 0x7F);
             Envelopes built = envelopes(tone_number, partial, key, velocity, part.modifiers());
-            auto [lfo1, lfo2] = notes->lfo().create_runners(tone_number, partial, part.modifiers());
+            auto [lfo1_config, lfo2_config] =
+                notes->lfo().configure(tone_number, partial, part.modifiers());
+            if (!shared_lfo1) {
+                shared_lfo1 = std::make_shared<LfoRunner>(notes->lfo(), lfo1_config);
+            }
+            LfoRunner lfo2 = notes->lfo().create_runner(lfo2_config);
 
             // The base pitch's own random offset, which the module clamps at zero before anything
             // else is folded in -- `partial_compute_pitch` again, and the first of the two draws a
@@ -2488,7 +2499,8 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             // that voice's own two pitch draws. `pitch_env_rand_init @ 180060560` writes the
             // position onto every voice of the group and latches it, so the rest of the note reads
             // it rather than drawing again.
-            setup.lfo1 = std::move(lfo1);
+            setup.lfo1 = shared_lfo1;
+            setup.lfo1_depths = lfo1_config;
             setup.lfo2 = std::move(lfo2);
             setup.envelope_hold_samples = notes->envelopes().hold_samples(
                 partial, velocity, part.envelope_delay + part.envelope_delay_tone);
@@ -2601,6 +2613,9 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     const int group = pool.begin_note_group();
     bool sounded = false;
 
+    // The kit's tone gets one LFO1 node for its partials, like any other.
+    std::shared_ptr<LfoRunner> shared_lfo1;
+
     for (const ResolvedPartial& sounding : resolved.partials) {
         const PartialParameters& partial =
             tone->partials()[static_cast<std::size_t>(sounding.partial_index)];
@@ -2612,7 +2627,12 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         // A drum part carries the same modify offsets as a melodic one: the engine reads them off
         // the part, and nothing in `tva_compute_env_rates` asks whether the voice is a drum.
         Envelopes built = envelopes(key.tone, partial, 60, velocity, part.modifiers(), rate_key);
-        auto [lfo1, lfo2] = notes->lfo().create_runners(key.tone, partial, part.modifiers());
+        auto [lfo1_config, lfo2_config] =
+            notes->lfo().configure(key.tone, partial, part.modifiers());
+        if (!shared_lfo1) {
+            shared_lfo1 = std::make_shared<LfoRunner>(notes->lfo(), lfo1_config);
+        }
+        LfoRunner lfo2 = notes->lfo().create_runner(lfo2_config);
 
         // The note does not transpose the sample: the kit's coarse-pitch plane supplies the key,
         // and the tone's own key-follow decides what a step of it is worth.
@@ -2644,7 +2664,8 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.amplitude = std::move(built.amplitude);
         setup.cutoff = std::move(built.cutoff);
         setup.cutoff_base = built.cutoff_base;
-        setup.lfo1 = std::move(lfo1);
+        setup.lfo1 = shared_lfo1;
+        setup.lfo1_depths = lfo1_config;
         setup.lfo2 = std::move(lfo2);
         setup.envelope_hold_samples = notes->envelopes().hold_samples(
             partial, velocity, part.envelope_delay + part.envelope_delay_tone);

@@ -344,6 +344,51 @@ The rule that falls out is short. *Tier 3 says the render moved. Tier 2 says whe
 — provided the tier 2 case was harvested in isolation.* Neither instrument is trustworthy about the
 question it was not built to answer.
 
+### A gate the corpus could not supply {#sharing-lfo1}
+
+`partial_alloc_node @ 1800029e0` claims **one** LFO1 node per note and sets its refcount at `+3` to
+the number of enabled partials, then claims LFO2 nodes in a second loop, one per partial. This port
+built both per partial, so a two-partial tone ran two independent LFO1s. For most tones that is
+invisible — two runners with identical timing produce identical output. For the three *random*
+shapes it is not, because those draw from the shared generator when the phase wraps: two runners
+draw twice per wrap and walk apart where the module draws once and every partial hears the same
+number.
+
+Twelve tones in the table have a random LFO1 and eight of those have two partials. **None of the 185
+melodic cases in the note sweep reaches one.** The authoritative gate was blind to the change, and
+the first attempt to measure it read three sweep cases as byte-identical before and after — which
+was true and meant nothing.
+
+The trap underneath that is worth recording, because it produced a confident wrong answer twice.
+`header[0x0E] & 0x1f` is an *index into* `g_lfo_wave_map`, and that map sends 5, 6 and 7 to the
+random shapes while sending 1, 2 and 3 to ordinary geometric ones. Scanning the table for a raw
+selector of 1–3 finds 43 tones, 23 of them multi-partial, and not one of them is random. Two of
+those — `Vibraphone` and `Tenor Sax` — are in the sweep, which is exactly why the null result looked
+plausible.
+
+The gate had to be built. `Stream` and `Bubble` sit at bank 4 and bank 5 of program 122 on every map
+including the SC-55's, so one bank select reaches a multi-partial random-LFO1 tone; six one-note
+files at three keys, rendered through `scdec smf` and through this engine at one port and 64 voices,
+give twelve comparisons. They live in the spec repository under `testdata/lfo/`, with the recipe
+beside them.
+
+| against the DLL, mean of 12 | per-partial LFO1 | shared LFO1 |
+|---|---|---|
+| worst octave band | 11.4770 dB | **11.0379 dB** |
+| mean octave band | 2.4161 dB | **2.2352 dB** |
+| overall level | 0.1436 dB | **0.1145 dB** |
+| peak | **0.006638** | 0.007284 |
+
+The worst band improved on every one of the six distinct cases and the mean band on five. Peak went
+the other way, and that ordering is what one should expect rather than a puzzle: on a noise-driven
+tone the peak is a single sample of a random process and the octave bands are its statistics, so the
+spectrum is the measure with something to say and the peak is the one most able to move on luck. The
+change is in the binary; the numbers say it did not cost anything, and the spectrum says it helped.
+
+\note A shared node has one phase and one random register but **per-partial depths** — the module
+keeps three shorts per partial inside the node itself at `+0x7c + i*8`. Sharing the runner without
+splitting the depths would have been a different and wrong change.
+
 ### What the first authoritative measurement says
 
 `onestop.mid` at the SC-8820 map, this engine at the hardware's 64 voices against the DLL's own
@@ -1275,11 +1320,11 @@ Stated plainly, because they are not covered by the numbers above:
   rate, step timing and depth being right is the intended side of the "audible fidelity, not bit
   accuracy" line: a random modulation that steps at the right moments to the right *sort* of value
   is the parameter working.
-- **LFO1 is shared per note in the module and per partial here.** One node serves a note's whole
-  set of partials, refcounted at `+3`, where LFO2 gets one node per partial. Bit 5 of the tone
-  header's `+0x0e` selects it and this port does not read that bit, so a two-partial tone with a
-  random LFO1 runs two independent random walks where the module runs one. Eight tones across the
-  four maps are affected; nothing currently failing points at it.
+- **LFO1 is now shared per note, as the module shares it.** That was a departure until it was
+  measured; \ref sharing-lfo1 has what the measurement took to build. Still open is the *part-level*
+  branch of the same allocator — bit 5 of the tone header's `+0x0e` and of the partial block's
+  `+0x06`, set on 100 tones and 121 blocks, which puts the node on the part rather than on the note
+  so it outlives the note that claimed it. Nothing here reads either bit.
 - **All six of the control matrix's sources are now consumed**, including the two assignable
   controllers. Their numbers come from `40 1x 1F` and `20`, default to General Purpose 1 and 2, and
   are clamped to 0-95 — measured, not assumed: assigning 100 and then sending CC#95 modulates on

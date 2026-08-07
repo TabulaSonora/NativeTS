@@ -346,8 +346,15 @@ void LfoRunner::advance_waveform(bool wrapped) noexcept
 
 double LfoRunner::value(LfoDestination destination, int matrix_depth) const noexcept
 {
+    return value_at_depth(destination, config_.depth(destination), matrix_depth);
+}
+
+double LfoRunner::value_at_depth(LfoDestination destination,
+                                 int patch_depth,
+                                 int matrix_depth) const noexcept
+{
     const LfoEngine::Limits limits = LfoEngine::destination_limits(destination);
-    const int depth = std::clamp(config_.depth(destination), -limits.clamp, limits.clamp);
+    const int depth = std::clamp(patch_depth, -limits.clamp, limits.clamp);
 
     // A patch with no depth still sounds the LFO when the matrix supplies one -- that is the whole
     // point of an assignable depth, and the engine takes the same branch for it (`lfo_apply_depth`

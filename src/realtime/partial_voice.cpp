@@ -234,6 +234,7 @@ void PartialVoice::start(VoiceSetup&& setup)
     cutoff_base_ = setup.cutoff_base;
     pitch_envelope_ = std::move(setup.pitch_envelope);
     lfo1_ = std::move(setup.lfo1);
+    lfo1_depths_ = setup.lfo1_depths;
     lfo2_ = std::move(setup.lfo2);
 
     partial_resonance_ = setup.partial.resonance();
@@ -508,16 +509,22 @@ void PartialVoice::control(double bend_milli_semitones,
         // rate is consumed by the tick, since it moves the phase; the depths are consumed reading
         // the value out, since they scale the waveform the phase produced.
         if (lfo1_) {
-            lfo1_->tick(matrix.lfo1_rate);
+            // Once per tick for the node, not once per partial pointing at it -- `sample_` is the
+            // note's age, so siblings all present the same stamp and only the first advances it.
+            lfo1_->tick_at(sample_, matrix.lfo1_rate);
         }
         if (lfo2_) {
             lfo2_->tick(matrix.lfo2_rate);
         }
 
         if (lfo1_) {
-            lfo_pitch += lfo1_->value(LfoDestination::pitch, matrix.lfo1_pitch);
-            lfo_tvf += lfo1_->value(LfoDestination::tvf, matrix.lfo1_tvf);
-            lfo_tva += lfo1_->value(LfoDestination::tva, matrix.lfo1_tva);
+            // Shared phase, this partial's own depths.
+            lfo_pitch += lfo1_->value_at_depth(LfoDestination::pitch, lfo1_depths_.pitch_depth,
+                                               matrix.lfo1_pitch);
+            lfo_tvf += lfo1_->value_at_depth(LfoDestination::tvf, lfo1_depths_.tvf_depth,
+                                             matrix.lfo1_tvf);
+            lfo_tva += lfo1_->value_at_depth(LfoDestination::tva, lfo1_depths_.tva_depth,
+                                             matrix.lfo1_tva);
         }
         if (lfo2_) {
             lfo_pitch += lfo2_->value(LfoDestination::pitch, matrix.lfo2_pitch);
