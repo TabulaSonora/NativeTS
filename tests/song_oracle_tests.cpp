@@ -332,6 +332,7 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
     struct Outcome {
         bool measured = false;
         bool unavailable = false;
+        bool held_out = false;   ///< Skipped for length by `TS_FAST`, not missing.
         Metrics ours;
     };
     std::vector<Outcome> outcomes(cases.size());
@@ -362,14 +363,24 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
             return;
         }
 
-        // **Temporarily held out while the bulk-dump work is in flight.** `th07_19_user_gm.mid` is
-        // 63.7 million frames -- thirty-three minutes of audio, and on its own the larger part of
-        // this gate's wall clock. It is a real case and it is failing one assertion, so this is a
-        // hold rather than a retirement: set `TS_SKIP_SLOW=0` to put it back, and put it back for
-        // good once the run it is slowing down is over.
-        if (entry.at("midi").get<std::string>() == "th07_19_user_gm.mid"
-            && std::getenv("TS_SKIP_SLOW") == nullptr) {
+        // `TS_FAST` drops the long tail of the corpus, and the default is to render all of it.
+        //
+        // The corpus is severely lopsided: 6,924 seconds of audio across 34 songs, of which one
+        // file is 1,993 -- `th07_19_user_gm.mid`, thirty-three minutes. The next longest is 314,
+        // so a single threshold isolates it without naming it, and a threshold is the right shape
+        // because the thing that costs wall clock is length rather than identity. Ten minutes sits
+        // more than three times above everything else in the corpus and three times below that
+        // one; nothing has to move when a song is added at either end.
+        //
+        // The default runs everything because this is the tier that settles correctness -- the two
+        // cheaper ones can only report drift -- and a gate that quietly renders less than it claims
+        // is worse than a slow one. `TS_FAST` exists for iterating on something else, and it says
+        // so in the skip count.
+        constexpr double fast_mode_seconds = 600.0;
+        if (std::getenv("TS_FAST") != nullptr
+            && entry.value("seconds", 0.0) > fast_mode_seconds) {
             outcomes[index].unavailable = true;
+            outcomes[index].held_out = true;
             return;
         }
 
@@ -537,6 +548,15 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         }
 
         ++compared;
+    }
+
+    // A fast run has to say out loud that it rendered less than the gate claims to cover.
+    const auto held_out = static_cast<std::size_t>(
+        std::count_if(outcomes.begin(), outcomes.end(),
+                      [](const Outcome& outcome) { return outcome.held_out; }));
+    if (held_out != 0) {
+        WARN("TS_FAST held out " << held_out << " song(s) over " << 600 << " s. This run is not "
+             "the full gate; unset TS_FAST to render them.");
     }
 
     if (compared == 0) {
