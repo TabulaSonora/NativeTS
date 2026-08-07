@@ -129,6 +129,13 @@ tabula-sonora dump-effect reverb 4 48000 impulse.f32
 tabula-sonora bench song.mid
 ```
 
+`render-note` drives the note through the block loop the way the oracle gate does — same warm-up,
+same event delay, output stage on — so its output is directly comparable against a case from the
+note sweep. `--channel 9` makes it a drum hit, `--tail` sets the seconds rendered past the note-off
+(1.8 matches the sweep), and `--per-note` selects the isolated renderer instead. That last one takes
+the ideal `pow(2, x/12000)` for its rate rather than the module's ramp table, so its pitch can sit
+several cents off; do not compare it against an oracle case.
+
 ## Play a file
 
 The two players are not built by default, since they are the only things that pull in an audio

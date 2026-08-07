@@ -187,7 +187,19 @@ descriptor yields ROM coordinates, loop points, root key, and the sampler varian
 ping-pong, one-shot, reverse). Polyphony is 64 voices with an LRU note-group list and voice
 stealing. `voice_start` populates the per-voice structure-of-arrays state and
 `voice_setup_sample_playback` computes the wave-ROM address across the two banks and their 1 MB key
-regions. Drums bypass the melodic LUT via a static note-indexed kit table carrying tone number,
+regions.
+
+Starting a note is **two passes, not one**, and the split is observable. `note_assign_poly` claims
+the slot at the moment the message is dispatched, so allocation and stealing follow the order the
+events arrived in. Reading the note's parameters happens later:
+`tg_start_pending_voices @ 18008f020` runs at the top of the next chunk and walks the parts in **GS
+block order** — channel 10 first as block 0, then channels 1–9 as blocks 1–9 and 11–16 as blocks
+10–15 — so a chunk carrying notes on several channels sets them up in block order however they
+arrived. Each part also spends `voices + 1` draws on the shared generator before its notes are set
+up. Neither detail is audible on its own; both are, through the one 16-bit LFSR every random
+feature shares, because they decide which voice draws which value. See \ref verification.
+
+Drums bypass the melodic LUT via a static note-indexed kit table carrying tone number,
 level, coarse pitch at half strength, mute group, pan and sends per key.
 
 ### 3 · Per-voice render

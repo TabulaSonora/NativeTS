@@ -270,12 +270,18 @@ private:
     /// `LfoEngine::waveform` would return, evaluated at the tick that produced the phase.
     int output_ = 0;
 
-    /// The random shapes' two registers, which the module keeps per voice next to the phase: the
-    /// value last drawn from the generator, and the value walking toward it.
+    /// The random shapes' two registers: the value last drawn from the generator, and the value
+    /// walking toward it. They live at `+0x77` of the module's shared LFO node.
     ///
-    /// Both start at zero, which is the one part of this not read off the engine — its per-voice
-    /// block is loaded from voice state that a note-on has already cleared. A sample-and-hold
-    /// therefore sits at zero until its first wrap rather than opening on a random step.
+    /// Both start at zero here, and that is a **departure**, now measured rather than assumed. The
+    /// module's nodes come from a 128-slot pool with a LIFO freelist:
+    /// `partial_shared_node_free` clears the tick gate and pushes the slot back,
+    /// `partial_shared_node_alloc` resets only the link fields, and the pair at `+0x77` has exactly
+    /// one writer in the whole decompilation — the per-tick save-back. Nothing zeroes them, so a
+    /// note claiming a recycled slot opens its sample-and-hold on whatever the *previous* note left
+    /// there, where this one opens at zero until its first wrap. Even a GS reset only frees the
+    /// nodes. This is not a small detail: it contaminated the note-oracle sweep when that was
+    /// harvested in one process, which is what \ref oracle-harvest-isolation is about.
     int held_ = 0;
     int slewed_ = 0;
 };

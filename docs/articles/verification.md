@@ -42,6 +42,11 @@ stream gate has no unaffected case at all, so its references are this engine's o
 a regression baseline. The archived C# checkout cannot be re-run to refresh either, which is the
 whole reason the oracle gates matter.
 
+That makes the stream gate a **self-baseline**, and \ref self-baselines-report-drift is what it can
+and cannot tell you: it says the render moved and by how much, never whether it should have. It was
+regenerated three times in one day over the work described below, each time with the reason
+recorded in the commit. Reading a red one as a failure has cost real work here.
+
 The note gate has since been *superseded rather than retired*: the sweep it introduced now runs
 against the DLL as `[note][oracle][sccore][gate]`, and where the two disagree the DLL decides. The
 C# digest is kept beside it because it compares samples, and a one-LSB drift is worth catching even
@@ -223,14 +228,15 @@ The digests are being re-based onto three tiers, which are **not** equal and sho
 collapsed into one number:
 
 1. **Historical** — the existing fixtures, generated from the archived C# engine. Kept as a record
-   of what the old reference produced, not as a target. They are what every gate in the suite
-   currently measures against.
+   of what the old reference produced, not as a target. The `[render]`, `[stream]` and `[sampler]`
+   gates measure against them; the two oracle gates below do not, and neither does anything added
+   since.
 2. **Authoritative** — generated from `SCCore.dll` itself, driven through its own exported API
    (`TG_initialize`, `TG_LongMidiIn`, `TG_Process`). This is the real target: agreement with the
    black box rather than with another reimplementation. `tools/dump_note_renders_oracle.py` sweeps
-   180 single notes across every tone map and `tools/dump_song_renders_oracle.py` drives the song
-   corpus, both through the spec repository's `scdec` harness — natively on Windows, under wine
-   elsewhere. **Both halves are live**: `[song][oracle][sccore][gate]` and
+   239 single notes and drum hits across every tone map and `tools/dump_song_renders_oracle.py`
+   drives the song corpus, both through the spec repository's `scdec` harness — natively on
+   Windows, under wine elsewhere. **Both halves are live**: `[song][oracle][sccore][gate]` and
    `[note][oracle][sccore][gate]`.
 3. **Constrained** — this engine at the hardware's 64 voices, which is the tier directly comparable
    to (2). The gap between them is the measurement that matters, and it answers a question worth
@@ -243,8 +249,10 @@ Nothing in the DLL can produce them, because the DLL has 64 voices.
 
 \note Tier 2 is no longer blocked on the harness. What stood in the way was that `scdec` could
 only play a built-in sequence; it now takes an **arbitrary Standard MIDI File** in `smf` mode and
-renders a whole sweep of single notes in one process in `notebatch` mode, which is what the two
-generators here drive.
+renders a sweep of single notes in `notebatch` mode. The song generator drives `smf`, one process
+per song. The note generator drives `notebatch` too, but with **one case per process, run
+concurrently** — batching the sweep into one process is what \ref oracle-harvest-isolation is
+about, and it is behind `--batch` now for a quick look only.
 
 **Tier 2 records tolerances, not digests, and that is a property of the problem.** A song runs the
 chorus and reverb, whose LFOs the DLL starts at a phase this port cannot yet derive, so two renders
@@ -372,6 +380,15 @@ tick.
 | envelope, median worst window | **0.72 dB** |
 | programs needing no allowance at all | **27 of 36** |
 | drum keys needing no allowance at all | **33 of 54** |
+
+\note Those five numbers are the sweep's *first* authoritative reading, kept because they are what
+the tolerances were set from. Two things have moved under them since and neither has been
+re-tabulated: the fixture was re-harvested one case per process (\ref oracle-harvest-isolation), and
+voices now start in GS block order. What is measured as of the re-harvest is the standing: **8 of
+239 cases fail an assertion**, four melodic and four drums, and every one of them is marginal
+against its own bound — the widest is a 63 Hz band 39 dB under its note, and the largest level
+disagreement is 2.7 dB on a case allowed 2.3. The one pitch failure is the 5.6-cent case that
+\ref what-is-left-in-the-pitch-chain shows is not a tuning error at all.
 
 The measurement turned on one distinction, which is worth stating because the obvious version of
 the gate gets it wrong. Sorting all 1254 comparable bands by how far each sits below its own note's
@@ -968,7 +985,9 @@ other song row is bit-identical and all three gates fail or pass exactly the row
 That is what a correction with no measurement behind it looks like: the blocks it touches are ones
 the pitch word cannot reach, so the only honest claim is that the binary reads row 2.
 
-What the pitch word says about the failing note-gate rows is worth having:
+What the pitch word said about the note-gate rows failing *at the time* is worth having. Two of the
+three have since stopped failing and the reason is not in this table — the sweep was re-harvested
+one case per process — but the measurement stands on its own:
 
 | case | partial 0 | partial 1 |
 |---|---|---|
@@ -976,9 +995,9 @@ What the pitch word says about the failing note-gate rows is worth having:
 | `prog 38 note 72 map 4` | exact | 1 unit |
 | `prog 99 note 48 map 1` | **71 units** | exact |
 
-Two of the three notes the gate fails are tuned right to within three quarters of a milli-semitone,
-so their band and envelope failures are not a pitch problem and chasing tuning will not fix them.
-The third is wave 2778 missing its second fine tune of 52 — exactly the per-voice gate above.
+Two of the three notes were tuned right to within three quarters of a milli-semitone, so their band
+and envelope failures were not a pitch problem and chasing tuning would not have fixed them. The
+third is wave 2778 missing its second fine tune of 52 — exactly the per-voice gate above.
 
 \note One candidate died here and is recorded so it is not rediscovered: the partial block's signed
 16-bit at `+0x16` reproduces `Alto Sax` at key 41 *exactly* — base 40928 against the module's
@@ -994,19 +1013,38 @@ selector picks between two pointers to the same memory; and the three part-level
 the same for every voice and sum to zero at neutral tune, which is why the fitted constant lands on
 `0x38000` exactly.
 
-One more thing the routine reads differently: the pitch-jitter depth comes from **block +0x12**,
-immediately after the coarse tune at +0x11. This port reads +0x1a, on no authority anyone recorded,
-and the ROM agrees with the decompilation: +0x12 is non-zero on 223 of the 4,726 partial blocks with
-nineteen distinct depths, +0x1a on nineteen blocks with two.
+One more thing the routine reads differently, and the way this one resolved is the more useful
+lesson. The pitch-jitter depth appeared to come from **block +0x12**, immediately after the coarse
+tune at +0x11, where this port read +0x1a; the ROM seemed to agree, +0x12 being non-zero on 223 of
+the 4,726 partial blocks against +0x1a's nineteen.
 
-\warning **That correction is not applied, because it makes the song gate worse.** With +0x12,
-`robyn_show_me_love` goes from inside the default 0.01 peak bound to 0.036 outside it and `rainy`
-breaches its row, while the level, spectrum and envelope of both stay passing. One fragile
-sample-level metric moving on two songs and nothing else points at the *draw order* rather than the
-byte: jitter on 223 partials instead of 19 puts many more voices on the one shared generator, so
-any disagreement about which voice draws when becomes audible. The byte is a one-character change
-waiting on that question; making it now would trade a known-wrong constant for wrong-sounding
-songs.
+**Both bytes are right, because they are two different features.** They share
+`start_jitter_milli_semitones` and nothing else. `partial_compute_pitch @ 18005fc20` tests +0x12 and
+moves the **base pitch**; `pitch_env_apply_stage @ 1800600c0` tests +0x1a and adds its result to the
+**pitch envelope's start level**. The module reads both, in that order, and the port now does too.
+That 223 blocks use one and nineteen the other is not evidence for either — it is two features used
+at different rates.
+
+Switching the byte did make the song gate worse, and the reason is plain in hindsight: it *moved*
+the draw rather than adding the one that was missing, so a +0x12 patch drew in the wrong place and
+every +0x1a patch stopped drawing at all. The gate was reporting a real regression about a change
+that was half right, which is the failure mode a one-byte hypothesis invites. See
+\ref self-baselines-report-drift for the other half of how this was nearly settled on the wrong
+instrument.
+
+Draw *order* was a genuine defect underneath it, and it is fixed separately: a chunk's voices now
+start in GS block order with the drum part first, matching `tg_start_pending_voices @ 18008f020`,
+and each part spends `voices + 1` draws before its notes are set up. On `STREETS.MID` those two
+together took the song gate's balance measure from 0.1220 to 0.0864 against a 0.06 bound, and
+`roland_sc88_y03` moved from failing its balance row to passing it.
+
+\note The one pitch row the note gate still fails, `program 48 note 72 map 4` at 5.6 cents, was
+chased to the bottom and **is not a tuning error**. Driving the same case through the block loop
+puts this engine's spectral peaks at 519.04, 519.53, 521.00 and 521.48 Hz — the same four
+frequencies as the oracle, to the resolution of the analysis. Only their *amplitudes* differ, by one
+to two dB, and the fundamental estimator picks a different one of the four as a result. A partial
+that is 1 dB loud reads here as a note that is 5.6 cents sharp, which is worth knowing before
+trusting the gate's cents column on any tone whose partials beat.
 
 ### Now it is measured
 
@@ -1226,13 +1264,22 @@ Stated plainly, because they are not covered by the numbers above:
   MIDI kits resolve to ordinary melodic tones, so the common path works.
 - **The random LFO waveforms do not draw the same numbers as the module**, though they now draw
   from the same generator by the same law. Shapes 1, 2 and 3 are implemented (see below); what is
-  not reproduced is *which* draw a given voice gets. The generator is one shared sequence and every
-  consumer advances it — the LFO shapes, the pitch start jitter, the random pan — so aligning the
-  values would mean matching the module's consumption order voice for voice, which is an accident
-  of its allocator rather than a behaviour. The shape, rate, step timing and depth are right and
-  the particular numbers are not, which is the intended side of the "audible fidelity, not bit
+  not reproduced is *which* draw a given voice gets. This bullet used to say the consumption order
+  was "an accident of its allocator rather than a behaviour", and that was wrong on both counts.
+  It is a behaviour, it is in the binary, and most of it is now matched: five consumers each draw
+  only when their own byte is non-zero, a chunk's voices are set up in GS block order with the drum
+  part first, and each part spends `voices + 1` draws before its notes. What remains is **the LFO
+  node pool**. The module's 128 slots carry the random registers at `+0x77`, nothing zeroes them on
+  free or on a GS reset, and a note claiming a recycled slot opens on the previous note's values
+  where this engine opens at zero. Until that is modelled the values cannot align, and the shape,
+  rate, step timing and depth being right is the intended side of the "audible fidelity, not bit
   accuracy" line: a random modulation that steps at the right moments to the right *sort* of value
   is the parameter working.
+- **LFO1 is shared per note in the module and per partial here.** One node serves a note's whole
+  set of partials, refcounted at `+3`, where LFO2 gets one node per partial. Bit 5 of the tone
+  header's `+0x0e` selects it and this port does not read that bit, so a two-partial tone with a
+  random LFO1 runs two independent random walks where the module runs one. Eight tones across the
+  four maps are affected; nothing currently failing points at it.
 - **All six of the control matrix's sources are now consumed**, including the two assignable
   controllers. Their numbers come from `40 1x 1F` and `20`, default to General Purpose 1 and 2, and
   are clamped to 0-95 — measured, not assumed: assigning 100 and then sending CC#95 modulates on

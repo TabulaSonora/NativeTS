@@ -173,9 +173,15 @@ hold) or walk toward it by a fixed step per tick. Selectors 2 and 3 are the same
 has two cases for them and they are identical. This is why ts::LfoRunner carries waveform state
 rather than recomputing from the phase: a slewed shape that has arrived at its target leaves its
 output untouched, so the previous tick's value *is* this tick's answer, and there is no phase to
-recover it from. The generator is one shared sequence — ts::EngineNoise, which the pitch start
-jitter and the random pan draw from too — so which voice draws when is part of what the sequence
-is.
+recover it from. The generator is one shared sequence — ts::EngineNoise — and it has five
+consumers, each drawing only when its own byte is non-zero so an unaffected patch leaves the
+sequence where it found it: the base-pitch jitter at partial `+0x12`, the pitch envelope's start
+jitter at `+0x1a`, the random partial select in the tone common at `+0x22`, the random pan, and
+these three LFO shapes. Which voice draws when is therefore part of what the sequence is, and it is
+why \ref signal-flow records the order voices are set up in as a property of the engine rather than
+an implementation detail. ts::EngineNoise::discard exists for the same reason: the module makes
+draws this port has no use for, and skipping them silently would put every later consumer on the
+wrong value.
 
 **All six sources reach them**, including the two assignable controllers — which are not Control
 Change #1 and #2, a collision in the GS naming worth stating once. CC1 and CC2 are *sources* that
@@ -255,7 +261,7 @@ settings are departures, so both are opt-in — the principle throughout is to m
 default and exceed it only on request.
 
 ts::NoteRenderer::render_note is not a second renderer. It renders one note in isolation, which is
-what analysis, the C# note digest and `render-note` want, and none of those is a song.
+what analysis and the C# note digest want, and neither of those is a song.
 
 The authoritative note gate does *not* use it, and the reason is worth stating: the oracle audio it
 compares against came out of the DLL's whole pipeline, so it drives one note through the block loop
@@ -263,6 +269,15 @@ instead. A standalone note renderer is a different signal path — no part proce
 stage — and comparing against it would measure the gap between two architectures and call it a
 defect. That choice paid a second time when the sweep grew drum cases: a kit is reached by sending a
 program change to channel 10, and a renderer with no parts has no channel 10 to send it to.
+
+`render-note` now takes the gate's path rather than the isolated one, for the same reason and one
+more. The isolated renderer takes the ideal `pow(2, x/12000)` for its playback rate where every
+voice in the block loop goes through `g_ramp_exp_tbl`, and that table is not a true exponential —
+it drifts to 4.66 cents flat across an octave, which is enough to read as a tuning defect in
+whatever the diagnostic was pointed at. So the subcommand mirrors the gate exactly: eight discarded
+512-frame blocks of warm-up, `event_delay_blocks = 4`, the output filter on, `--channel 9` for a
+kit. `--per-note` still reaches the isolated path, and says in its own help text not to compare its
+output against an oracle case.
 
 Rendering is comfortably faster than realtime on one core. `tabula-sonora bench` reports the margin
 on your machine, stage by stage, and `render` reports afterwards whether the polyphony setting
