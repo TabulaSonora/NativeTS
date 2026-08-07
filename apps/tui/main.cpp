@@ -278,6 +278,18 @@ struct Ui {
         }
     }
 
+    // Keep the cursor on a row that exists. It starts at part 0 because it has to start somewhere,
+    // and plenty of files never touch channel 1 -- a drums-only file, one that starts at channel 2,
+    // a General MIDI file whose first track is on 10. Landing there means the first mute or solo
+    // keypress does nothing to anything audible, which reads as the key not working.
+    //
+    // Safe to do from the draw: `SequencePlayer::addressed_parts` is computed once from the event
+    // list rather than accumulated as playback reaches each part, so this set does not change while
+    // a file plays. The snap fires on the first frame and never moves a cursor the user placed.
+    if (std::find(listed.begin(), listed.end(), ui.selected) == listed.end()) {
+        ui.selected = listed.front();
+    }
+
     const bool multi_port = !listed.empty() && listed.back() >= 16;
 
     Elements rows;
