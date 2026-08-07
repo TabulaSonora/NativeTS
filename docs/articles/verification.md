@@ -194,6 +194,39 @@ both readings sound identical. On a stream that sets an EQ curve without ever ad
 one claim on this page resting on absence of evidence rather than measurement, and a file that sets
 `40 02` and no part EQ would settle it in a single render.
 
+## The module's limits are load-bearing
+
+Twice now a mechanism has turned out to be a *ceiling* rather than a feature, and a port that lifts
+it renders real files wrongly.
+
+**Sixteen parts, because one instruction masks the cable nibble.** The module allocates and
+initialises thirty-two parts unconditionally, and `midi_drain_ready_to_ports` ANDs each event's
+`(cable << 4) | CIN` byte with `0x0f` before enqueueing it — discarding the cable and landing every
+event on port A. One `and r8b,0Fh`, one occurrence in the binary, and it is the only thing keeping
+parts 17–32 unreachable from MIDI input.
+
+**A single flush drops what will not fit, silently.** `TG_flushMidi` moves each ring entry to the
+ready buffer only `if (sVar4 < DAT_181a63492)` and discards it otherwise — no error, no
+back-pressure. Measured, the boundary sits between 46 and 47 bulk-dump-sized messages queued before
+one flush, about 6 KB.
+
+That second one is not a curiosity. `darkness3.mid` opens with 104 events on one tick: thirty `48`
+patch-dump messages, thirty `49` drum-set messages, then nine program changes. **Every one of those
+program changes falls past the limit and never arrives.** The module therefore plays the patches the
+dump chose — blocks 5, 6, 9 and 12 on programs 33, 48, 48 and 30 — and not the ones the file's own
+program changes name. Removing `PROG ch9 = 0` from the file leaves the module's render byte for
+byte identical, because it was never applied.
+
+This engine applies every event it is given, so it plays the file's programs: a piano on channel 9
+where the module plays a string ensemble. And the uncomfortable part is the direction of travel —
+**implementing the bulk dump correctly made this worse**. Before it, both engines ignored the dump
+and agreed by accident. Now the dump's programs are right, and the file's overwrite them.
+
+So the queue's capacity has to be modelled, not just its contents. That is a strange thing to
+implement on purpose, and it is the difference between rendering these files and merely accepting
+them: 402 files in a 132,000-file archive carry a `48` dump, and dumping a configured module and
+then setting programs is the ordinary shape for how such a file is made.
+
 ## The per-note renderer was retired
 
 This project long treated the offline per-note renderer as the authoritative one, and the digests
