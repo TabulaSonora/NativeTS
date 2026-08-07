@@ -196,21 +196,35 @@ runs the song gate with it on, which is a measurement rather than a gate, and th
 whole 36-song corpus stays inside the existing tolerances. The same rows fail, the same number of
 assertions fail, and no row crosses a boundary in either direction:
 
-| song | peak with the module's resampler | with the correction | moved |
-|---|---|---|---|
-| `bigben.mid` map 4 | 0.625977 | 0.633575 | +0.0076 |
-| `onestop.mid` map 4 | 0.772522 | 0.777924 | +0.0054 |
-| `roland_allstars.mid` map 1 | 0.564178 | 0.567413 | +0.0032 |
-| `ff5_1_16_harvest.mid` map 4 | 0.261566 | 0.264526 | +0.0030 |
+| song | oracle | with the module's resampler | with the correction | moved |
+|---|---|---|---|---|
+| `bigben.mid` map 4 | 0.715576 | 0.625977 | 0.633575 | +0.0076, **toward** |
+| `onestop.mid` map 4 | 0.694397 | 0.772522 | 0.777924 | +0.0054, away |
+| `roland_allstars.mid` map 1 | 0.611694 | 0.564178 | 0.567413 | +0.0032, **toward** |
+| `ff5_1_16_harvest.mid` map 4 | 0.247864 | 0.261566 | 0.264526 | +0.0030, away |
 
 Worst movement across all 23 rows that report a peak is **0.0076, against a tolerance of 0.01** —
 and it is `bigben`, which is the 4.80× case and so exactly where the correction should show most.
 
-That is worth stating plainly because it bounds what the switch is for. The correction is *audible*
-on the case that motivated it — a three-octave dive that holds for 0.6 s instead of sliding — and it
-is *statistically invisible* on ordinary material, which is what fitting the kernel to the module's
-own response was meant to achieve. The gates keep it off on principle rather than out of necessity:
-they would still pass with it on, but they would no longer be measuring what they claim to measure.
+**And on `bigben` the correction is an improvement against the reference, not merely a tolerable
+deviation.** That file is the reason the ceiling exists: a Kalimba wave driven to 4.80×, where the
+4-tap kernel folds everything above a quarter of the rate back down. Two independent measurements
+say the wide kernel is doing the right thing there:
+
+- Its peak moves **toward** the oracle, 0.625977 to 0.633575 against 0.715576. So does
+  `roland_allstars`. The two that move away were already above the oracle and move further above by
+  three to five thousandths, which is a third of a tolerance.
+- Comparing the two renders band by band, the audible range moves by +0.03 to +0.18 dB and total
+  energy by +0.02 dB, while **12–14 kHz falls 16.65 dB**. That band was fold-down. It is gone rather
+  than contained, and the DLL still has it — this is a case where matching the reference and sounding
+  right are not the same thing.
+
+That bounds what the switch is for. The correction is *audible* on the case that motivated it — a
+three-octave dive that holds for 0.6 s instead of sliding — *statistically invisible* on ordinary
+material, which is what fitting the kernel to the module's own response was meant to achieve, and a
+measurable improvement on the one file that pushes the resampler hardest. The gates keep it off on
+principle rather than out of necessity: they would still pass with it on, but they would no longer
+be measuring what they claim to measure.
 
 \note The last two unconditional cases are enforced by the digest gates rather than by tests named
 for them. They are

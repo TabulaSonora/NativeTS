@@ -278,6 +278,22 @@ struct Ui {
         }
     }
 
+    // In the order the rows are *labelled*, which is the receive channel and not the slot. The two
+    // agree until something moves a part, and then a list built in slot order reads as though the
+    // numbering were scrambled -- `darkness3.mid`'s bulk dump writes every part's receive channel,
+    // and a mixer that shows 10, 1, 2, 3 down the left edge looks broken rather than informative.
+    //
+    // Port first, so a multi-port score still groups the way an interface labels it, and the slot
+    // breaks ties: two parts pointed at one channel is legal in GS and both rows have to appear.
+    std::stable_sort(listed.begin(), listed.end(), [&state](int left, int right) {
+        const auto& a = state.parts[static_cast<std::size_t>(left)];
+        const auto& b = state.parts[static_cast<std::size_t>(right)];
+        if ((left / 16) != (right / 16)) {
+            return (left / 16) < (right / 16);
+        }
+        return a.rx_channel != b.rx_channel ? a.rx_channel < b.rx_channel : left < right;
+    });
+
     // Keep the cursor on a row that exists. It starts at part 0 because it has to start somewhere,
     // and plenty of files never touch channel 1 -- a drums-only file, one that starts at channel 2,
     // a General MIDI file whose first track is on 10. Landing there means the first mute or solo
