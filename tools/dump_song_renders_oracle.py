@@ -259,6 +259,23 @@ def main():
                           "exitCode": result.returncode})
             continue
 
+        # The chorus LFO accumulator's position when the song starts. The reference prints it on
+        # every render, and it matters because nothing ever resets that accumulator -- not a GS
+        # reset, not a macro change -- so its phase here is a function of how long the reference ran
+        # before the song did. Two engines that agree on every note still place their wet
+        # differently unless they agree on this, and the gate seeds it rather than comparing across
+        # an arbitrary offset.
+        #
+        # A property of the *harvest*, not of the DLL: change the warm-up and it changes. So it is
+        # recorded per case rather than assumed, the same way each case's audio is.
+        phase = None
+        for line in result.stdout.splitlines():
+            if "lfoPhase at song start" in line:
+                digits = "".join(c for c in line.split("=", 1)[1] if c in "-0123456789 ").split()
+                if digits:
+                    phase = int(digits[0])
+                break
+
         left, right, frames = read_wav(audio)
         mono = [(left[i] + right[i]) * 0.5 / 32768.0 for i in range(frames)]
         peak = max((abs(v) for v in left + right), default=0) / 32768.0
@@ -276,6 +293,7 @@ def main():
             "envelope": envelope(mono, arguments.rate),
             "balance": balance(left, right),
             "sha256": hashlib.sha256(audio.read_bytes()).hexdigest(),
+            **({"chorusLfoPhase": phase} if phase is not None else {}),
         })
 
     document = {
@@ -283,6 +301,8 @@ def main():
                   "Roland-derived: generate locally, do not redistribute. Tolerance gates: the "
                   "reference's effect LFOs start at a phase this port cannot yet derive, so two "
                   "renders can agree on every note and still correlate near 0.18 sample by sample. "
+                  "`chorusLfoPhase` is where that accumulator stood when each song began, so a gate "
+                  "can place its own there and compare the wet rather than the offset. "
                   "Compare frames, peak, rms, the octave bands, the coarse envelope and the "
                   "per-window stereo balance; the sha256 identifies the oracle audio, it is not a "
                   "target."),

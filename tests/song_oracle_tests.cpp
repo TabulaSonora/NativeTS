@@ -192,7 +192,10 @@ constexpr std::array<KnownDeviation, 19> known_deviations{{
     // while the module holds the voice's side. `bad_apple`'s worst two windows are its last two, at
     // -32 and -36 dB, which is its reverb tail and nothing else. The dry pan is not in question in
     // either; where the wet comes back is.
-    {"panwet.mid", {1.0, 0.01, 3.0, 6.0, 0.189}, "wet return placement, not the dry pan"},
+    // Seeding the chorus LFO where the reference's stood at the downbeat took this from 0.2616 to
+    // **0.1416** -- the largest single movement any balance figure here has made, on the file that
+    // exists to measure exactly this. What is left is no longer the phase.
+    {"panwet.mid", {1.0, 0.01, 3.0, 6.0, 0.15}, "wet return placement, past the chorus phase"},
     {"bad_apple_feat_nomico_s__msgs.mid", {1.0, 0.01, 3.0, 6.0, 0.190},
      "wet return placement in the closing tail"},
 
@@ -216,7 +219,10 @@ constexpr std::array<KnownDeviation, 19> known_deviations{{
      "lead; CC1/CC2 pointed at a CC the file never sends"},
     {"macross2.mid", {2.3, 0.065, 11.0, 7.3, 0.085},
      "lead; CC1/CC2 routes assigned at neutral depth"},
-    {"ff5_1_16_harvest.mid", {1.0, 0.01, 4.1, 6.0}, "lead; CC1 route is driven but not in the deviating bands"},
+    // 4.45 dB at 125 Hz since the chorus phase seed, from just inside 4.1. The same trade as
+    // `roland_sc88_y03` above, and the same note applies: the seed is what the module does.
+    {"ff5_1_16_harvest.mid", {1.0, 0.01, 4.5, 6.0},
+     "lead; CC1 route is driven but not in the deviating bands"},
 
     // The corpus's worst stereo deviation by a clear margin -- 0.287 where the next is 0.190 -- and
     // it is not obviously the same lead as the three above. Worth noting that this is also the row
@@ -245,7 +251,11 @@ constexpr std::array<KnownDeviation, 19> known_deviations{{
     {"dreaming_i_was_dreaming.mid", {1.0, 0.02, 3.0, 6.0}, "lead; clicks on note boundaries"},
     {"onestop.mid", {1.0, 0.015, 3.0, 6.0}, "peak only, and only since drums ring their full length"},
 
-    {"roland_sc88_y03.mid", {5.0, 0.33, 9.8, 7.0}, "bass missing, same at every map"},
+    // The balance row is new and is the cost of the chorus phase seed: 0.0638 against the 0.06
+    // default, where it used to pass. Three other songs' balance improved for the same change --
+    // panwet by 0.12, rainy and roland_sc55_demo03 by 0.007 each -- so the trade is heavily
+    // positive and this is the one that went the other way. Tighten when the bass arrives.
+    {"roland_sc88_y03.mid", {5.0, 0.33, 9.8, 7.0, 0.065}, "bass missing, same at every map"},
     {"roland_suplex.mid", {1.5, 0.24, 8.2, 14.5, 0.146}, "one passage plays differently"},
     {"roland_sc88_y05.mid", {1.2, 0.2, 3.0, 6.0, 0.064}, "lead"},
     {"roland_sc55_demo13.mid", {1.0, 0.06, 5.5, 6.0, 0.109}, "lead"},
@@ -374,6 +384,20 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         options.ports = 1;
         options.map = static_cast<ToneMap>(entry.at("map").get<int>());
         ToneGenerator generator{notes, options};
+
+        // Start the chorus LFO where the reference's was when this song began. Its accumulator is
+        // never reset -- not by a GS reset, not by a macro change -- so its phase at the downbeat
+        // is a function of how long that engine had been running first, and the harness prints the
+        // value it reached. Comparing without this measures the offset rather than where the wet
+        // is placed: rendering `panwet.mid` through the module at three warm-up lengths, changing
+        // nothing else, moves its mean per-window balance error by a fifth.
+        //
+        // Absent on a fixture harvested before the generator recorded it, and then simply skipped:
+        // an older fixture should still run rather than fail on a field it never had.
+        if (const auto phase = entry.find("chorusLfoPhase"); phase != entry.end()) {
+            generator.seed_chorus_phase(phase->get<int>());
+        }
+
         SequencePlayer player = SequencePlayer::from_file(generator, midi);
         const RenderResult result = player.render_to_end(tail);
 

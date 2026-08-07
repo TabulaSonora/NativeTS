@@ -255,10 +255,20 @@ concurrently** — batching the sweep into one process is what \ref oracle-harve
 about, and it is behind `--batch` now for a quick look only.
 
 **Tier 2 records tolerances, not digests, and that is a property of the problem.** A song runs the
-chorus and reverb, whose LFOs the DLL starts at a phase this port cannot yet derive, so two renders
-that agree on every note still diverge sample by sample: whole-song correlation against the oracle
-sits near 0.18 while every octave band agrees to a tenth of a dB. Sample identity is therefore not
-merely unreachable, it is the wrong question. What the gate compares is length, then peak, RMS,
+chorus and reverb, whose free-running LFOs the DLL enters the song with wherever its own history
+left them, so two renders that agree on every note still diverge sample by sample: whole-song
+correlation against the oracle sits near 0.18 while every octave band agrees to a tenth of a dB.
+Sample identity is therefore not merely unreachable, it is the wrong question.
+
+The chorus half of that is no longer unknown. Its accumulator advances `rate << 6` per sample into
+24 bits and **nothing resets it** — not a GS reset, not a macro change — so its phase at a song's
+downbeat is a function of how long the reference ran first. The harness prints the value it reached,
+the fixture records it per case as `chorusLfoPhase`, and the gate places its own accumulator there
+before rendering. Aligning it took `panwet.mid` — the one-note probe that exists to measure wet
+placement — from **0.2616 to 0.1416** on the balance measure, the largest single movement any figure
+there has made, and improved `rainy` and `roland_sc55_demo03` besides. Two rows went the other way
+by a few hundredths and are carried as debts. The reverb has no equivalent register that anyone has
+found, and is the obvious place to look for what is left. What the gate compares is length, then peak, RMS,
 per-octave level and a coarse RMS envelope — the envelope catching a note that goes missing or
 arrives late without being sensitive to phase. The oracle audio is kept beside the fixture so a
 failure can be measured rather than only counted.
