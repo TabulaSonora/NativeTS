@@ -129,24 +129,58 @@ PitchChain::key_follow_key(const PartialParameters& partial, int note, int key_c
     const int transpose = raw[0x10] - 0x40;
     const int amount = raw[0x13] - 0x40;
 
-    if (amount == 10 || amount < 0) {
+    // **The pivot is middle C, not the partial's key centre.** `multisample_key_zone @ 1800031f0`
+    // holds it in one variable, and on the path every reachable tone takes, that variable is set by
+    // a literal `uVar6 = 0x3c`. The same variable is what the interpolated step is added back to,
+    // so it fixes both the distance measured and the key returned.
+    //
+    // This port used `key_center` -- the partial block's `+0x04` -- for both. The error that makes
+    // is `(key_centre - 60) * 100 * (10 - amount)` milli-semitones, and it vanishes at full follow,
+    // which is why it hid: 2,645 of the 3,438 present partials carry `amount == 10` and never
+    // notice. On the 772 that do not it is worth up to 3.6 semitones. `Bubble` at bank 5 program
+    // 122 measured 3598 milli-semitones sharp on its first partial and 3195 on its second, against
+    // a predicted `(64-60) * 100 * (10-1)` = 3600 and `(64-60) * 100 * (10-2)` = 3200.
+    //
+    // Every partial in the table has key centre 64, so no measurement could have separated a pivot
+    // of 60 from one of 64 with a constant offset. Only the listing settles it.
+    //
+    // The key centre is not unused, but it belongs to a path this port does not take:
+    // `multisample_key_zone`'s B-table branch offsets the *note* by `block[0x10] - block[0x04]`
+    // before looking up a zone. It is never the pivot.
+    constexpr int pivot = 0x3C;
+    (void)key_center;
+
+    if (amount == 10) {
+        // `bVar9 == 0x4a` falls straight through to returning the key untouched.
         return KeyFollow{note + transpose, 0};
     }
     if (amount == 0) {
-        return KeyFollow{key_center + transpose, 0};
+        // `bVar9 == 0x40` pins the key at the pivot. The module spells it as two cases -- key 60
+        // weight 0 at or above the pivot, key 59 weight 1000 below it -- which are the same pitch.
+        return KeyFollow{pivot + transpose, 0};
     }
 
-    const int distance = note - key_center;
-    const int product =
-        key_follow_scale[static_cast<std::size_t>(std::min(amount, 10))] * (std::abs(distance) * 2);
+    // A negative amount is *inverted* follow rather than full follow: the module runs the same
+    // interpolation with the magnitude indexing the table and the sign flipping which way the step
+    // goes. No partial in the table has one -- `block[0x13]` spans 0x40 to 0x4f -- so this is
+    // reachable only by a corrupt tone, but reading it as full follow was wrong.
+    const int magnitude = std::abs(amount);
+    const bool inverted = amount < 0;
+
+    const int distance = note - pivot;
+    const int product = key_follow_scale[static_cast<std::size_t>(std::min(magnitude, 10))]
+                        * (std::abs(distance) * 2);
     const int high = product >> 16;
     const int low = product & 0xFFFF;
+
+    // Which side of the pivot the step falls on, with a negative amount reflecting it.
+    const bool ascending = (distance >= 0) != inverted;
 
     int weight = 0;
     int key_step = 0;
     if (low < 65000) {
         const int scaled = (low * 999) / 65000;
-        if (distance >= 0) {
+        if (ascending) {
             weight = scaled;
             key_step = high;
         } else {
@@ -155,10 +189,10 @@ PitchChain::key_follow_key(const PartialParameters& partial, int note, int key_c
         }
     } else {
         weight = 0;
-        key_step = distance >= 0 ? high + 1 : ~high;
+        key_step = ascending ? high + 1 : ~high;
     }
 
-    return KeyFollow{key_center + key_step + transpose, weight};
+    return KeyFollow{pivot + key_step + transpose, weight};
 }
 
 int PitchChain::base_pitch_milli_semitones(const PartialParameters& partial,

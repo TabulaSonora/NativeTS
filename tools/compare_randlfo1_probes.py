@@ -182,9 +182,13 @@ def main():
           f"{sum(r['rms'] for r in rows) / n:8.4f} "
           f"{sum(r['worst'] for r in rows) / n:11.4f} "
           f"{sum(r['mean'] for r in rows) / n:10.4f}")
-    print("\nFor reference, the reading that landed the shared node (mean of 12):")
-    print("  per-partial LFO1   peak 0.006638   rms 0.1436   worst band 11.4770   mean band 2.4161")
-    print("  shared LFO1        peak 0.007284   rms 0.1145   worst band 11.0379   mean band 2.2352")
+    print("\nFor reference, three readings of the same twelve cases (means):")
+    print("  per-partial LFO1     peak 0.006638  rms 0.1436  worst band 11.4770  mean band 2.4161")
+    print("  shared LFO1          peak 0.007284  rms 0.1145  worst band 11.0379  mean band 2.2352")
+    print("  key-follow pivot 60  peak 0.002111  rms 0.1067  worst band  0.1668  mean band 0.1265")
+    print("\nThe third is what these probes were really for. Sharing LFO1 was right and barely moved")
+    print("the number; the 11 dB was a key-follow pivot taken from the partial's key centre instead")
+    print("of middle C, worth up to 3.6 semitones on a tone that does not follow the key fully.")
 
     if arguments.keep or arguments.work:
         print(f"\naudio left in {work}")

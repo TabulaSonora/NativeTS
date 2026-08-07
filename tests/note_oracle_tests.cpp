@@ -268,8 +268,20 @@ constexpr std::array<KnownDeviation, 6> known_deviations{{
     // `Synth Drum`, 12 on `Seashore`, on the two cases where the module puts real energy under
     // 90 Hz. Two unpitched noise patches disagreeing in the bottom octave is the same finding as
     // the rest of their rows, one octave lower than it could previously be seen.
-    {118, {1.0, 0.045, 10.5, 6.0, 110.0}, "Synth Drum; unpitched -- the pitch bound is not a check"},
-    {122, {1.0, 0.01, 12.5, 6.0, 41.0}, "Seashore; unpitched -- the pitch bound is not a check"},
+    //
+    // **`Seashore` closed and its row is now nearly the default.** It carried `block[0x13] = 0x42`,
+    // two tenths of key follow, and this engine was pivoting that follow on the partial's key centre
+    // where the module pivots on middle C -- worth `(64 - 60) * 100 * (10 - 2)` = 3200
+    // milli-semitones, three and a bit semitones, on every one of its five cases. With the pivot
+    // right all five agree to **0.12 dB in every band**, 0.1 dB of level and 0.0014 of peak. This
+    // was one of the four "patches with a noise component" the article listed as unexplained, and
+    // the pseudo-random source it was blamed on was never the cause.
+    //
+    // `Synth Drum` moved with it -- five tenths of follow, so half the error -- but has not closed:
+    // its worst above-floor band is 6.6 dB at 1 kHz on note 36 and 5.6 at 2 kHz on note 72. What is
+    // left there is its own defect, no longer this one.
+    {118, {1.0, 0.045, 7.0, 6.0, 110.0}, "Synth Drum; unpitched -- the pitch bound is not a check"},
+    {122, {1.0, 0.005, 1.0, 6.0, 41.0}, "Seashore; unpitched -- the pitch bound is not a check"},
 }};
 
 /// The kit keys that do not yet match, kept apart from the melodic table rather than folded in.
