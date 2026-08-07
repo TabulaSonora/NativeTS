@@ -304,6 +304,21 @@ roughly 3.8 dB too quiet**, and since the dry is panned right and the return is 
 return leaves the image stuck on the right. The network being exact means the deficit is in the send
 or the return gain, not in the chorus itself.
 
+One concrete asymmetry is already visible and is a defect on its own terms.
+`voice_send_slew @ 180083be0` slews **all three** sends through one routine — it reads the part's
+chorus send at `+0x3e2`, its reverb send at `+0x3e3` and its delay send at `+0x44a`, and walks the
+gain word by 8 of 1024 a tick, so a full-scale change takes 400 ms. This port slews the reverb send
+per voice and reads the chorus send straight off the part, unslewed:
+
+    to_reverb = Reverb::send_gain(voice.reverb_send());        // per voice, slewed
+    to_chorus = Chorus::send_gain(part.chorus_send_level());   // off the part, stepped
+
+\note That asymmetry is worth fixing whatever else is true, but it is **not** obviously the whole
+3.8 dB, and saying so is the point: an unslewed send that steps to full immediately would make this
+engine *louder* early, not quieter. Either the deficit is elsewhere and the slew merely compounds
+it, or the slew's target differs in scale. Measure before assuming, which is what the rest of this
+section was for.
+
 What the gate compares is length, then peak, RMS,
 per-octave level and a coarse RMS envelope — the envelope catching a note that goes missing or
 arrives late without being sensitive to phase. The oracle audio is kept beside the fixture so a
