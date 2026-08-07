@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 
 namespace ts {
 
@@ -47,6 +48,118 @@ void Interpolator::resample(std::span<const float> buffer,
     for (std::size_t i = 0; i < count; ++i) {
         destination[i] = sample(buffer, positions[i]);
     }
+}
+
+SincInterpolator::SincInterpolator()
+{
+    // Tabulated rather than evaluated: the inner loop asks for up to 64 weights per output sample,
+    // and a sine and a pair of cosines apiece would dominate the render. One entry per 1/1024 of a
+    // source sample, read with linear interpolation, puts the table error far below the fit error.
+    const auto count = static_cast<std::size_t>((2 * radius * resolution) + 1);
+    table_.resize(count);
+    for (std::size_t i = 0; i < count; ++i) {
+        const double d = (static_cast<double>(i) / resolution) - radius;
+        if (std::abs(d) >= radius) {
+            table_[i] = 0.0;
+            continue;
+        }
+        const double x = 2.0 * cutoff * d;
+        const double sinc = (x == 0.0) ? 1.0 : std::sin(std::numbers::pi * x) / (std::numbers::pi * x);
+        // A Blackman with the shoulder left free, which is the second fitted constant.
+        const double t = ((d / radius) + 1.0) / 2.0;
+        const double window = ((1.0 - shoulder) / 2.0) - (0.5 * std::cos(2.0 * std::numbers::pi * t))
+                              + ((shoulder / 2.0) * std::cos(4.0 * std::numbers::pi * t));
+        table_[i] = sinc * window;
+    }
+}
+
+const SincInterpolator& SincInterpolator::shared() noexcept
+{
+    static const SincInterpolator instance;
+    return instance;
+}
+
+double SincInterpolator::weight(double d) const noexcept
+{
+    const double at = (d + radius) * resolution;
+    if (at <= 0.0 || at >= static_cast<double>(table_.size() - 1)) {
+        return 0.0;
+    }
+    const auto i = static_cast<std::size_t>(at);
+    const double f = at - static_cast<double>(i);
+    return (table_[i] * (1.0 - f)) + (table_[i + 1] * f);
+}
+
+namespace {
+
+/// The scale the kernel argument takes, and the half-width that scale then needs.
+///
+/// `scale` is `min(1, 1/ratio)` -- reading faster stretches the kernel over more source samples and
+/// drops its cutoff to the output rate, which is the band-limiting. The half-width has to follow it
+/// or the taps the stretch calls for are simply not summed; capped, because the cost is linear and
+/// a runaway ratio must not be able to ask for an unbounded loop.
+struct Span {
+    double scale;
+    int half;
+};
+
+[[nodiscard]] Span span_for(double ratio) noexcept
+{
+    const double scale = (ratio > 1.0) ? (1.0 / ratio) : 1.0;
+    const auto half = static_cast<int>(
+        std::min<double>(SincInterpolator::max_radius, std::ceil(SincInterpolator::radius / scale)));
+    return {scale, std::max(SincInterpolator::radius, half)};
+}
+
+}   // namespace
+
+float SincInterpolator::sample(std::span<const float> buffer,
+                               double position,
+                               double ratio) const noexcept
+{
+    if (buffer.empty()) {
+        return 0.0F;
+    }
+    const auto base = static_cast<std::int64_t>(std::floor(position));
+    const double fraction = position - static_cast<double>(base);
+    const auto [scale, half] = span_for(ratio);
+
+    const auto last = static_cast<std::int64_t>(buffer.size()) - 1;
+    double sum = 0.0;
+    double density = 0.0;
+    for (int m = -half + 1; m <= half; ++m) {
+        const double w = weight((static_cast<double>(m) - fraction) * scale);
+        if (w == 0.0) {
+            continue;
+        }
+        const std::int64_t at = std::clamp(base + m, std::int64_t{0}, last);
+        sum += buffer[static_cast<std::size_t>(at)] * w;
+        density += w;
+    }
+    // Normalised by the weights actually summed, so every fractional position has unity DC gain
+    // even where the window is truncated at a buffer edge.
+    return density > 0.0 ? static_cast<float>(sum / density) : 0.0F;
+}
+
+float SincInterpolator::sample_ring(std::span<const float> ring,
+                                    std::int64_t index,
+                                    double fraction,
+                                    double ratio) const noexcept
+{
+    const auto mask = static_cast<std::int64_t>(ring.size()) - 1;
+    const auto [scale, half] = span_for(ratio);
+
+    double sum = 0.0;
+    double density = 0.0;
+    for (int m = -half + 1; m <= half; ++m) {
+        const double w = weight((static_cast<double>(m) - fraction) * scale);
+        if (w == 0.0) {
+            continue;
+        }
+        sum += ring[static_cast<std::size_t>((index + m) & mask)] * w;
+        density += w;
+    }
+    return density > 0.0 ? static_cast<float>(sum / density) : 0.0F;
 }
 
 std::pair<double, double> PanLaw::gains(int pan) const noexcept

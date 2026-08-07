@@ -1522,35 +1522,50 @@ into, so this does not have to be guessed at.
 
 Stated plainly, because they are not covered by the numbers above:
 
-- **The pitch increment ceiling clips a portamento glide, and this engine keeps that.** The
-  resampler's increment word tops out at four times the wave's native rate — `PitchRamp::domain_of`
-  clamps to `domain_max = 0x3FFFF`, and with `unity = 0x38000` and `units_per_octave = 0x4000` that
-  is exactly 4.0x. A glide's offset is summed into the same quantity, and a note-on picks its wave
-  for the key being *struck*, so a slide that begins three octaves higher asks for something the
-  word cannot express and is pinned at the ceiling until it has descended past it. The pitch does
-  not move at all until then.
+- **The pitch increment ceiling is corrected, and the correction is the one thing here that is not
+  the module.** The module's resampler increment saturates at four times a wave's native rate --
+  `PitchRamp::domain_max = 0x3FFFF`, with `unity = 0x38000` and `units_per_octave = 0x4000` making
+  that exactly 4.0x, and `max_increment_milli_semitones = 24000` saying the same thing again. A
+  glide's offset is summed into that quantity, and a note-on picks its wave for the key being
+  *struck*, so a slide starting three octaves higher is pinned at the ceiling and does not move at
+  all until it has descended past it.
 
-  `MIDI-Corona-Baby Baby.mid` is where this is audible, and it is the reason the file is in the
-  corpus at **both** map 1 and map 4. Its bass dives from key 71 to key 35 four times. On the SC-55
-  map the wave's native pitch is 39912, so the ceiling sits at 63912 — key 64 — and the glide needs
-  6.02x where it can have 4.0x, which holds the note for 0.6 s before the dive becomes audible. The
-  same file on the SC-8820 map dives properly, and only because that map's wave is native 50054 and
-  the ceiling lands eleven semitones higher, above where the glide starts. Nothing about the file
-  changes between the two renders; the wave does.
+  `MIDI-Corona-Baby Baby.mid` is in the corpus at **both** map 1 and map 4 for this. Its bass dives
+  from key 71 to key 35 four times. On the SC-55 map the wave is native 39912, the ceiling lands at
+  63912 -- key 64 -- the glide needs 6.02x, and the note is held for 0.6 s before the dive is
+  audible. The same file on SC-8820 dives properly only because that map's wave is native 50054 and
+  the ceiling falls eleven semitones higher, above where the glide starts. Nothing in the file
+  differs between the two renders; the wave does.
 
-  **This is the module's defect, not the hardware's.** Nuked-SC55 on an SC-55mkII ROM set has no
-  such ceiling: a glide's start tracks the source key one semitone at a time to key 99 and beyond.
-  It aliases badly doing it — at key 99 the fundamental carries 52.6 dB less of the total than a
-  real key-99 note does, which is what a wave dragged up 64 semitones through a four-tap kernel
-  sounds like — but the pitch is right. So the module clamps where the machine it models does not.
+  **The hardware has no such ceiling.** Nuked-SC55 on an SC-55mkII ROM set tracks a glide's start
+  one semitone at a time to key 99 and beyond. It aliases doing it -- at key 99 the fundamental
+  carries 52.6 dB less of the total than a real key-99 note -- but the pitch is right, so the module
+  clamps where the machine it models does not.
 
-  It is kept because this engine's contract is to match `SCCore.dll`, and lifting the ceiling means
-  running the interpolator at ratios it cannot band-limit. The fix is both halves at once — an
-  8-point windowed sinc shaped like the module's own response, and then the wider word — and it
-  belongs behind a `ToneGeneratorOptions` flag that is on by default and off for anything gated
-  against the DLL, since the gate can never assert a correction to its own reference. A first
-  attempt that lifted only `ratio_with`'s `max_increment_milli_semitones` is worth recording as a
-  trap: it produced **byte-identical** audio, because the ramp clamps the word straight back.
+  `ToneGeneratorOptions::extended_interpolation` removes the ceiling, and `SincInterpolator` is what
+  makes that safe. The kernel is fitted to the module's own 4-tap response rather than merely being
+  better than it: a windowed sinc whose cutoff and window shoulder were chosen by least squares
+  against the averaged magnitude of the 4-tap bank, landing **0.165 dB RMS** and no worse than 0.26
+  dB anywhere below a quarter of the sample rate. Above that it diverges on purpose -- -26.2 dB
+  against -14.2 dB at Nyquist -- and it widens with the read rate, so rejection at the folding
+  frequency stays at -28.3 dB from 1x to 8x where the 4-tap kernel collapses to -6.6 dB at 6x.
+
+  The widening is why the tap count is not fixed at eight. The kernel spans `radius / scale` samples
+  each side, so a 6x read wants about fifty taps; capping at eight -- which the reference
+  implementation this borrows from does -- lets the rejection collapse at exactly the ratios the
+  thing exists to serve. It costs nothing when unused: past the radius the kernel is zero, so at 1x
+  the eight-tap and sixty-four-tap sums are the same number.
+
+  Measured on `bigben.mid`, the file the ceiling was introduced for -- a Kalimba wave asked for
+  4.80x. It does not explode; it improves. The audible bands move by +0.03 to +0.18 dB and total
+  energy by +0.02 dB, while 12-14 kHz falls **16.65 dB**. That band was fold-down, and it is gone
+  rather than merely contained.
+
+  **It is on by default and off wherever the DLL is the reference** -- both oracle gates and the
+  one-LSB self-baseline set it false, because a gate that left it on would be asserting the
+  reference against a deliberate departure from the reference. `--module-resampler` does the same
+  for a render. One trap worth recording: lifting `max_increment_milli_semitones` alone produces
+  **byte-identical** audio, because the ramp clamps the word straight back.
 - **Voice stealing is an approximation.** The original's allocator was located and named during
   reverse engineering but its selection rules were never traced. The policy in ts::VoicePool — free
   slot, then oldest releasing note, then oldest held note — is an invention, isolated so it can be

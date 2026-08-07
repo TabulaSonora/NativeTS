@@ -462,6 +462,7 @@ int render_command(int chorus_phase,
         engine_options.chorus = options.chorus;
         engine_options.delay = options.delay;
         engine_options.efx = options.efx;
+        engine_options.extended_interpolation = options.extended_interpolation;
         engine_options.reverb_type = options.reverb_type;
         engine_options.chorus_type = options.chorus_type;
         engine_options.delay_type = options.delay_type;
@@ -1052,6 +1053,7 @@ int main(int argc, char** argv)
     bool no_chorus = false;
     bool no_delay = false;
     bool no_efx = false;
+    bool module_resampler = false;
     bool stream = false;
     int polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
     int ports = ts::ToneGeneratorOptions{}.ports;
@@ -1078,6 +1080,10 @@ int main(int argc, char** argv)
     render->add_flag("--no-chorus", no_chorus, "Disable the chorus send");
     render->add_flag("--no-delay", no_delay, "Disable the delay send");
     render->add_flag("--no-efx", no_efx, "Disable the insertion EFX block");
+    render->add_flag("--module-resampler", module_resampler,
+                     "Render with the module's own 4-tap resampler and its 4x pitch increment "
+                     "ceiling, instead of the wide band-limiting one. What a render being compared "
+                     "against SCCore.dll needs; it also restores the module's held portamento");
     render->add_flag("--gsws", gsws,
                      "Render it the way the Microsoft GS Wavetable Synth does: the SC-55 map, "
                      "with reverb, chorus, delay and EFX all off. An explicit --map still wins");
@@ -1190,6 +1196,7 @@ int main(int argc, char** argv)
             render_options.chorus = !no_chorus;
             render_options.delay = !no_delay;
             render_options.efx = !no_efx;
+            render_options.extended_interpolation = !module_resampler;
 
             ts::ChannelMask mask;
             apply_channels(mask, muted, /*mute=*/true);

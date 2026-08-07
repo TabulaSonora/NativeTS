@@ -86,6 +86,12 @@ struct VoiceSetup {
     /// Whether this tone responds to a half-pressed damper.
     bool half_damper = false;
 
+    /// The wide band-limiting resampler and the raised increment ceiling, together -- see
+    /// `ToneGeneratorOptions::extended_interpolation`. They travel as one because either alone is
+    /// worse than neither: the ceiling without the filter aliases, the filter without the ceiling
+    /// changes nothing that was audible.
+    bool extended_interpolation = false;
+
     /// Portamento offset in milli-semitones, decaying to zero as the glide completes.
     double glide_milli_semitones = 0.0;
     /// Milli-semitones the glide closes per control tick.
@@ -352,6 +358,7 @@ private:
     bool half_damper_ = false;
     double glide_ = 0.0;
     int glide_step_ = 0;
+    bool extended_ = false;
 
     double ratio_ = 1.0;
 

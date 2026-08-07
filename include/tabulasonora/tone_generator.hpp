@@ -136,6 +136,34 @@ struct ToneGeneratorOptions {
     std::optional<int> chorus_type;
     std::optional<int> delay_type;
 
+    /// The wide band-limiting resampler, and with it the removal of the pitch increment ceiling.
+    ///
+    /// **On by default, and the one place this engine knowingly departs from `SCCore.dll`.**
+    /// Everything else here exists to reproduce the module; this reproduces the machine the module
+    /// models, where the two disagree and the module is the one that is wrong.
+    ///
+    /// What it changes is a single mechanism with two visible ends. The module's resampler
+    /// increment saturates at four times a wave's native rate -- `PitchRamp::domain_max`, and
+    /// `max_increment_milli_semitones` saying the same thing again -- because its 4-tap kernel is
+    /// only 14 dB down at Nyquist and anything faster folds back into the band. A portamento glide
+    /// is summed into that same quantity, and a note-on picks its wave for the key being *struck*,
+    /// so a slide beginning three octaves higher is pinned at the ceiling and does not move at all
+    /// until it has descended past it. `MIDI-Corona-Baby Baby.mid` holds its bass dive for 0.6 s
+    /// on the SC-55 map for exactly this reason, and dives properly on SC-8820 only because that
+    /// map's wave is native 50054 rather than 39912 and the ceiling lands above where the glide
+    /// starts. Nuked-SC55 on an mkII ROM set has no ceiling at any key tested up to 99.
+    ///
+    /// So the ceiling goes, and `SincInterpolator` is what makes that safe: fitted to the module's
+    /// own response to 0.165 dB RMS through the audible band, and widening with the read rate so
+    /// rejection at the folding frequency stays at -28.3 dB from 1x to 8x where the 4-tap kernel
+    /// falls to -6.6 dB at 6x. Ordinary material is meant to sound the same; only the rates the
+    /// module could not reach sound different.
+    ///
+    /// **Turn it off for anything compared against the DLL.** The song and note gates do, and must:
+    /// with it on they would be measuring this engine against a reference it is deliberately no
+    /// longer identical to.
+    bool extended_interpolation = true;
+
     /// Linear gain applied to the audio handed to the host.
     double output_gain = 1.0;
 

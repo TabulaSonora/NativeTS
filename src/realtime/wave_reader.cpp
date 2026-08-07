@@ -48,7 +48,7 @@ float WaveReader::next(double ratio) noexcept
     }
 
     const float sample =
-        wave->mode == SamplerMode::ping_pong ? read_ping_pong() : read_linear(*wave);
+        wave->mode == SamplerMode::ping_pong ? read_ping_pong(ratio) : read_linear(*wave, ratio);
     position_ += ratio;
 
     // Tested before the wrap, and against the position the reader walks: every mode's first leg
@@ -70,10 +70,11 @@ float WaveReader::next(double ratio) noexcept
     return sample;
 }
 
-float WaveReader::read_linear(const DecodedWave& wave) noexcept
+float WaveReader::read_linear(const DecodedWave& wave, double ratio) noexcept
 {
     if (wave.is_looping()) {
-        return interpolator_->sample(buffer_, position_);
+        return extended_ ? SincInterpolator::shared().sample(buffer_, position_, ratio)
+                         : interpolator_->sample(buffer_, position_);
     }
 
     // One-shot: hold the last sample, then go silent. The engine's own gate is the read position
@@ -84,20 +85,26 @@ float WaveReader::read_linear(const DecodedWave& wave) noexcept
         return 0.0F;
     }
 
-    return interpolator_->sample(buffer_, position_);
+    return extended_ ? SincInterpolator::shared().sample(buffer_, position_, ratio)
+                     : interpolator_->sample(buffer_, position_);
 }
 
-float WaveReader::read_ping_pong() noexcept
+float WaveReader::read_ping_pong(double ratio) noexcept
 {
     const auto index = static_cast<std::int64_t>(std::floor(position_));
-    generate(index + 2);
+    // The wide kernel reaches further ahead than the 4-tap one, so more of the stream has to exist
+    // before it is read. The *end* test below still uses two, so a note's length does not change
+    // with the interpolator -- only how much of the tail is available to filter with.
+    generate(index + (extended_ ? SincInterpolator::max_radius : 2));
 
     if (path_ended_ && index + 2 >= generated_) {
         finished_ = true;
         return 0.0F;
     }
 
-    return interpolator_->sample_ring(ring_, index, position_ - static_cast<double>(index));
+    const double fraction = position_ - static_cast<double>(index);
+    return extended_ ? SincInterpolator::shared().sample_ring(ring_, index, fraction, ratio)
+                     : interpolator_->sample_ring(ring_, index, fraction);
 }
 
 void WaveReader::generate(std::int64_t up_to)

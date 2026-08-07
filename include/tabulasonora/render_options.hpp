@@ -66,6 +66,13 @@ struct RenderOptions {
     /// Linear gain applied to the finished mix.
     double output_gain = 1.0;
 
+    /// The wide band-limiting resampler and the raised pitch increment ceiling, together.
+    ///
+    /// On, like the engine option it forwards to. `--module-resampler` turns it off, which is what
+    /// a render being compared against `SCCore.dll` needs -- see
+    /// `ToneGeneratorOptions::extended_interpolation`.
+    bool extended_interpolation = true;
+
     /// MIDI channel routed to the drum path.
     int drum_channel = 9;
 

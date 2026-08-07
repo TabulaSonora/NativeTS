@@ -209,6 +209,9 @@ void PartialVoice::start(VoiceSetup&& setup)
     half_damper_ = setup.half_damper;
     glide_ = setup.glide_milli_semitones;
     glide_step_ = setup.glide_step;
+    extended_ = setup.extended_interpolation;
+    reader_.set_extended(extended_);
+    pitch_ramp_.set_extended(extended_);
     is_drum_ = setup.is_drum;
     drum_receives_note_off_ = setup.drum_receives_note_off;
     level_gain_ = setup.level_gain;
@@ -673,9 +676,17 @@ double PartialVoice::ratio_with(double modulation, double bend_milli_semitones) 
     // of what the pitch chain hands the resampler, so it is part of what becomes the increment
     // word. Subtracting it afterwards would let a voice sitting on the ceiling be pushed back under
     // it by a term the module has already folded in.
+    // Two octaves, and the same 4.0x that `PitchRamp::domain_max` expresses -- raising one without
+    // the other does nothing at all, which cost a round to discover: lifting this constant alone
+    // renders byte-identical audio because the ramp clamps the word straight back. The extended
+    // figure is five octaves, matching `PitchRamp::extended_domain_max`.
     static constexpr double max_increment_milli_semitones = 24000.0;
+    static constexpr double extended_max_increment_milli_semitones = 60000.0;
+
+    const double ceiling = extended_ ? extended_max_increment_milli_semitones
+                                     : max_increment_milli_semitones;
     const double relative = PitchChain::clamp(pitch) - native_pitch_ - second_fine_shift_;
-    return std::pow(2.0, std::min(relative, max_increment_milli_semitones) / 12000.0);
+    return std::pow(2.0, std::min(relative, ceiling) / 12000.0);
 }
 
 } // namespace ts

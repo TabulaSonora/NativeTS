@@ -3246,6 +3246,7 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
                     ? 0.0
                     : PitchChain::portamento_offset(glide_from, base_pitch_raw);
             setup.glide_step = glide_step;
+            setup.extended_interpolation = options.extended_interpolation;
             setup.pan = partial.pan();
             setup.pan_follows_part = true;
             setup.level_gain = 1.0;

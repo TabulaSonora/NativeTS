@@ -20,6 +20,12 @@ public:
 
     explicit WaveReader(const Interpolator& interpolator) : interpolator_(&interpolator) {}
 
+    /// Reads through the wide band-limiting kernel instead of the module's 4-tap one.
+    ///
+    /// Off is the module. On is `ToneGeneratorOptions::extended_interpolation`, and it is the only
+    /// thing that makes lifting the pitch increment ceiling safe -- see `SincInterpolator`.
+    void set_extended(bool extended) noexcept { extended_ = extended; }
+
     /// Whether the wave has run out and is now silent.
     [[nodiscard]] bool finished() const noexcept { return finished_; }
 
@@ -41,8 +47,8 @@ public:
     [[nodiscard]] float next(double ratio) noexcept;
 
 private:
-    [[nodiscard]] float read_linear(const DecodedWave& wave) noexcept;
-    [[nodiscard]] float read_ping_pong() noexcept;
+    [[nodiscard]] float read_linear(const DecodedWave& wave, double ratio) noexcept;
+    [[nodiscard]] float read_ping_pong(double ratio) noexcept;
 
     /// Extends the ping-pong stream far enough to cover a read at an index.
     ///
@@ -54,6 +60,7 @@ private:
     void generate(std::int64_t up_to);
 
     const Interpolator* interpolator_;
+    bool extended_ = false;
     const DecodedWave* wave_ = nullptr;
     std::span<const float> buffer_;
 

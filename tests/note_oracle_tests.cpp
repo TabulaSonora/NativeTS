@@ -417,6 +417,11 @@ constexpr std::array<KnownDrumDeviation, 19> known_drum_deviations{{
     // of a gate against the oracle is that it does not need explaining.
     options.event_delay_blocks = 4;
     options.bypass_output_filter = false;
+
+    // And the module's resampler. `extended_interpolation` defaults on because it corrects a defect
+    // the module has against the hardware it models; leaving it on here would compare the module
+    // against a deliberate departure from the module.
+    options.extended_interpolation = false;
     ToneGenerator generator{notes, options};
 
     // The harness renders 8 x 512 frames after the reset and throws them away. Nothing sounds yet,

@@ -11,7 +11,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <numbers>
 #include <ranges>
+#include <span>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -112,6 +114,12 @@ TEST_CASE("the block loop reproduces the reference to within one LSB", "[stream]
         NoteRenderer notes{rom};
         ToneGeneratorOptions options;
         options.map = static_cast<ToneMap>(entry.at("map").get<int>());
+
+        // The reference WAV beside this fixture was rendered by the module's own 4-tap resampler,
+        // and this case asserts agreement to one LSB. `extended_interpolation` defaults on and is
+        // deliberately a different instrument above four times a wave's native rate, so it has to
+        // be off here for the same reason it is off in the oracle gates.
+        options.extended_interpolation = false;
 
         ToneGenerator generator{notes, options};
         SequencePlayer player = SequencePlayer::from_file(generator, midi);
@@ -2052,4 +2060,118 @@ TEST_CASE("the input queue drops a flush past its capacity", "[tone_generator]")
     std::vector<float> right(4096);
     generator.render(left, right);
     CHECK(std::ranges::any_of(left, [](float sample) { return std::abs(sample) > 1e-4F; }));
+}
+
+TEST_CASE("the extended resampler frees the glide without brightening the note", "[tone_generator]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+
+    // Shape, not samples. The extended path is a *different* resampler by design, so asserting
+    // sample equality against the module would be asserting the thing it exists to change. What
+    // has to hold is that ordinary playing sounds the same and only the extremes differ.
+    const auto render = [&](bool extended, int glide_from, int key) {
+        NoteRenderer notes{rom};
+        ToneGeneratorOptions options;
+        options.ports = 1;
+        options.map = ToneMap::sc55;
+        options.extended_interpolation = extended;
+        ToneGenerator generator{notes, options};
+
+        generator.send_channel(0xB0, 7, 95);
+        generator.send_channel(0xB0, 91, 0);
+        generator.send_channel(0xB0, 93, 0);
+        generator.send_channel(0xC0, 33, 0);   // finger bass, the Corona case's patch
+
+        std::vector<float> left(32000);
+        std::vector<float> right(32000);
+
+        if (glide_from >= 0) {
+            generator.send_channel(0xB0, 65, 127);
+            generator.send_channel(0xB0, 5, 80);
+
+            // The grace note, released, and then **time passing before the target**. The gap is
+            // load-bearing rather than decorative: a glide is only armed when the part is quiet,
+            // so striking the target while the previous voice is still sounding arms nothing at
+            // all and the test would compare two identical renders. `MIDI-Corona-Baby Baby.mid`
+            // leaves 168 ms; this leaves rather more, to stay clear of the patch's own release.
+            generator.send_channel(0x90, glide_from, 11);
+            std::vector<float> gap(2048);
+            std::vector<float> gap_right(2048);
+            generator.render(gap, gap_right);
+            generator.send_channel(0x80, glide_from, 0);
+            for (int i = 0; i < 8; ++i) {
+                generator.render(gap, gap_right);
+            }
+        }
+
+        generator.send_channel(0x90, key, 90);
+        generator.render(left, right);
+        return left;
+    };
+
+    const auto band_energy = [](std::span<const float> signal, double low, double high) {
+        // A crude Goertzel-free band measure: sum the squared magnitude of a coarse DFT over the
+        // band. Coarse is the point -- this is a shape check, not a spectrum.
+        double total = 0.0;
+        const auto rate = static_cast<double>(ToneGenerator::sample_rate);
+        for (double hz = low; hz < high; hz += 25.0) {
+            double re = 0.0;
+            double im = 0.0;
+            const double w = 2.0 * std::numbers::pi * hz / rate;
+            for (std::size_t i = 0; i < signal.size(); ++i) {
+                re += signal[i] * std::cos(w * static_cast<double>(i));
+                im += signal[i] * std::sin(w * static_cast<double>(i));
+            }
+            total += (re * re) + (im * im);
+        }
+        return total;
+    };
+
+    SECTION("an ordinary note keeps the module's frequency shape")
+    {
+        const std::vector<float> module = render(false, -1, 48);
+        const std::vector<float> extended = render(true, -1, 48);
+
+        // Every band a note this low actually occupies, within a decibel. The fitted kernel is
+        // 0.165 dB RMS from the module's across this range, so a decibel is loose enough to
+        // survive a different libm and tight enough that a genuinely brighter filter fails.
+        for (const auto [low, high] :
+             {std::pair{80.0, 200.0}, std::pair{200.0, 500.0}, std::pair{500.0, 1500.0},
+              std::pair{1500.0, 4000.0}}) {
+            const double a = band_energy(module, low, high);
+            const double b = band_energy(extended, low, high);
+            REQUIRE(a > 0.0);
+            const double difference = 10.0 * std::log10(b / a);
+            INFO("band " << low << "-" << high << " Hz: " << difference << " dB");
+            CHECK(std::abs(difference) < 1.0);
+        }
+    }
+
+    SECTION("a glide that the ceiling would pin now moves")
+    {
+        // Key 71 down to key 35 is three octaves: the wave is chosen for 35 and the glide starts
+        // above four times its native rate, which is exactly what the module's increment word
+        // cannot express. With the ceiling in place the two renders are the same sound held at the
+        // top; without it the extended one slides.
+        const std::vector<float> module = render(false, 71, 35);
+        const std::vector<float> extended = render(true, 71, 35);
+
+        double worst = 0.0;
+        for (std::size_t i = 0; i < module.size(); ++i) {
+            worst = std::max(worst, static_cast<double>(std::abs(module[i] - extended[i])));
+        }
+        INFO("largest sample difference across the glide: " << worst);
+        CHECK(worst > 0.01);
+
+        // And it is the glide that moved, not merely a different filter: the pinned render holds
+        // energy up where the ceiling parks it, the freed one starts higher still and descends.
+        // Compare the first tenth of a second, where the two are furthest apart.
+        const std::span<const float> opening_module{module.data(), 3200};
+        const std::span<const float> opening_extended{extended.data(), 3200};
+        const double high_module = band_energy(opening_module, 900.0, 2400.0);
+        const double high_extended = band_energy(opening_extended, 900.0, 2400.0);
+        INFO("opening 900-2400 Hz, module " << high_module << " extended " << high_extended);
+        CHECK(high_extended > high_module);
+    }
 }

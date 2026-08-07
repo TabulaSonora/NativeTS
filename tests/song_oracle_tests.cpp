@@ -404,6 +404,12 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         NoteRenderer notes{rom};
         ToneGeneratorOptions options;
         options.ports = 1;
+        // The module, not the correction to it. Everything in this file is measured against
+        // `SCCore.dll`, and `extended_interpolation` is on by default precisely because it makes
+        // this engine stop matching it -- see `ToneGeneratorOptions::extended_interpolation`. A
+        // gate that left it on would be asserting the reference against a deliberate departure
+        // from the reference.
+        options.extended_interpolation = false;
         options.map = static_cast<ToneMap>(entry.at("map").get<int>());
         ToneGenerator generator{notes, options};
 

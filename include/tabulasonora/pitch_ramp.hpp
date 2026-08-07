@@ -34,8 +34,21 @@ public:
     static constexpr int units_per_octave = 0x4000;
     static constexpr int milli_semitone_divisor = 375;
 
-    /// Largest value the exponential decode accepts.
+    /// Largest value the module's exponential decode accepts, and the 4.0x rate it stands for.
+    ///
+    /// `(0x3FFFF - unity) / units_per_octave` is two octaves exactly. It is the module's own word
+    /// and not a choice made here.
     static constexpr int domain_max = 0x3FFFF;
+
+    /// The same word with room above it, for `ToneGeneratorOptions::extended_interpolation`.
+    ///
+    /// Three octaves further, 32x, which covers the widest glide a file can ask for -- key 127 down
+    /// to key 0 is a little over ten octaves of *pitch*, but the wave under it is chosen for the
+    /// target key and the ratios that actually arise stay well inside this. The decode extends
+    /// naturally: `increment_of` reads the octave out of bits 14 and up and the table index out of
+    /// the bits below, which is already a clean split, so all that is needed is to stop masking the
+    /// octave to four bits and to let its shift go negative.
+    static constexpr int extended_domain_max = 0x5FFFF;
 
     /// Creates a ramp over the shared exponential table, which must outlive it.
     explicit PitchRamp(std::span<const std::int32_t> ramp_exp) noexcept : table_(ramp_exp) {}
@@ -44,13 +57,14 @@ public:
     ///
     /// The engine arrives here from milli-semitones, but the port computes a ratio, and the two
     /// agree exactly because the domain is logarithmic with a known octave size.
-    [[nodiscard]] static int domain_of(double ratio) noexcept
+    [[nodiscard]] static int domain_of(double ratio, bool extended = false) noexcept
     {
         if (!(ratio > 0.0)) {
             return 0;
         }
         const double units = unity + (std::log2(ratio) * units_per_octave);
-        return std::clamp(static_cast<int>(std::lround(units)), 0, domain_max) & ~1;
+        const int ceiling = extended ? extended_domain_max : domain_max;
+        return std::clamp(static_cast<int>(std::lround(units)), 0, ceiling) & ~1;
     }
 
     /// The 16.16 sampler increment a domain value decodes to.
@@ -68,7 +82,13 @@ public:
             (static_cast<std::int64_t>(table_[index]) * (0x40 - fraction))
             + (static_cast<std::int64_t>(table_[index + 1]) * fraction);
         const std::int64_t rounded = (interpolated + ((interpolated >> 63) & 0x3F)) >> 6;
-        return static_cast<std::int32_t>(rounded >> (0xF - ((value >> 0xE) & 0xF)));
+
+        // The octave is taken unmasked. Within the module's own range this is identical -- a value
+        // at or below `domain_max` never sets a bit above the fourth, so `& 0xF` was already a
+        // no-op there. Above it the shift would go negative, and a negative right shift is where
+        // the extended range would otherwise decode to nonsense rather than to a higher rate.
+        const int shift = 0xF - (value >> 0xE);
+        return static_cast<std::int32_t>(shift >= 0 ? (rounded >> shift) : (rounded << -shift));
     }
 
     /// Arms the ramp to glide from one ratio to another across the coming block.
@@ -77,10 +97,13 @@ public:
     /// the engine's maximum rate of 0xfff — which makes the ramp cover the interval in two steps,
     /// the behaviour measured on every voice examined. A ramp whose endpoints coincide stays
     /// inactive, which is the common case and costs nothing.
+    /// Lets the ramp reach the extended range -- see `ToneGeneratorOptions::extended_interpolation`.
+    void set_extended(bool extended) noexcept { extended_ = extended; }
+
     void arm(double from_ratio, double to_ratio) noexcept
     {
-        current_ = domain_of(from_ratio);
-        target_ = domain_of(to_ratio);
+        current_ = domain_of(from_ratio, extended_);
+        target_ = domain_of(to_ratio, extended_);
         const auto delta = static_cast<std::int64_t>(target_) - current_;
         step_ = static_cast<int>((delta * max_rate) >> 13);
         if (step_ == 0 && current_ < target_) {
@@ -117,6 +140,7 @@ private:
     int target_ = unity;
     int step_ = 0;
     bool active_ = false;
+    bool extended_ = false;
 };
 
 } // namespace ts
