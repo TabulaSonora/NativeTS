@@ -20,6 +20,7 @@ Three steps, because the cheap one is cheap enough to run over everything:
 
 Usage:
     python3 tools/scan_midi_archive.py scan <archive dir> <scan.jsonl> [workers]
+    python3 tools/scan_midi_archive.py tally <archive dir> <tally.json> [workers]
     python3 tools/scan_midi_archive.py describe <scan.jsonl> <described.jsonl>
     python3 tools/scan_midi_archive.py choose <described.jsonl> [count]
 
@@ -265,6 +266,143 @@ def features(entry):
     return found
 
 
+def normalise_gs(address):
+    """Fold a GS address's part nibble away, so `40 13 02` and `40 1a 02` tally as one row.
+
+    The part blocks are `40 1x`, `40 2x`, `40 4x` and their port-B twins `40 5x` and `40 6x`. Every
+    other high byte addresses one thing and is left alone.
+    """
+    a1, a2, a3 = address
+    if a1 in (0x40, 0x50) and (a2 & 0xF0) in (0x10, 0x20, 0x40, 0x50, 0x60):
+        return f"{a1:02x}{a2 & 0xF0:02x}x{a3:02x}"
+    return f"{a1:02x}{a2:02x}{a3:02x}"
+
+
+def normalise_xg(address):
+    """The same for XG, whose Multi Part (`08`) and Drum Setup (`3n`) carry a part in the middle."""
+    a1, a2, a3 = address
+    if a1 == 0x08 or (a1 & 0xF0) == 0x30:
+        return f"{a1:02x}xx{a3:02x}"
+    return f"{a1:02x}{a2:02x}{a3:02x}"
+
+
+def tally(path):
+    """Every GS DT1 and XG parameter message in one file, by address, with the values seen.
+
+    A **proper SysEx walk**, not the byte-pattern shortcut `scan` uses. That shortcut is right for
+    a shortlist -- a false positive costs one file's inspection -- and wrong for a frequency table,
+    where a run of note data that happens to read as `42 12` would invent an address nobody sends.
+    So this finds `F0`, reads to the terminating `F7`, and for Roland **validates the checksum**,
+    which no accidental byte run survives.
+
+    Returns `{"gs": {addr: [count, [values]]}, "xg": {...}}` with the addresses hex-encoded.
+    """
+    try:
+        data = pathlib.Path(path).read_bytes()
+    except OSError:
+        return None
+    if not data.startswith(b"MThd"):
+        return None
+
+    gs, xg = {}, {}
+    at = data.find(b"\xf0")
+    while at >= 0:
+        # In an SMF the `F0` is followed by a **variable-length quantity** giving the byte count,
+        # not by the message itself. Reading `F0` and scanning to `F7` puts the length byte where
+        # the manufacturer byte should be and rejects every real message.
+        p2 = at + 1
+        length = 0
+        for _ in range(4):
+            if p2 >= len(data):
+                break
+            byte = data[p2]
+            p2 += 1
+            length = (length << 7) | (byte & 0x7F)
+            if not byte & 0x80:
+                break
+        body = data[p2:p2 + length]
+        end = p2 + length
+        if length < 4 or length > 512 or not body.endswith(b"\xf7"):
+            at = data.find(b"\xf0", at + 1)
+            continue
+        body = body[:-1]
+
+        # Roland DT1: 41 <device> 42 12 <a1 a2 a3> <data...> <checksum>
+        if len(body) >= 9 and body[0] == 0x41 and body[2] == 0x42 and body[3] == 0x12:
+            payload = body[4:]
+            if len(payload) >= 5 and (sum(payload) & 0x7F) == 0:
+                address = normalise_gs(payload[:3])
+                values = payload[3:-1]
+                slot = gs.setdefault(address, [0, set()])
+                slot[0] += 1
+                if len(values) == 1:
+                    slot[1].add(values[0])
+        # Yamaha XG parameter change: 43 1n 4C <a1 a2 a3> <data...>, no checksum
+        elif len(body) >= 7 and body[0] == 0x43 and (body[1] & 0xF0) == 0x10 and body[2] == 0x4C:
+            address = normalise_xg(body[3:6])
+            slot = xg.setdefault(address, [0, set()])
+            slot[0] += 1
+            if len(body) == 7:
+                slot[1].add(body[6])
+
+        at = data.find(b"\xf0", end + 1)
+
+    if not gs and not xg:
+        return None
+    return {"path": str(path),
+            "gs": {k: [v[0], sorted(v[1])] for k, v in gs.items()},
+            "xg": {k: [v[0], sorted(v[1])] for k, v in xg.items()}}
+
+
+def command_tally(argv):
+    """Frequency table of every GS and XG address in an archive.
+
+    Usage: tally <archive dir> <out.json> [workers]
+    """
+    root, out = pathlib.Path(argv[0]), pathlib.Path(argv[1])
+    workers = int(argv[2]) if len(argv) > 2 else max(1, (os.cpu_count() or 4) - 2)
+
+    files = []
+    for base, _, names in os.walk(root):
+        if "__MACOSX" in base:
+            continue
+        for name in names:
+            if name.lower().endswith((".mid", ".midi")) and not name.startswith("._"):
+                files.append(os.path.join(base, name))
+    print(f"{len(files)} files under {root}", flush=True)
+
+    totals = {"gs": {}, "xg": {}}
+    scanned = 0
+    carrying = 0
+    with concurrent.futures.ProcessPoolExecutor(max_workers=workers) as pool:
+        for index, result in enumerate(pool.map(tally, files, chunksize=128)):
+            if index and index % 20000 == 0:
+                print(f"  {index}/{len(files)}  carrying {carrying}", flush=True)
+            scanned += 1
+            if result is None:
+                continue
+            carrying += 1
+            for family in ("gs", "xg"):
+                for address, (count, values) in result[family].items():
+                    slot = totals[family].setdefault(address, {"files": 0, "messages": 0,
+                                                               "values": set()})
+                    slot["files"] += 1
+                    slot["messages"] += count
+                    slot["values"].update(values)
+
+    document = {"scanned": scanned, "carrying": carrying}
+    for family in ("gs", "xg"):
+        document[family] = {
+            address: {"files": slot["files"], "messages": slot["messages"],
+                      "distinctValues": len(slot["values"]),
+                      "values": sorted(slot["values"])[:16]}
+            for address, slot in sorted(totals[family].items(),
+                                        key=lambda kv: -kv[1]["files"])}
+    out.write_text(json.dumps(document, indent=1))
+    print(f"{carrying} of {scanned} files carry one; "
+          f"{len(document['gs'])} GS addresses, {len(document['xg'])} XG")
+
+
 def command_scan(argv):
     root, out = pathlib.Path(argv[0]), pathlib.Path(argv[1])
     workers = int(argv[2]) if len(argv) > 2 else max(1, (os.cpu_count() or 4) - 2)
@@ -356,7 +494,8 @@ def command_choose(argv):
 
 
 def main():
-    commands = {"scan": command_scan, "describe": command_describe, "choose": command_choose}
+    commands = {"scan": command_scan, "tally": command_tally,
+                "describe": command_describe, "choose": command_choose}
     if len(sys.argv) < 2 or sys.argv[1] not in commands:
         sys.exit(__doc__)
     commands[sys.argv[1]](sys.argv[2:])
