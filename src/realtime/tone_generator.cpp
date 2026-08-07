@@ -100,6 +100,9 @@ struct ToneGenerator::Impl {
         slots.resize(static_cast<std::size_t>(pool.capacity()));
 
         parts.resize(static_cast<std::size_t>(port_count * Sequence::channel_count));
+        // One buffer per kit slot. `kit_slot` is `(port, map)` in GS and one per part in XG, so
+        // sizing this like `parts` covers both without the index needing a second rule.
+        drum_setup.resize(parts.size());
         // One per part, which is what XG needs; GS uses only the first `ports * 2` of them.
         // The two indexings overlap, and may because every mode change resets the array.
         drum_kit.assign(parts.size(), 0);
@@ -124,6 +127,26 @@ struct ToneGenerator::Impl {
 
     VoicePool pool;
     std::vector<Part> parts;
+
+    /// The drum-setup planes, **one buffer per kit slot rather than one per part**.
+    ///
+    /// This is the module's arrangement and the difference is measurable. A drum program change
+    /// reseeds its buffer from the kit record -- unconditionally, even when it selects the kit
+    /// already in force -- but it reseeds **only the buffer its own part is using**. Written into
+    /// the other slot, a drum setup survives every program change indefinitely:
+    ///
+    ///     slot 0:  write 30 -> prog kit 0 -> 64   -> write 30 -> prog kit 24 -> 64
+    ///     slot 1:  write 30 -> prog kit 0 -> 30   -> write 30 -> prog kit 24 -> 30
+    ///
+    /// Which matters because a `49` bulk dump writes **both** slots, so half of what it carries is
+    /// beyond the reach of any program change and comes into play the moment a part switches slot
+    /// -- GS's "Use for Rhythm Part", 1 or 2, which the `48` patch dump sets. Holding these on the
+    /// `Part` made that inexpressible: a program change cleared whatever the part held, slot and
+    /// all, including data the module keeps.
+    ///
+    /// Indexed by `kit_slot`, which is already the module's `(port, map)` pair in GS and widens to
+    /// one per part in XG for the reason given there.
+    std::vector<DrumKeyOverrides> drum_setup;
 
     /// One voice of a note that has been allocated but whose parameters have not been read yet.
     ///
@@ -720,6 +743,16 @@ int ToneGenerator::active_voices() const noexcept
     return count;
 }
 
+const DrumKeyOverrides& ToneGenerator::drum_setup(int part) const noexcept
+{
+    return impl_->drum_setup[impl_->kit_slot(part)];
+}
+
+const DrumKeyOverrides& ToneGenerator::drum_setup_slot(int slot) const noexcept
+{
+    return impl_->drum_setup[static_cast<std::size_t>(slot)];
+}
+
 const Part& ToneGenerator::part(int index) const noexcept
 {
     // Clamped rather than trusted. This has to return a reference and cannot throw, so the choice
@@ -856,6 +889,9 @@ void ToneGenerator::reset()
     }
 
     std::fill(impl_->drum_kit.begin(), impl_->drum_kit.end(), 0);
+    for (DrumKeyOverrides& planes : impl_->drum_setup) {
+        planes.reset();
+    }
     impl_->position = 0;
     impl_->block_offset = block_size;
     impl_->note_count = 0;
@@ -1093,7 +1129,10 @@ void ToneGenerator::Impl::program_change(int part_index, Part& part, int program
             // beside it. Programs 0, 1 and 8 are Standard 1, Standard 2 and Room, and all three
             // clear; 7 and 63 name no kit, and on those the overrides survive. So the reload is
             // what clears them, not the program change.
-            part.drum_keys.reset();
+            //
+            // And only **this part's own buffer**: measured on the module, a setup written to the
+            // other kit slot survives every program change untouched. See `drum_setup`.
+            drum_setup[kit_slot(part_index)].reset();
         }
     }
 }
@@ -1138,8 +1177,9 @@ void ToneGenerator::Impl::xg_resolve_program(int part_index, Part& part, int pro
         notes->drums().kit_for_program(kit_program, drum_row_for(part));
     if (kit) {
         drum_kit[kit_slot(part_index)] = *kit;
-        // The kit reload takes the per-key overrides with it, as on the GS path above.
-        part.drum_keys.reset();
+        // The kit reload takes the per-key overrides with it, as on the GS path above -- and only
+        // the buffer this part reads.
+        drum_setup[kit_slot(part_index)].reset();
     }
 }
 
@@ -2278,6 +2318,7 @@ void ToneGenerator::Impl::gs_drum_setup(int port,
         if (map_of(part) != map) {
             continue;
         }
+        DrumKeyOverrides& planes = drum_setup[kit_slot(index)];
 
         for (std::size_t offset = 0; offset < data.size(); ++offset) {
             const int note = key + static_cast<int>(offset);
@@ -2288,38 +2329,38 @@ void ToneGenerator::Impl::gs_drum_setup(int port,
                 break;
             case 0x01:
                 // Play key number: absolute, unlike the relative pitch NRPN.
-                part.drum_keys.set_play_key(note, value);
+                planes.set_play_key(note, value);
                 break;
             case 0x02:
-                part.drum_keys.set_level(note, value);
+                planes.set_level(note, value);
                 break;
             case 0x03:
                 // Assign group, clamped to the engine's 1-4 (`drum_setup_assign_group`).
-                part.drum_keys.set_group(note, std::clamp(value, 1, 4));
+                planes.set_group(note, std::clamp(value, 1, 4));
                 break;
             case 0x04:
-                part.drum_keys.set_pan(note, value);
+                planes.set_pan(note, value);
                 break;
             case 0x05:
-                part.drum_keys.set_reverb(note, value);
+                planes.set_reverb(note, value);
                 break;
             case 0x06:
-                part.drum_keys.set_chorus(note, value);
+                planes.set_chorus(note, value);
                 break;
             case 0x07:
                 // Rx note-off per key: bit 0 of the module's per-key flag byte, seeded by the
                 // kit record and rewritten here (`drum_setup_rx_noteoff`). Nonzero engages, as
                 // the module's own write does.
-                part.drum_keys.set_rx_note_off(note, value != 0);
+                planes.set_rx_note_off(note, value != 0);
                 break;
             case 0x08:
                 // Rx note-on per key: bit 4 of the same byte (`drum_setup_rx_noteon`). A key
                 // switched off here does not sound at all -- the module's note-on dispatch
                 // refuses it before velocity or mute groups are even considered.
-                part.drum_keys.set_rx_note_on(note, value != 0);
+                planes.set_rx_note_on(note, value != 0);
                 break;
             case 0x09:
-                part.drum_keys.set_delay(note, value);
+                planes.set_delay(note, value);
                 break;
             default:
                 break;
@@ -2369,6 +2410,9 @@ void ToneGenerator::Impl::stream_reset()
     master_key_shift = 0x40;
     master_pan = 0x40;
     std::fill(drum_kit.begin(), drum_kit.end(), 0);
+    for (DrumKeyOverrides& planes : drum_setup) {
+        planes.reset();
+    }
 
     // The EQ returns to flat and drops its filter memory with it. Keeping the memory would only
     // matter if a later message switched the EQ back on, and what it would then contribute is one
@@ -3169,22 +3213,23 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     // The kit's own key is kept alongside the overridden one: `apply` also resolves the panpot,
     // and the envelope rate key-follow takes the plane through its own clamp.
     DrumKey kit_key = notes->drums().key(note, drum_kit[kit_slot(channel)]);
+    const DrumKeyOverrides& planes = drum_setup[kit_slot(channel)];
 
     // The drum-setup SysEx planes replace their kit entries outright, before the relative NRPN
     // overrides go on top.
-    if (const std::optional<int> play_key = part.drum_keys.play_key(note)) {
+    if (const std::optional<int> play_key = planes.play_key(note)) {
         kit_key.pitch = *play_key;
     }
-    if (const std::optional<int> level = part.drum_keys.level(note)) {
+    if (const std::optional<int> level = planes.level(note)) {
         kit_key.level = *level;
     }
-    if (const std::optional<int> group = part.drum_keys.group(note)) {
+    if (const std::optional<int> group = planes.group(note)) {
         kit_key.group = *group;
     }
-    if (const std::optional<bool> rx_off = part.drum_keys.rx_note_off(note)) {
+    if (const std::optional<bool> rx_off = planes.rx_note_off(note)) {
         kit_key.receives_note_off = *rx_off;
     }
-    if (const std::optional<bool> rx_on = part.drum_keys.rx_note_on(note)) {
+    if (const std::optional<bool> rx_on = planes.rx_note_on(note)) {
         kit_key.receives_note_on = *rx_on;
     }
 
@@ -3200,10 +3245,10 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     // setup* that decides that and draws for it, once, alongside the part's own panpot -- see
     // below. Drawing here as well spent two values on a hit the module spends one on.
     const DrumKey key = DrumKeyOverrides::apply(kit_key,
-                                                part.drum_keys.pitch_offset(note),
-                                                part.drum_keys.pan(note));
+                                                planes.pitch_offset(note),
+                                                planes.pan(note));
     const int rate_key =
-        NoteRenderer::envelope_rate_key(kit_key, part.drum_keys.pitch_offset(note));
+        NoteRenderer::envelope_rate_key(kit_key, planes.pitch_offset(note));
 
     const ResolvedTone resolved = notes->directory().resolve(key.tone, /*note=*/60, velocity);
     const std::optional<Tone> tone = notes->directory().tone(key.tone);
@@ -3787,32 +3832,32 @@ void ToneGenerator::Impl::commit_data_entry_msb(int channel, Part& part, int val
         // rhythm part (`nrpn_apply` tests the part's drum flag before every plane write).
         case 0x18:
             if (is_drum_part(channel)) {
-                part.drum_keys.set_pitch(part.nrpn_lsb, value);
+                drum_setup[kit_slot(channel)].set_pitch(part.nrpn_lsb, value);
             }
             break;
         case 0x1A:
             if (is_drum_part(channel)) {
-                part.drum_keys.set_level(part.nrpn_lsb, value);
+                drum_setup[kit_slot(channel)].set_level(part.nrpn_lsb, value);
             }
             break;
         case 0x1C:
             if (is_drum_part(channel)) {
-                part.drum_keys.set_pan(part.nrpn_lsb, value);
+                drum_setup[kit_slot(channel)].set_pan(part.nrpn_lsb, value);
             }
             break;
         case 0x1D:
             if (is_drum_part(channel)) {
-                part.drum_keys.set_reverb(part.nrpn_lsb, value);
+                drum_setup[kit_slot(channel)].set_reverb(part.nrpn_lsb, value);
             }
             break;
         case 0x1E:
             if (is_drum_part(channel)) {
-                part.drum_keys.set_chorus(part.nrpn_lsb, value);
+                drum_setup[kit_slot(channel)].set_chorus(part.nrpn_lsb, value);
             }
             break;
         case 0x1F:
             if (is_drum_part(channel)) {
-                part.drum_keys.set_delay(part.nrpn_lsb, value);
+                drum_setup[kit_slot(channel)].set_delay(part.nrpn_lsb, value);
             }
             break;
         default:

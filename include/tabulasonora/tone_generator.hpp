@@ -262,6 +262,16 @@ public:
     /// the engine is.
     [[nodiscard]] const Part& part(int index) const noexcept;
 
+    /// The drum-setup planes a part reads.
+    ///
+    /// Not a member of `Part`, because on the module it is not one: the planes live in a buffer per
+    /// kit slot, shared by every part on it, and a drum program change reseeds only the buffer its
+    /// own part uses. A setup written to the other slot outlives every program change.
+    [[nodiscard]] const DrumKeyOverrides& drum_setup(int part) const noexcept;
+
+    /// The planes in a kit slot directly, for asking about one no part is currently reading.
+    [[nodiscard]] const DrumKeyOverrides& drum_setup_slot(int slot) const noexcept;
+
     /// The voice allocator.
     [[nodiscard]] const VoicePool& voices() const noexcept;
 

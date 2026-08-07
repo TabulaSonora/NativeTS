@@ -542,12 +542,12 @@ TEST_CASE("the NRPN modify set shares bytes with the sound controllers", "[strea
     generator.send_channel(0xB0, 99, 0x1A);
     generator.send_channel(0xB0, 98, 46);
     generator.send_channel(0xB0, 6, 0x20);
-    CHECK_FALSE(generator.part(0).drum_keys.level(46).has_value());
+    CHECK_FALSE(generator.drum_setup(0).level(46).has_value());
 
     generator.send_channel(0xB9, 99, 0x1A);
     generator.send_channel(0xB9, 98, 46);
     generator.send_channel(0xB9, 6, 0x20);
-    CHECK(generator.part(9).drum_keys.level(46) == 0x20);
+    CHECK(generator.drum_setup(9).level(46) == 0x20);
 }
 
 TEST_CASE("GS part parameters arrive over SysEx", "[stream][sccore]")
@@ -618,21 +618,26 @@ TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
 
     // 41 x2 kk is the level plane; it lands on the port's rhythm part.
     generator.send_sysex(dt1({0x41, 0x02, 40, 100, 101, 102}));
-    CHECK(generator.part(9).drum_keys.level(40) == 100);
-    CHECK(generator.part(9).drum_keys.level(41) == 101);
-    CHECK(generator.part(9).drum_keys.level(42) == 102);
-    CHECK_FALSE(generator.part(0).drum_keys.level(40).has_value());
+    CHECK(generator.drum_setup(9).level(40) == 100);
+    CHECK(generator.drum_setup(9).level(41) == 101);
+    CHECK(generator.drum_setup(9).level(42) == 102);
+
+    // The port's *other* kit slot is untouched. That is the meaningful containment check now that
+    // the planes live in a buffer per slot rather than on each part: asking a melodic part what its
+    // drum setup holds is asking about the same buffer the rhythm part reads, because `kit_slot`
+    // only means anything for a part that has a kit.
+    CHECK_FALSE(generator.drum_setup_slot(1).level(40).has_value());
 
     // Assign group clamps to the engine's 1-4.
     generator.send_sysex(dt1({0x41, 0x03, 40, 7}));
-    CHECK(generator.part(9).drum_keys.group(40) == 4);
+    CHECK(generator.drum_setup(9).group(40) == 4);
 
     // The map nibble is part of the address: a MAP2 write (41 1x) lands in the buffer parts on
     // MAP2 read, and the default rhythm part is on MAP1, so nothing here may move. intro-4.mid
     // is the real case -- its whole drum setup, Rx switches included, is written to MAP2 while
     // its rhythm part never leaves MAP1, and the module plays it as if the block were not there.
     generator.send_sysex(dt1({0x41, 0x12, 50, 99}));
-    CHECK_FALSE(generator.part(9).drum_keys.level(50).has_value());
+    CHECK_FALSE(generator.drum_setup(9).level(50).has_value());
     generator.send_sysex(dt1({0x41, 0x18, 38, 0x00}));
     generator.send_channel(0x99, 38, 100);
     CHECK(generator.note_count() == 1); // the MAP2 Rx Note On revocation does not reach MAP1
@@ -640,9 +645,9 @@ TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
     // Reassigned to MAP2 (use-for-rhythm = 2), the part hears MAP2 writes instead.
     generator.send_sysex(dt1({0x40, 0x10, 0x15, 0x02}));
     generator.send_sysex(dt1({0x41, 0x12, 50, 99}));
-    CHECK(generator.part(9).drum_keys.level(50) == 99);
+    CHECK(generator.drum_setup(9).level(50) == 99);
     generator.send_sysex(dt1({0x41, 0x02, 51, 98}));
-    CHECK_FALSE(generator.part(9).drum_keys.level(51).has_value()); // and MAP1 writes no longer land
+    CHECK_FALSE(generator.drum_setup(9).level(51).has_value()); // and MAP1 writes no longer land
 }
 
 TEST_CASE("a program change on a drum part discards its per-key overrides", "[stream][sccore]")
@@ -658,14 +663,14 @@ TEST_CASE("a program change on a drum part discards its per-key overrides", "[st
 
     generator.send_sysex(dt1({0x41, 0x02, 40, 100}));
     generator.send_sysex(dt1({0x41, 0x04, 40, 111}));
-    REQUIRE(generator.part(9).drum_keys.level(40) == 100);
-    REQUIRE(generator.part(9).drum_keys.pan(40) == 111);
+    REQUIRE(generator.drum_setup(9).level(40) == 100);
+    REQUIRE(generator.drum_setup(9).pan(40) == 111);
 
     SECTION("a program that names a kit clears them")
     {
         generator.send_channel(0xC9, 8, 0); // Room
-        CHECK_FALSE(generator.part(9).drum_keys.level(40).has_value());
-        CHECK_FALSE(generator.part(9).drum_keys.pan(40).has_value());
+        CHECK_FALSE(generator.drum_setup(9).level(40).has_value());
+        CHECK_FALSE(generator.drum_setup(9).pan(40).has_value());
     }
 
     SECTION("even when it selects the kit already loaded")
@@ -673,7 +678,7 @@ TEST_CASE("a program change on a drum part discards its per-key overrides", "[st
         // The module clears on the reload, not on the kit changing: program 0 into a part already
         // on Standard still wipes them.
         generator.send_channel(0xC9, 0, 0);
-        CHECK_FALSE(generator.part(9).drum_keys.level(40).has_value());
+        CHECK_FALSE(generator.drum_setup(9).level(40).has_value());
     }
 
     SECTION("a program that names no kit leaves them alone")
@@ -682,18 +687,18 @@ TEST_CASE("a program change on a drum part discards its per-key overrides", "[st
         // Standard 1, Standard 2 and Room and all three clear; 7 and 63 name nothing, and there
         // the overrides survive -- measured both ways round on the module.
         generator.send_channel(0xC9, 7, 0);
-        CHECK(generator.part(9).drum_keys.level(40) == 100);
+        CHECK(generator.drum_setup(9).level(40) == 100);
         generator.send_channel(0xC9, 63, 0);
-        CHECK(generator.part(9).drum_keys.pan(40) == 111);
+        CHECK(generator.drum_setup(9).pan(40) == 111);
 
         generator.send_channel(0xC9, 1, 0); // Standard 2 -- resolves, so it clears
-        CHECK_FALSE(generator.part(9).drum_keys.level(40).has_value());
+        CHECK_FALSE(generator.drum_setup(9).level(40).has_value());
     }
 
     SECTION("a melodic part's program change touches nothing")
     {
         generator.send_channel(0xC0, 48, 0);
-        CHECK(generator.part(9).drum_keys.level(40) == 100);
+        CHECK(generator.drum_setup(9).level(40) == 100);
     }
 }
 
