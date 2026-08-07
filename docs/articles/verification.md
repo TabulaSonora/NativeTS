@@ -304,25 +304,35 @@ roughly 3.8 dB too quiet**, and since the dry is panned right and the return is 
 return leaves the image stuck on the right. The network being exact means the deficit is in the send
 or the return gain, not in the chorus itself.
 
-And the cause is a **missing signal path**, found by elimination and confirmed by the code.
-
 The chorus send *is* slewed — on `Part`, at the measured rate of one controller unit a tick, matching
 the per-voice reverb send's 1260 ms — so that was never the problem. Two probes rule the slew out
 directly: with the chorus send established four seconds before the note, this engine is 3.74 dB light
 at the attack; with it set a tenth of a second before, the attack agrees to 0.08 dB. A slew artefact
 would behave the opposite way round. The deficit is static.
 
-What is missing is that **the module's chorus output also feeds the reverb, and this engine's does
-not**. `fx_reverb_process` sums two chorus-return buffers into its input alongside the dry send:
+**The cause is still unknown.** This section previously named one — that the module's chorus output
+also feeds the reverb and this engine's did not — and that was wrong, in a way worth keeping on the
+page rather than quietly deleting.
+
+The reading of the decompile was right as far as it went: `fx_reverb_process` really does open by
+summing three buffers rather than one,
 
     fVar17 = (chorus_return_a[i] + *param_2 + chorus_return_b[i]) * 0.99804 + dc_state;
 
-and `fx_chorus_stage_l` writes *two* scaled copies of its output, one for the dry mix and one for
-that feed, each with its own gain. This port has the overload for it — `Reverb::process` taking
-`chorus_left` and `chorus_right` — and **nothing has ever called it**; the mixer calls the
-three-argument form, and `ChorusPreset` carries no reverb-send gain to have called it with. So the
-chorus reaches the output and never reaches the tank, which is a constant deficit in everything the
-chorus contributes, exactly as measured.
+and `fx_chorus_stage_l` really does write extra scaled copies of its tap sum for other networks to
+pick up. What the decompile cannot show is *what those gains are at run time*, and the answer is
+**zero**. The GS chorus block's "send level to reverb" is `40 01 3F`, quantised over 128, and it is 0
+in all eight stored macros — read straight out of the live gain register by `scdec fxgain`, which
+watches it move to 0.5 when the address is sent 64. `panwet.mid` sends no `40 01 xx` at all. So the
+module's chorus does not reach its reverb on that stream either, and a path that is silent on both
+sides cannot be a 3.8 dB difference between them.
+
+The three cross-feeds — chorus to reverb, chorus to delay, delay to reverb — are now implemented,
+because they are real routes that real files use, and they close nothing here. Two lessons sit
+underneath that. A structure found in a decompile is a *capability*, not a behaviour; the coefficient
+that switches it on lives in memory, not in the listing. And "this port lacks a path the module has"
+is an unusually seductive shape of explanation, because it explains a deficit without needing the
+magnitude to work out — which is exactly why the magnitude should have been demanded of it first.
 
 What the gate compares is length, then peak, RMS,
 per-octave level and a coarse RMS envelope — the envelope catching a note that goes missing or
