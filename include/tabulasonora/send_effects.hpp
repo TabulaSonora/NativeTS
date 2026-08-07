@@ -135,17 +135,16 @@ public:
     void
     process(std::span<const float> input, std::span<float> left, std::span<float> right) override;
 
-    /// Processes a block, also writing the two routes out of the chorus.
+    /// Processes a block, also writing what the two routes out of the chorus are scaled from.
     ///
-    /// `to_reverb` and `to_delay` receive the **mono sum of the two taps**, taken before the return
-    /// level and scaled by their own send gains -- so the chorus can be loud in the mix and feed
-    /// nothing onward, or the reverse. Either span may be empty. See `ChorusPreset::gain_to_reverb`
-    /// for why both gains are zero unless a stream sends `40 01 3F` / `40 01 40`.
+    /// `mono` receives the **sum of the two taps**, taken before the return level -- so a chorus can
+    /// be loud in the mix and feed nothing onward, or the reverse. The sends themselves are ramped
+    /// matrix coefficients applied by the mixer, not gains of this network; see `ChorusPreset`.
+    /// May be empty.
     void process(std::span<const float> input,
                  std::span<float> left,
                  std::span<float> right,
-                 std::span<float> to_reverb,
-                 std::span<float> to_delay);
+                 std::span<float> mono);
 
     /// Places the LFO accumulator, which otherwise free-runs from zero.
     ///
@@ -191,14 +190,13 @@ struct DelayParameters {
     double feedback = 0.0;
     int pre_low_pass = 0;
 
-    /// The delay's own route into the reverb, `40 01 5A` -- the third cross-feed, and the only one
-    /// any stored preset turns on: type 8 carries 36, the rest zero. Quantised over 128.
-    ///
-    /// The module scales the *pre-return-level* tap sum by this, so the delay can be inaudible in
-    /// the mix and still be reverberated. Nothing here carries the return level: it is the mixer's
-    /// ramp, exactly as the chorus's and the reverb's are.
-    double send_to_reverb = 0.0;
 };
+
+// `raw[7]`, the return level, and `raw[9]`, the send into the reverb (`40 01 58` and `40 01 5A`),
+// are deliberately absent: both are ramped send-matrix coefficients applied by the mixer. The send
+// is the only cross-feed any stored preset turns on -- type 8 carries 36, the rest zero -- and the
+// module scales the *pre-return-level* tap sum by it, so a delay can be inaudible in the mix and
+// still be reverberated.
 
 /// The GS system delay: three taps off one feedback line, behind a fixed input pre-delay.
 class SystemDelay final : public Effect {
@@ -233,15 +231,15 @@ public:
     void
     process(std::span<const float> input, std::span<float> left, std::span<float> right) override;
 
-    /// Processes a block, also writing the delay's route into the reverb.
+    /// Processes a block, also writing what the delay's route into the reverb is scaled from.
     ///
-    /// `to_reverb` receives `left_gain·l + right_gain·r + centre_gain·centre` -- the centre tap
-    /// counted **once**, not once per side as summing the two outputs would -- taken before the
-    /// return level and scaled by `send_to_reverb`. May be empty.
+    /// `mono` receives `left_gain·l + right_gain·r + centre_gain·centre` -- the centre tap counted
+    /// **once**, not once per side as summing the two outputs would -- taken before the return
+    /// level. May be empty.
     void process(std::span<const float> input,
                  std::span<float> left,
                  std::span<float> right,
-                 std::span<float> to_reverb);
+                 std::span<float> mono);
 
 private:
     static constexpr int ring_mask = ring_size - 1;

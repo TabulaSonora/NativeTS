@@ -76,22 +76,14 @@ struct ChorusPreset {
     double feedback = 0.0;
     double gain_write = 0.0;
     double gain_tap = 0.0;
-
-    /// The two routes *out* of the chorus, into the other two networks' inputs.
-    ///
-    /// `fx_chorus_stage_l` does not just return a stereo pair. It also writes the **mono sum of its
-    /// two taps** -- before the return level, so these are independent of it -- into two scratch
-    /// buffers: one the reverb adds to its own send bus, one the delay adds to its own. The GS
-    /// spec's "Chorus Send Level To Reverb" (`40 01 3F`) and "To Delay" (`40 01 40`) are these,
-    /// quantised over **128** rather than 127, the same edge the delay's tap gains show.
-    ///
-    /// Both are **zero in all eight stored macros**, so a file that never sends those addresses
-    /// hears nothing from either. That is worth stating plainly, because it is the opposite of what
-    /// this port's earlier note claimed: the missing chorus-into-reverb path cannot explain a
-    /// deviation on a stream that leaves the send at its default.
-    double gain_to_reverb = 0.0;
-    double gain_to_delay = 0.0;
 };
+
+// The two routes *out* of the chorus -- "Chorus Send Level To Reverb" (`40 01 3F`) and "To Delay"
+// (`40 01 40`) -- are deliberately absent here, for the same reason `gain_tap` is unity: they are
+// send-matrix coefficients, ramped in the mixer, not coefficients of this network. What the network
+// produces is the raw mono sum of its two taps, taken ahead of the return level; the mixer scales
+// it. Both sends are **zero in all eight stored macros**, so a file that never sends those addresses
+// hears nothing from either.
 
 /// The eight GS reverb types plus the power-on default.
 struct ReverbPresets {

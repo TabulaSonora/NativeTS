@@ -1,5 +1,6 @@
 #include "tabulasonora/send_effects.hpp"
 
+#include "tabulasonora/control_ramp.hpp"
 #include "tabulasonora/effect_programmer.hpp"
 #include "tabulasonora/equalizer.hpp"
 #include "tabulasonora/rom_image.hpp"
@@ -274,48 +275,43 @@ TEST_CASE("a delay preset compiles to tap lengths and gains", "[effects]")
     CHECK(SystemDelay::compile(maximum).feedback > 0.9);
 }
 
-TEST_CASE("the three cross-feeds between the networks carry signal", "[effects]")
+TEST_CASE("the networks emit the sums their cross-feeds are scaled from", "[effects]")
 {
     testdata::require_effect_presets();
 
     // Chorus -> reverb and chorus -> delay (`40 01 3F` and `40 01 40`), and delay -> reverb
-    // (`40 01 5A`). All three are zero in every stored macro, so the only way to see them is to
-    // program them -- which is exactly the position a stream that sends those addresses is in, and
-    // `th07_19_user_gm.mid` sends the first of them at 112.
-    ChorusPreset preset = EffectPresets::defaults().chorus().types.at(2);
-    preset.gain_to_reverb = 112.0 / 128.0;
-    preset.gain_to_delay = 64.0 / 128.0;
-    Chorus chorus{preset};
+    // (`40 01 5A`). All three are zero in every stored macro, so nothing renders them unless a
+    // stream asks -- `th07_19_user_gm.mid` sends the first at 112. The sends themselves are ramped
+    // matrix coefficients and belong to the mixer; what the networks owe is the sum to scale.
+    Chorus chorus = Chorus::for_type(2);
 
     constexpr std::size_t frames = 8192;
     std::vector<float> input(frames, 0.0F);
     for (std::size_t i = 0; i < 64; ++i) {
         input[i] = 1.0F;
     }
-    std::vector<float> left(frames), right(frames), to_reverb(frames), to_delay(frames);
-    chorus.process(input, left, right, to_reverb, to_delay);
+    std::vector<float> left(frames), right(frames), mono(frames);
+    chorus.process(input, left, right, mono);
 
-    double feed_peak = 0.0;
+    double mono_peak = 0.0;
     for (std::size_t i = 0; i < frames; ++i) {
-        feed_peak = std::max(feed_peak, std::abs(static_cast<double>(to_reverb[i])));
+        mono_peak = std::max(mono_peak, std::abs(static_cast<double>(mono[i])));
 
-        // The feed is the mono sum ahead of the return level, and this preset's return level is
-        // unity, so the two sides relate exactly.
-        const double mono = static_cast<double>(left[i]) + static_cast<double>(right[i]);
-        CHECK_THAT(static_cast<double>(to_reverb[i]),
-                   WithinAbs(mono * preset.gain_to_reverb, 1e-6));
-        CHECK_THAT(static_cast<double>(to_delay[i]), WithinAbs(mono * preset.gain_to_delay, 1e-6));
+        // The sum is taken ahead of the return level, and type 2's return level is unity, so on
+        // this preset alone the two sides relate exactly -- which is what pins the ordering.
+        CHECK_THAT(static_cast<double>(mono[i]),
+                   WithinAbs(static_cast<double>(left[i]) + static_cast<double>(right[i]), 1e-6));
     }
-    CHECK(feed_peak > 1e-3);
+    CHECK(mono_peak > 1e-3);
 
-    // And the reverb really sums it: the same send bus with a chorus feed added must not render
-    // the same as without one. A silent difference here is the fault this whole path was missing.
+    // And the reverb really sums a feed: the same send bus with one added must not render the same
+    // as without. A silent difference here is the fault this whole path was missing.
     std::vector<float> bus(frames, 0.0F);
     bus[0] = 1.0F;
     std::vector<float> bare_left(frames), bare_right(frames);
     std::vector<float> fed_left(frames), fed_right(frames);
     Reverb::for_type(4).process(bus, bare_left, bare_right);
-    Reverb::for_type(4).process(bus, to_reverb, {}, fed_left, fed_right);
+    Reverb::for_type(4).process(bus, mono, {}, fed_left, fed_right);
 
     double difference = 0.0;
     for (std::size_t i = 0; i < frames; ++i) {
@@ -325,26 +321,90 @@ TEST_CASE("the three cross-feeds between the networks carry signal", "[effects]"
     }
     CHECK(difference > 1e-4);
 
-    // The delay's own feed is the three taps summed with the centre counted once, so it cannot be
-    // reconstructed from the stereo pair -- only checked for presence and for tracking the send.
-    std::array<int, 10> row{0, 97, 12, 24, 100, 120, 60, 64, 64, 96};
-    SystemDelay delay{SystemDelay::compile(row)};
-    CHECK_THAT(SystemDelay::compile(row).send_to_reverb, WithinAbs(96.0 / 128.0, 1e-12));
+    // The delay's sum counts the centre tap **once**, where the stereo pair counts it twice, so it
+    // is a different quantity rather than a rescaling of one -- and a feed built from the pair
+    // would over-weight the centre on every preset that uses it.
+    // 100 ms centre with the sides at 12/24 and 18/24 of it, so all three taps land well inside
+    // the window. A longer time silently makes this vacuous -- the taps never arrive, every buffer
+    // is zero, and zero agrees with anything -- so the tap lengths are asserted, not assumed.
+    const std::array<int, 10> row{0, 80, 12, 18, 100, 120, 60, 64, 64, 96};
+    const DelayParameters compiled = SystemDelay::compile(row);
+    REQUIRE(compiled.centre_samples < static_cast<int>(frames));
+    REQUIRE(compiled.left_samples != compiled.centre_samples);
+    REQUIRE(compiled.right_samples != compiled.centre_samples);
+    SystemDelay delay{compiled};
 
-    std::vector<float> delay_left(frames), delay_right(frames), delay_feed(frames);
-    delay.process(input, delay_left, delay_right, delay_feed);
-    double delay_feed_peak = 0.0;
-    for (const float sample : delay_feed) {
-        delay_feed_peak = std::max(delay_feed_peak, std::abs(static_cast<double>(sample)));
+    std::vector<float> delay_left(frames), delay_right(frames), delay_mono(frames);
+    delay.process(input, delay_left, delay_right, delay_mono);
+
+    double delay_peak = 0.0;
+    bool differs_from_pair = false;
+    for (std::size_t i = 0; i < frames; ++i) {
+        delay_peak = std::max(delay_peak, std::abs(static_cast<double>(delay_mono[i])));
+        const double pair = static_cast<double>(delay_left[i]) + static_cast<double>(delay_right[i]);
+        if (std::abs(pair - static_cast<double>(delay_mono[i])) > 1e-4) {
+            differs_from_pair = true;
+        }
     }
-    CHECK(delay_feed_peak > 1e-3);
+    CHECK(delay_peak > 1e-3);
+    CHECK(differs_from_pair);
+}
 
-    row[9] = 0;
-    SystemDelay silent{SystemDelay::compile(row)};
-    std::vector<float> silent_feed(frames, 1.0F);
-    silent.process(input, delay_left, delay_right, silent_feed);
-    for (const float sample : silent_feed) {
-        REQUIRE(sample == 0.0F);
+TEST_CASE("a send ramps on the same trajectory as a level, one shift lower", "[effects]")
+{
+    // Measured on the module with `scdec fxgain`: driving a level and a send together, both have
+    // the same fraction of their error left at every block, and the endpoints differ by exactly one
+    // shift -- a send at raw 127 lands on 0.9921875 where a level lands on 1.984375.
+    CHECK(MatrixRamp::target_of(127, MatrixRamp::send_shift) * MatrixRamp::gain_scale
+          == 0.9921875);
+    CHECK(MatrixRamp::target_of(64, MatrixRamp::send_shift) * MatrixRamp::gain_scale == 0.5);
+    CHECK(MatrixRamp::target_of(127) * MatrixRamp::gain_scale == 1.984375);
+    CHECK(MatrixRamp::target_of(64) * MatrixRamp::gain_scale == 1.0);
+
+    constexpr std::size_t block = 32;
+    std::array<double, block> level_gains{};
+    std::array<double, block> send_gains{};
+    MatrixRamp level_ramp;
+    MatrixRamp send_ramp;
+
+    // Seed both at zero so the first fill is a real move rather than the settle-on-arrival case.
+    level_ramp.fill(0, level_gains);
+    send_ramp.fill(0, send_gains, MatrixRamp::send_shift);
+
+    const double level_target = MatrixRamp::target_of(127) * MatrixRamp::gain_scale;
+    const double send_target = MatrixRamp::target_of(127, MatrixRamp::send_shift)
+                               * MatrixRamp::gain_scale;
+    for (int b = 0; b < 8; ++b) {
+        level_ramp.fill(127, level_gains);
+        send_ramp.fill(127, send_gains, MatrixRamp::send_shift);
+
+        // The same fraction of the error left, block for block, on both. Not to the last bit:
+        // the coefficient is an `int16` and each step rounds its magnitude *up*, so the send --
+        // whose coefficient is half the size for the same gain -- gains slightly more per step
+        // from that rounding. It runs a shade ahead, by about a thousandth of the error.
+        const double level_left = 1.0 - (level_gains.back() / level_target);
+        const double send_left = 1.0 - (send_gains.back() / send_target);
+        CHECK_THAT(send_left, WithinAbs(level_left, 3e-3));
+        CHECK(send_left <= level_left);
+        CHECK(level_left < 1.0);
+    }
+
+    // Against the engine's own series rather than a fraction: `40 01 33` driven 0 -> 127 is
+    // recorded in `MatrixRamp` as reproducing 5594, 10229, 14069, 17248 block by block and settling
+    // on 32512. A send has to walk the same coefficients, halved -- but only nearly, and always
+    // from above: rounding each step's magnitude up is worth a whole unit on a coefficient half the
+    // size, and 64 steps of that accumulate to a lead of about nine.
+    constexpr std::array<int, 4> engine_series{5594, 10229, 14069, 17248};
+    MatrixRamp fresh_level;
+    MatrixRamp fresh_send;
+    fresh_level.fill(0, level_gains);
+    fresh_send.fill(0, send_gains, MatrixRamp::send_shift);
+    for (const int expected : engine_series) {
+        fresh_level.fill(127, level_gains);
+        fresh_send.fill(127, send_gains, MatrixRamp::send_shift);
+        CHECK(fresh_level.current() == expected);
+        CHECK(fresh_send.current() >= expected / 2);
+        CHECK_THAT(static_cast<double>(fresh_send.current()), WithinAbs(expected / 2.0, 16.0));
     }
 }
 

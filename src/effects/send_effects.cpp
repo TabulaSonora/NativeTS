@@ -157,14 +157,13 @@ void Chorus::reset()
 
 void Chorus::process(std::span<const float> input, std::span<float> left, std::span<float> right)
 {
-    process(input, left, right, {}, {});
+    process(input, left, right, {});
 }
 
 void Chorus::process(std::span<const float> input,
                      std::span<float> left,
                      std::span<float> right,
-                     std::span<float> to_reverb,
-                     std::span<float> to_delay)
+                     std::span<float> mono)
 {
     const ChorusPreset& p = preset_;
 
@@ -192,12 +191,10 @@ void Chorus::process(std::span<const float> input,
         left[i] = static_cast<float>(wet1 * p.gain_tap);
         right[i] = static_cast<float>(wet2 * p.gain_tap);
 
-        // The two cross-feeds carry the mono sum, ahead of the return level.
-        if (i < to_reverb.size()) {
-            to_reverb[i] = static_cast<float>((wet1 + wet2) * p.gain_to_reverb);
-        }
-        if (i < to_delay.size()) {
-            to_delay[i] = static_cast<float>((wet1 + wet2) * p.gain_to_delay);
+        // What the two cross-feeds are scaled from: the sum of both taps, ahead of the return
+        // level, so neither send moves when the return level does.
+        if (i < mono.size()) {
+            mono[i] = static_cast<float>(wet1 + wet2);
         }
     }
 }
@@ -307,8 +304,6 @@ DelayParameters SystemDelay::compile(std::span<const int> raw, int sample_rate)
         // gains show at 127/128. The display range is -64..+63.
         .feedback = (raw[8] - 64) * 31.0 / 2048.0,
         .pre_low_pass = raw[0],
-        // Over 128, like the tap gains and like the chorus's two sends -- not over 127.
-        .send_to_reverb = raw[9] / 128.0,
     };
 }
 
@@ -331,7 +326,7 @@ void SystemDelay::process(std::span<const float> input,
 void SystemDelay::process(std::span<const float> input,
                           std::span<float> left,
                           std::span<float> right,
-                          std::span<float> to_reverb)
+                          std::span<float> mono)
 {
     const DelayParameters& p = parameters_;
 
@@ -384,11 +379,11 @@ void SystemDelay::process(std::span<const float> input,
         left[i] = wet_left;
         right[i] = wet_right;
 
-        // The centre tap counts once here, not once per side.
-        if (i < to_reverb.size()) {
-            to_reverb[i] = static_cast<float>(
-                ((p.left_gain * l) + (p.right_gain * r) + (p.centre_gain * centre))
-                * p.send_to_reverb);
+        // The centre tap counts once here, not once per side -- which is why this cannot be
+        // reconstructed from the stereo pair, where it counts twice.
+        if (i < mono.size()) {
+            mono[i] = static_cast<float>((p.left_gain * l) + (p.right_gain * r)
+                                         + (p.centre_gain * centre));
         }
     }
 }

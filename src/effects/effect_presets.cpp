@@ -105,10 +105,6 @@ using nlohmann::json;
         .feedback = require(node, "feedback").get<double>(),
         .gain_write = require(node, "gainWrite").get<double>(),
         .gain_tap = require(node, "gainTap").get<double>(),
-        // Optional: the two cross-feeds are zero in every stored macro, so a preset file written
-        // before they were decoded is still a complete description of one.
-        .gain_to_reverb = node.value("gainToReverb", 0.0),
-        .gain_to_delay = node.value("gainToDelay", 0.0),
     };
 }
 

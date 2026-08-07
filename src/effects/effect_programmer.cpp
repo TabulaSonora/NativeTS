@@ -340,8 +340,8 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
     const int delay = row[3];
     const int rate = row[4];
     const int depth = row[5];
-    const int to_reverb = row[6];
-    const int to_delay = row[7];
+    // row[6] and row[7] are the sends to the reverb and the delay; like the return level they
+    // are the mixer's ramps, not coefficients. See `ChorusPreset`.
 
     // `chorus_apply_params`: the LFO increment and tap bases go through the dispatcher's
     // signed-14-bit decode, where a negative value is a 12.12 fixed-point base rather than a
@@ -366,9 +366,6 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
         // 127. Compiling the level in here as well renders it twice; `ff5_1_16_harvest.mid`, which
         // sends `40 01 3A` 120, is what says so out loud.
         .gain_tap = gain(0x4000),
-        // Quantised over 128, and zero in every macro. See `ChorusPreset`.
-        .gain_to_reverb = gain(to_reverb << 7),
-        .gain_to_delay = gain(to_delay << 7),
     };
 }
 

@@ -199,6 +199,9 @@ struct ToneGenerator::Impl {
     MatrixRamp reverb_level_ramp;
     MatrixRamp chorus_level_ramp;
     MatrixRamp delay_level_ramp;
+    MatrixRamp chorus_to_reverb_ramp;
+    MatrixRamp chorus_to_delay_ramp;
+    MatrixRamp delay_to_reverb_ramp;
     std::array<double, block_size> level_gains{};
 
     std::array<float, block_size> reverb_bus{};
@@ -210,9 +213,15 @@ struct ToneGenerator::Impl {
     // The three cross-feeds between the networks. They are separate buffers rather than additions
     // to the send buses because a network runs *after* its bus has been filled and mixed: writing
     // the chorus's output back into `reverb_bus` would be a block late, where the module's is not.
+    //
+    // `*_mono` is what each network produces -- its tap sum, ahead of its return level -- and the
+    // scaled feeds are what the ramped sends make of it.
+    std::array<float, block_size> chorus_mono{};
+    std::array<float, block_size> delay_mono{};
     std::array<float, block_size> chorus_to_reverb{};
     std::array<float, block_size> chorus_to_delay{};
     std::array<float, block_size> delay_to_reverb{};
+    std::array<double, block_size> send_gains{};
     std::array<float, block_size> block_left{};
     std::array<float, block_size> block_right{};
 
@@ -347,6 +356,16 @@ struct ToneGenerator::Impl {
     int chorus_level = 0x40;
     int delay_level = 0x40;
 
+    /// The three routes between the networks, `40 01 3F`, `40 01 40` and `40 01 5A`.
+    ///
+    /// Coefficients of the same matrix and ramped the same way, but quantised over 128 rather than
+    /// 64 -- see `MatrixRamp::send_shift`. Every stored macro and nine of the ten delay presets
+    /// leave all three at zero, so on most streams these ramps hold at silence and cost a
+    /// multiply-by-nothing; the tenth delay preset carries 36, and files do send the addresses.
+    int chorus_to_reverb_level = 0;
+    int chorus_to_delay_level = 0;
+    int delay_to_reverb_level = 0;
+
     /// The level that means unity, which is also the power-on value.
     static constexpr int unity_level = 0x40;
 
@@ -357,6 +376,8 @@ struct ToneGenerator::Impl {
         chorus_row = EffectProgrammer::chorus_macro_row(notes->rom(), chorus_type.value_or(2));
         reverb_level = reverb_row[2];
         chorus_level = chorus_row[1];
+        chorus_to_reverb_level = chorus_row[6];
+        chorus_to_delay_level = chorus_row[7];
         reverb_row_edited = false;
         chorus_row_edited = false;
     }
@@ -1403,12 +1424,18 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
                 // Selecting a macro reloads its level, the way the other two macros reload theirs.
                 // All ten stored rows carry 64, so this only ever restores unity -- but it restores
                 // it, which matters to a stream that edits the level and then changes type.
-                delay_level = EffectPresets::defaults()
-                                  .delay()
-                                  .raw_presets[static_cast<std::size_t>(delay_type.value_or(0))][7];
+                const auto& row = EffectPresets::defaults()
+                                      .delay()
+                                      .raw_presets[static_cast<std::size_t>(
+                                          delay_type.value_or(0))];
+                delay_level = row[7];
+                delay_to_reverb_level = row[9];
             } else if (a3 == 0x58) {
                 // The delay's wet level. See `delay_level`: the network carries none of it.
                 delay_level = value;
+            } else if (a3 == 0x5A) {
+                // The delay's send into the reverb. Likewise a matrix coefficient, not a tap gain.
+                delay_to_reverb_level = value;
             } else if (a3 >= 0x31 && a3 <= 0x37) {
                 // Reverb parameters, straight into the row the macro filled in. Level is byte [2]
                 // and is kept out of the network -- see `reverb_level`.
@@ -1424,6 +1451,10 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
                     static_cast<std::uint8_t>(value);
                 if (a3 == 0x3A) {
                     chorus_level = value;
+                } else if (a3 == 0x3F) {
+                    chorus_to_reverb_level = value;
+                } else if (a3 == 0x40) {
+                    chorus_to_delay_level = value;
                 } else {
                     chorus_row_edited = true;
                 }
@@ -2245,20 +2276,38 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
 
     // The same order the module mixes in: chorus, delay, then reverb. The order is not cosmetic --
     // it is what lets the chorus feed the delay and both feed the reverb inside one block.
+    chorus_mono.fill(0.0F);
+    delay_mono.fill(0.0F);
     chorus_to_reverb.fill(0.0F);
     chorus_to_delay.fill(0.0F);
     delay_to_reverb.fill(0.0F);
 
+    // Each send is a ramped coefficient of the same matrix the levels sit in, so it is applied
+    // here rather than inside a network: a network compiles its coefficients once, and a step where
+    // the module glides is a click. `MatrixRamp::send_shift` is the only thing that differs.
+    const auto scale_feed =
+        [&](MatrixRamp& ramp, int level, const std::array<float, block_size>& from,
+            std::array<float, block_size>& into) {
+            ramp.fill(level, send_gains, MatrixRamp::send_shift);
+            for (int n = 0; n < block_size; ++n) {
+                const auto i = static_cast<std::size_t>(n);
+                into[i] = static_cast<float>(static_cast<double>(from[i]) * send_gains[i]);
+            }
+        };
+
     if (chorus) {
-        chorus->process(chorus_bus, wet_left, wet_right, chorus_to_reverb, chorus_to_delay);
+        chorus->process(chorus_bus, wet_left, wet_right, chorus_mono);
         add(&chorus_level_ramp, chorus_level);
+        scale_feed(chorus_to_reverb_ramp, chorus_to_reverb_level, chorus_mono, chorus_to_reverb);
+        scale_feed(chorus_to_delay_ramp, chorus_to_delay_level, chorus_mono, chorus_to_delay);
     }
     if (delay) {
         // The chorus's send-to-delay lands on the delay's own bus, ahead of its input conditioner,
         // exactly where a part's delay send lands.
         simd::add(chorus_to_delay, delay_bus);
-        delay->process(delay_bus, wet_left, wet_right, delay_to_reverb);
+        delay->process(delay_bus, wet_left, wet_right, delay_mono);
         add(&delay_level_ramp, delay_level);
+        scale_feed(delay_to_reverb_ramp, delay_to_reverb_level, delay_mono, delay_to_reverb);
     }
     if (reverb) {
         reverb->process(reverb_bus, chorus_to_reverb, delay_to_reverb, wet_left, wet_right);

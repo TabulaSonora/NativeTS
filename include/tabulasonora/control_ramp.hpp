@@ -231,24 +231,34 @@ public:
     static constexpr int rate = 0x300;
     static constexpr int rate_shift = 16;
 
-    /// A 0-127 level's coefficient target.
+    /// A 0-127 **level's** coefficient target — `40 01 33`, `3a`, `58`. Full scale is 0x40, so a
+    /// level runs 0…1.98 and the power-on 64 is unity.
     static constexpr int level_shift = 8;
+
+    /// A 0-127 **send's** coefficient target — the routes between networks, `40 01 3f`, `40` and
+    /// `5a`. One shift lower, because a send quantises over 128 rather than 64: the live gain
+    /// register reads 0.5 at raw 64 and 0.9921875 at raw 127, where a level reads 1.0 and 1.984375.
+    ///
+    /// Only the endpoint differs. The trajectory between them is the same ramp on the same matrix,
+    /// which is checkable rather than assumed: driven together, a send and a level have the same
+    /// *fraction* of their error left at every block — 0.4634 of it after 64 steps, on both.
+    static constexpr int send_shift = 7;
 
     /// The coefficient decodes to a gain in 1/16384ths, so 0x40 — the power-on level — is unity.
     static constexpr double gain_scale = 0x1p-14;
 
-    [[nodiscard]] static constexpr int target_of(int level) noexcept
+    [[nodiscard]] static constexpr int target_of(int level, int shift = level_shift) noexcept
     {
-        return level << level_shift;
+        return level << shift;
     }
 
     /// Fills a block's worth of per-sample gains, advancing the coefficient toward `level`.
     ///
     /// The first call lands on the target: a stream that never edits a level renders as though this
     /// did not exist, rather than gliding up from silence at the first block.
-    void fill(int level, std::span<double> gains) noexcept
+    void fill(int level, std::span<double> gains, int shift = level_shift) noexcept
     {
-        const int target = target_of(level);
+        const int target = target_of(level, shift);
         if (!seeded_) {
             current_ = target;
             seeded_ = true;
