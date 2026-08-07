@@ -449,8 +449,52 @@ parts, and taking either as the general rule breaks the other — which it did, 
 a blind discard in place and once by making a chord draw too much and costing two songs their
 balance row.
 
+### The key-follow pivot is middle C {#the-key-follow-pivot}
 
-ote The pan needs the **GS SysEx panpot** to reach zero at all. CC#10 cannot produce one: its
+The probes above were built to measure one thing and found a larger one, which is the ordinary
+return on pointing a measurement where nothing had looked. `Bubble` was 14–20 dB loud in its 2 kHz
+octave while its overall level agreed to a tenth of a dB. Two readings said what it was not: cut into
+segments the size of the LFO's own wrap period, the error sat at +17 to +23 dB in **every** segment
+while the RMS agreed within a dB — a random modulation that disagreed would scatter — and both
+partials are a flat type-0 lowpass with no envelope, which cannot produce a band-specific 20 dB. The
+loudest spectral peaks put this engine at roughly 615 and 1400 Hz against the module's 510 and 1100.
+It was pitch, three to four semitones of it.
+
+`block[0x13]` is the key-follow amount and it is linear: `block[0x13] - 0x40` is **tenths of full
+follow**, 100 milli-semitones per semitone per tenth. `scdec pitchword` reads the module's own
+computed pitch off the sounding voice, and the ladder comes straight out of it — 1201
+milli-semitones per octave at one tenth, 2402 at two, 3604 at three, against 12000 at ten.
+
+The slope was already right here. The **pivot** was not. This port measured the key's distance from
+the partial's own key centre, `block[0x04]`, and returned a key relative to it.
+`multisample_key_zone @ 1800031f0` keeps the pivot in one variable, and on the path every reachable
+tone takes, that variable is set by a literal `uVar6 = 0x3c`. The same variable is what the
+interpolated step is added back to, so it fixes both ends.
+
+The error that makes is `(key_centre - 60) x 100 x (10 - amount)` milli-semitones, and **it vanishes
+at full follow**. That is the whole reason it survived: 2,645 of the 3,438 partials in the table
+carry `block[0x13] = 0x4a` and never notice. On the 772 that do not it is worth up to 3.6 semitones.
+
+| | predicted | measured, before |
+|---|---|---|
+| `Bubble` partial 0, one tenth | (64-60) x 100 x 9 = 3600 | 3598 |
+| `Bubble` partial 1, two tenths | (64-60) x 100 x 8 = 3200 | 3195 |
+| `Stream`, three tenths | (64-60) x 100 x 7 = 2800 | 2799 |
+
+With the pivot corrected, all twelve readings across two tones and three keys are **exact against
+the module**, `g_kf_pitch` curve residuals included, and the probes go from a mean worst octave band
+of 11.0379 dB to **0.1668**.
+
+\warning No measurement could have settled this. **Every partial in the table has key centre 64**,
+so a pivot of 60 and a pivot of 64 with a constant offset fit the data identically — and a constant
+offset is exactly what a transpose byte looks like. Only the listing separates them, which is the
+counter-example to the habit running through the rest of this article: usually the binary proposes
+and the measurement disposes, and here the measurement could not.
+
+It also closed a row nobody expected it to. `Seashore` allowed 12.5 dB and now needs 1.0; it was one
+of the four patches grouped above as having "a noise component" and blamed on the shared generator.
+
+\note The pan needs the **GS SysEx panpot** to reach zero at all. CC#10 cannot produce one: its
 handler stores `value == 0 ? 1 : value`, so the wheel's zero is hard left and not a random position.
 That is why the corpus so rarely exercises random pan, and why `lfotrace` grew a panpot argument
 rather than using a controller.
@@ -461,21 +505,11 @@ come back inside their balance bounds. One row moved the other way — `roland_a
 0.05 dB — and it is carried as a debt rather than absorbed.
 
 The probes found something larger than what they were built for, which is the ordinary return on
-pointing a measurement somewhere nothing had looked. **`Bubble` is 14–20 dB loud in the 2 kHz band**
-on all three keys while its overall level agrees to within 0.15 dB, and **`Stream` sits 5–7 dB low
-at 500 Hz** on two of three. Both are ordinary GS variation tones one bank select away, and neither
-the note sweep nor the song corpus covers either.
-
-Two measurements say what it is not. Cut into 238 ms segments — the LFO's own wrap period — the RMS
-agrees within about a dB in every segment while the 2 kHz band is **+17 to +23 dB in every one of
-them**. A random modulation that disagreed would scatter, some segments better and some worse; a
-constant offset is a static defect. And the loudest spectral peaks put this engine at roughly 615
-and 1400 Hz where the module is at 510 and 1100 — about three to four semitones sharp.
-
-So it is **pitch**, not the filter and not the LFO. The note is key 60 against a key centre of 64,
-four semitones below it, and `Bubble`'s two partials carry key-follow bytes of `0x41` and `0x42`
-where `Stream`'s carry `0x43` — which is also the shape of the smaller error on `Stream`. That is
-the lead: this engine follows the key less than the module does on a small `block[0x13]`.
+pointing a measurement somewhere nothing had looked. `Bubble` was 14–20 dB loud in the 2 kHz band on
+all three keys while its overall level agreed to within 0.15 dB, and `Stream` sat 5–7 dB low at
+500 Hz on two of three. Both are ordinary GS variation tones one bank select away, and neither the
+note sweep nor the song corpus covers either. It was a key-follow pivot, and
+\ref the-key-follow-pivot is what chasing it found.
 
 ### What the first authoritative measurement says
 
@@ -546,8 +580,14 @@ The nine programs that do need an allowance fall into two groups:
   case moves these four by hundredths of a dB, and makes `Whistle` slightly worse. The gate does it
   anyway, so that no case depends on the ones that ran before it, but the cause lies elsewhere.
 
+  It did. **`Seashore` was a key-follow pivot**, and it is closed: all five of its cases now agree
+  to 0.12 dB in every band, where its row allowed 12.5. `Synth Drum` carries the same defect at half
+  the depth and moved with it without closing. Grouping these four by what they *sound* like rather
+  than by what they read was the mistake — three share a noise component and nothing else, and the
+  one thing all four were blamed on was innocent.
+
 `Whistle` is the outlier of the four by a wide margin — 21 dB in a band the note genuinely reaches
-and 2 dB of overall level. It remains unexplained.
+and 2 dB of overall level. It remains unexplained, and it follows the key fully, so it is not this.
 
 ### What the sweep could not see, and now can {#widening-the-note-sweep}
 
