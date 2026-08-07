@@ -96,6 +96,22 @@ SONGS = [
     ("darkness3.mid", 4),
     ("wwtbam.mid", 4),
 
+    # **The same file at two maps, on purpose.** `MIDI-Corona-Baby Baby.mid` dives its bass from
+    # key 71 to key 35 with portamento, four times, and the two renders disagree about whether the
+    # dive happens -- not because of anything in the file, but because the resampler's increment
+    # word tops out at four times a wave's native rate and the two maps' waves sit 10142
+    # milli-semitones apart. On the SC-8820 map the ceiling lands above where the glide starts and
+    # it slides; on the SC-55 map it lands at key 64, the glide needs 6.02x, and the note is simply
+    # held for 0.6 s first. Carrying only one of the two would gate the mechanism at whichever map
+    # happens to clear it.
+    #
+    # It is also the only pair in this corpus that isolates a tone map's effect on something other
+    # than timbre, which is why it is worth the second render rather than being folded into a
+    # single row. See *Known limits* in `docs/articles/verification.md`; the correction is #38 and
+    # is deliberately not applied, so both rows must keep matching the DLL exactly.
+    ("MIDI-Corona-Baby Baby.mid", 1),
+    ("MIDI-Corona-Baby Baby.mid", 4),
+
     # Roland's own demonstration disks, at the map each was written for. These are the general
     # fidelity backbone rather than a feature hunt: they are densely and competently sequenced by
     # the people who built the module, so they exercise ordinary playing -- twenty programs at a
@@ -215,6 +231,10 @@ def main():
     parser.add_argument("--audio-dir", type=pathlib.Path,
                         default=pathlib.Path("fixtures/oracle/songs"))
     parser.add_argument("--testdata", type=pathlib.Path, default=pathlib.Path("testdata"))
+    parser.add_argument("--only", action="append", default=None, metavar="NAME",
+                        help="Render only songs whose filename contains NAME. Repeatable. Writes "
+                             "a fixture holding just those rows, for merging into an existing one "
+                             "-- adding a song should not mean re-rendering the whole corpus.")
     parser.add_argument("--tail", type=float, default=1.5)
     parser.add_argument("--rate", type=int, default=32000)
     # How to launch a Windows binary, when the host is not Windows. Plain `wine` is the default and
@@ -241,7 +261,14 @@ def main():
         runner = [] if sys.platform == "win32" else ["wine"]
     cases = []
 
-    for midi, tone_map in SONGS:
+    songs = SONGS
+    if arguments.only:
+        songs = [row for row in SONGS if any(name in row[0] for name in arguments.only)]
+        if not songs:
+            raise SystemExit(f"--only matched nothing in the corpus: {arguments.only}")
+        print(f"rendering {len(songs)} of {len(SONGS)} rows", flush=True)
+
+    for midi, tone_map in songs:
         source = arguments.testdata / midi
         if not source.exists():
             print(f"  skipping {midi}: not in {arguments.testdata}")
