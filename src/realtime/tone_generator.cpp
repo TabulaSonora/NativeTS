@@ -1765,7 +1765,20 @@ constexpr std::array<int, 15> bulk_transitions{
 /// this map degrades to a wrong *value* when the phase drifts; this one deletes the performance, so
 /// it stays out until the walk is right for all sixteen parts rather than merely reaching them.
 ///
-/// The second is a byte the block *does* address but does not own outright. `partmap` reports
+/// The second is a byte the block *does* address but does not own outright -- a field inside a byte
+/// rather than the byte. `partmap` reports `40 1x 02` moving `+0x3d8` from `00` to `20` when it
+/// wrote `33`, and `40 1x 14` moving `+0x3d9` from `81` to `82`. Four of these exist, and having
+/// decoded them the answer is that only one carries anything this engine can use:
+///
+/// - `+0x3d8` is `(port << 4) | rx channel`. **Handled in the walk**, unpacked rather than dropped.
+/// - `+0x3d9` holds the assign mode in bits 0-1, use-for-rhythm at 0x10 and the kit slot at 0x20.
+///   The rhythm bits are read where the program change fires; the assign mode reaches a placeholder
+///   here, because this voice pool has one allocation policy, so mapping it would change nothing.
+/// - `+0x446` (`40 1x 26`) the engine stores as a boolean and **never reads again** -- the offset
+///   appears exactly once in the whole binary, at that write.
+/// - `+0x44c` (`40 1x 60`) has no handler in this engine at all.
+///
+/// So the remaining two are dropped because they are inert, not because they are unknown. `partmap` reports
 /// `40 1x 02` moving `+0x3d8` from `00` to `20` when it wrote `33`, and `40 1x 14` moving `+0x3d9`
 /// from `81` to `82` -- both **packed**, a field inside a byte rather than the byte. Copying a
 /// dump's raw byte through the parameter handler sets the whole thing, and `+0x3d8`/`+0x3d9` carry
@@ -1910,6 +1923,17 @@ void ToneGenerator::Impl::gs_bulk_dump(int block_port,
         // offset -- only a part the walk *transitioned* into has a case that fires it.
         if (offset == 0x3d5) {
             bulk_pending_program = value & 0x7F;
+            continue;
+        }
+
+        // The Rx channel, unpacked. `+0x3d8` is not the channel, it is `(port << 4) | channel` --
+        // the engine builds it as `table[part] * 0x10 + value` from a parameter change that carries
+        // only the low nibble, and a dump carries the assembled byte. Routing the whole byte through
+        // the parameter handler sets the channel to a port index and the part stops hearing
+        // anything: `darkness3.mid` sounded 771 of its 3,607 notes that way. The high nibble is the
+        // port, which this engine takes from the message rather than from the record.
+        if (offset == 0x3d8) {
+            part.rx_channel = value & 0x0F;
             continue;
         }
 
