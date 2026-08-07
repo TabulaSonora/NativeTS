@@ -1498,6 +1498,85 @@ TEST_CASE("CC#71 reaches a note that is already sounding", "[stream][sccore]")
     CHECK(swept > held * 1.1);
 }
 
+TEST_CASE("the GS tone map SysEx selects a part's map", "[stream][sccore]")
+{
+    // `40 4x 01` is the tone map and `40 4x 00` is not. Measured with a sweep of every address in
+    // the `40 1x` and `40 4x` blocks against a part dump: exactly two of the 256 move either byte,
+    // `00` writing `part+0x44d` unclamped and `01` writing `part+0x44e` clamped to 1-4. The second
+    // is the map, and it is how every tier 2 fixture here picks one -- the `scdec` harness sends it
+    // to all sixteen blocks after a GS reset.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+
+    // `40 4x pp vv`, with the block in `x`: channel 10 is block 0, channels 1-9 are blocks 1-9.
+    const auto tone_map_sysex = [](int block, int parameter, int value) {
+        std::array<std::uint8_t, 4> payload{
+            0x40, static_cast<std::uint8_t>(0x40 | block),
+            static_cast<std::uint8_t>(parameter), static_cast<std::uint8_t>(value)};
+        int sum = 0;
+        for (const std::uint8_t byte : payload) {
+            sum += byte;
+        }
+        return std::vector<std::uint8_t>{0xF0, 0x41, 0x10, 0x42, 0x12, payload[0], payload[1],
+                                         payload[2], payload[3],
+                                         static_cast<std::uint8_t>((128 - (sum & 0x7F)) & 0x7F),
+                                         0xF7};
+    };
+
+    SECTION("`01` sets it, per part")
+    {
+        // The address carries a **block**; this engine's part array is indexed by channel, so the
+        // two are converted at the boundary. Block 1 is channel 1, which is index 0; block 0 is
+        // channel 10, index 9. Getting that backwards is the classic way to read a part nobody
+        // wrote and conclude the message does nothing.
+        generator.send_sysex(tone_map_sysex(1, 0x01, 1));
+        generator.send_sysex(tone_map_sysex(2, 0x01, 3));
+        generator.send_sysex(tone_map_sysex(0, 0x01, 2));
+        CHECK(generator.part_tone_map(0) == ToneMap::sc55);
+        CHECK(generator.part_tone_map(1) == ToneMap::sc88pro);
+        CHECK(generator.part_tone_map(9) == ToneMap::sc88);
+        // Untouched parts keep the default rather than following their neighbours.
+        CHECK(generator.part_tone_map(3) == ToneGeneratorOptions{}.map);
+    }
+
+    SECTION("out of range is dropped, not stored")
+    {
+        // The module tests `(byte)(value - 1) < 4` and writes nothing otherwise, so a zero leaves
+        // the map where it was instead of returning it to the default.
+        generator.send_sysex(tone_map_sysex(1, 0x01, 2));
+        REQUIRE(generator.part_tone_map(0) == ToneMap::sc88);
+        generator.send_sysex(tone_map_sysex(1, 0x01, 0));
+        CHECK(generator.part_tone_map(0) == ToneMap::sc88);
+        generator.send_sysex(tone_map_sysex(1, 0x01, 5));
+        CHECK(generator.part_tone_map(0) == ToneMap::sc88);
+    }
+
+    SECTION("the vintage is a default, not a ceiling")
+    {
+        // The SysEx and CC#32 write the same byte and neither limits the other, so the last one
+        // wins. Measured both ways round on the module: SysEx map 1 then CC#32 = 4 renders exactly
+        // as a native map 4, and CC#32 = 4 then SysEx map 1 renders exactly as a native map 1.
+        generator.send_sysex(tone_map_sysex(1, 0x01, 1));
+        generator.send_channel(0xB0, 32, 4);
+        CHECK(generator.part_tone_map(0) == ToneMap::sc8820);
+
+        generator.send_sysex(tone_map_sysex(1, 0x01, 1));
+        CHECK(generator.part_tone_map(0) == ToneMap::sc55);
+    }
+
+    SECTION("`00` is a different parameter and does not touch the map")
+    {
+        // Worth pinning because a real player gets this wrong. Cog's `gs_bank_lsb_sysex` builds
+        // this exact message with `00` as its third address byte and the map as its data, and
+        // rendered through the module it changes nothing at all -- verified against `01`, which
+        // moves the same file's render.
+        generator.send_sysex(tone_map_sysex(1, 0x00, 1));
+        CHECK(generator.part_tone_map(0) == ToneGeneratorOptions{}.map);
+    }
+}
+
 TEST_CASE("the event pipeline holds a message for whole chunks", "[stream][sccore]")
 {
     // The module never applies a MIDI message on arrival: `TG_ShortMidiIn` puts it in a ring,

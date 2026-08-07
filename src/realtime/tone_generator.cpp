@@ -1443,12 +1443,37 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
 
         if ((a2 & 0xF0) == 0x40) {
             // The extended part block. `20` switches this part through the EQ; `22` routes it
-            // through the insertion EFX instead of the dry mix. `00`/`01` are the SysEx form of
-            // the tone map number, which this engine takes from its options and CC#32 instead.
+            // through the insertion EFX instead of the dry mix.
             const int index =
                 part_of(block_port, sequence_builder::channel_from_block(a2 & 0x0F));
             Part& part = parts[static_cast<std::size_t>(index)];
-            if (a3 == 0x20) {
+            if (a3 == 0x00) {
+                // `sysex_part_bank_msb` writes `part+0x44d` with no clamp -- the same byte the bank
+                // MSB and the mode resets set, which is the tone *space* rather than the map (XG
+                // System On puts 0x77 there on every part, GM2 On 0x7a). Measured with a sweep of
+                // the whole `40 4x` block against a part dump: this address and `01` are the only
+                // two in it that move either byte.
+                if (part.rx.bank_msb) {
+                    part.bank = value;
+                }
+            } else if (a3 == 0x01) {
+                // `sysex_part_bank_lsb` writes `part+0x44e` **clamped to 1-4**, and that is the
+                // tone map. Anything outside the range is dropped rather than stored, so a zero
+                // leaves the map where it was instead of returning it to the default.
+                //
+                // This is the same destination CC#32 reaches, and it is how every tier 2 fixture
+                // in this repository selects its map -- the `scdec` harness's `ToneMap0` sends
+                // exactly this message to all sixteen blocks after a GS reset.
+                //
+                // **The vintage is a default, not a ceiling.** The two writers do not limit each
+                // other and the last one wins, measured both ways round on the module: this SysEx
+                // then CC#32 = 4 renders as map 4, CC#32 = 4 then this SysEx renders as map 1. So a
+                // player that injects the map once after a reset is stating a preference, and any
+                // later bank LSB in the file overrides it.
+                if (value >= 1 && value <= 4) {
+                    part.bank_lsb = value;
+                }
+            } else if (a3 == 0x20) {
                 part.eq_enabled = value != 0;
             } else if (a3 == 0x38) {
                 // The per-program half of the hold-clock bias (`part+0x45b`). The tone loader
