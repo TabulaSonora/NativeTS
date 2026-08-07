@@ -1004,6 +1004,69 @@ TEST_CASE("the four-band EQ engages only when a part opts in", "[stream][sccore]
     CHECK(render(true, true) < plain * 0.95);
 }
 
+TEST_CASE("a partial with no release time fades rather than cutting", "[stream][sccore]")
+{
+    // `dreaming_i_was_dreaming.mid` clicked on every note transition on channel 2, and the module
+    // rendering the same file does not. Syn.Bass 201 -- bank MSB 1, LSB 2, program 39 on the SC-88
+    // map -- has two partials, and one of them computes a release duration of zero. This engine
+    // clamped that to a single sample and cut the partial dead at gain 0.535, 320 samples after
+    // each note-off: eight steps above 500/32768 in the first 45 seconds where the module has none.
+    //
+    // `tva_compute_env_rates` stores the release as a per-tick *step* rather than a duration, and
+    // the step is a `uint16` seeded 0xffff that the `0xa0000 / duration` division only replaces
+    // when the duration exceeds 10. Zero leaves 0xffff standing: about one control tick, not one
+    // sample. See `saturating_floor_ms`.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    ToneGeneratorOptions options;
+    options.map = ToneMap::sc88;
+    options.reverb = false;
+    options.chorus = false;
+    options.delay = false;
+    ToneGenerator generator{notes, options};
+
+    generator.send_channel(0xB1, 0, 1);
+    generator.send_channel(0xB1, 32, 2);
+    generator.send_channel(0xC1, 39, 0);
+    generator.send_channel(0xB1, 7, 100);
+    generator.send_channel(0x91, 31, 100);
+
+    // Held for 160 ms, the length the file's own phrase uses, then a full second of release.
+    constexpr std::size_t held = 32000 / 1000 * 160;
+    constexpr std::size_t tail = 32000;
+    std::vector<float> left(held + tail);
+    std::vector<float> right(left.size());
+    generator.render(std::span{left}.first(held), std::span{right}.first(held));
+    generator.send_channel(0x91, 31, 0);
+    generator.render(std::span{left}.subspan(held), std::span{right}.subspan(held));
+
+    const auto worst_step = [&](std::size_t from, std::size_t to) {
+        double worst = 0.0;
+        for (std::size_t i = std::max<std::size_t>(from, 1); i < to; ++i) {
+            worst = std::max(worst,
+                             std::abs(static_cast<double>(left[i])
+                                      - static_cast<double>(left[i - 1])));
+        }
+        return worst;
+    };
+
+    // Non-vacuity: the note has to have sounded at all, and its attack is a legitimately steep
+    // slope on a 49 Hz bass -- about 0.0078 here, against the module's 0.0072.
+    double peak = 0.0;
+    for (const float sample : left) {
+        peak = std::max(peak, std::abs(static_cast<double>(sample)));
+    }
+    REQUIRE(peak > 0.01);
+    REQUIRE(worst_step(0, held) > 1e-3);
+
+    // The release is what this is about. Measured: 0.0030 with the floor, 0.0203 without it, and
+    // 0.0031 on the module itself. The bound sits between the fault and the module rather than
+    // hugging either, so a smaller regression still trips it.
+    CHECK(worst_step(held, left.size()) < 0.006);
+}
+
 TEST_CASE("the GS delay parameter block reaches the network", "[stream][sccore]")
 {
     // `40 01 51`-`5A`, the ten bytes of the delay block, in the same order the stored preset table

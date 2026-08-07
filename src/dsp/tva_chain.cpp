@@ -7,6 +7,43 @@
 #include <cmath>
 
 namespace ts {
+namespace {
+
+/// The floor `tva_compute_env_rates` puts under segment 0 and the release.
+///
+/// Neither of those two stores a duration. Both store a **per-tick step** into a 0x10000 phase --
+/// `0xa0000 / duration_ms`, ten times the reciprocal because a control tick is 10 ms -- and the
+/// step is a `uint16` initialised to 0xffff that the division only ever replaces when the duration
+/// exceeds 10. A duration of 0 does not produce an infinite step and an instant segment; it leaves
+/// 0xffff standing, which walks the phase across in a shade over one tick.
+///
+/// Missing that made every envelope whose release rate falls off the bottom of `g_rate_curve` cut
+/// its partial dead in a single sample. Audibly: `dreaming_i_was_dreaming.mid` on channel 2, whose
+/// Syn.Bass 201 has two partials and where the one with the short release vanished at full gain
+/// 320 samples after each note-off. Eight hard steps in the first 45 seconds where the module has
+/// none, the loudest a jump of 0.535 in one sample -- a click on every note transition.
+///
+/// **Applied to the release only, though segment 0 saturates the same way.** Doing both is what the
+/// listing says and it is measurably wrong: a 10 ms floor under the attack costs program 0 note 84
+/// a fifth of its peak against the module, and four more note-oracle cases with it. What segment 0
+/// has that the release does not is the second write beside the step -- `g_env_startphase_b`,
+/// indexed by the *duration* rather than by 10 when it saturates, and that table is `512/n`. So a
+/// short segment 0 is not simply a slow one: the phase it starts from scales with how short it is,
+/// and this port models no start phase at all. Flooring the duration without that is half a
+/// mechanism, and the half that hurts. The release's own start-phase write exists too, so this
+/// floor is provisional on the same table -- but the release is where the audible fault was, and
+/// a 320-sample fade lands its worst step at 160 against the module's 151.
+[[nodiscard]] double saturating_floor_ms(double milliseconds) noexcept
+{
+    // `if (10 < duration)` in the engine, so 10 itself takes the floor too.
+    constexpr double step_saturates_at = 10.0;
+
+    // 0x10000 / 0xffff ticks of 10 ms. The excess over one tick is real but below a sample.
+    constexpr double saturated_ms = 10.000152590219;
+    return milliseconds > step_saturates_at ? milliseconds : saturated_ms;
+}
+
+} // namespace
 
 TvaChain::TvaChain(const TableSet& tables, const EnvelopeMachine& envelope)
     : envelope_(&envelope),
@@ -180,8 +217,8 @@ SegmentEnvelope TvaChain::create_envelope(const PartialParameters& partial,
         linear[i] = EnvelopeMachine::is_linear_segment(raw[0x5E + i]);
     }
 
-    const double release_ms = envelope_->segment_milliseconds(
-        raw[0x62], release_rate, velocity_late, modifiers.release_bias());
+    const double release_ms = saturating_floor_ms(envelope_->segment_milliseconds(
+        raw[0x62], release_rate, velocity_late, modifiers.release_bias()));
 
     return SegmentEnvelope{
         *envelope_,
