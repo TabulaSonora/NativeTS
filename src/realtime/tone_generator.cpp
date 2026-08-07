@@ -420,6 +420,8 @@ struct ToneGenerator::Impl {
     /// there is no preset underneath for it to sit on top of, the row *is* the parameters.
     std::array<std::uint8_t, EffectProgrammer::reverb_row_bytes> reverb_row{};
     std::array<std::uint8_t, EffectProgrammer::chorus_row_bytes> chorus_row{};
+    bool reverb_row_loaded = false;
+    bool chorus_row_loaded = false;
     bool reverb_row_edited = false;
     bool chorus_row_edited = false;
 
@@ -482,16 +484,33 @@ struct ToneGenerator::Impl {
     }
 
     /// Loads a macro's row, which is what selecting a type does before any edit.
-    void load_macro_rows()
+    /// Fills the reverb row from the current macro, the way a macro select does.
+    ///
+    /// Split out from `load_macro_rows` so a *reverb* edit arriving before any macro select can
+    /// seed its own row without also reloading the chorus's and discarding whatever a stream has
+    /// already put there. A macro select still does both, because that is what the module does.
+    void load_reverb_row()
     {
         reverb_row = EffectProgrammer::reverb_macro_row(notes->rom(), reverb_type.value_or(4));
-        chorus_row = EffectProgrammer::chorus_macro_row(notes->rom(), chorus_type.value_or(2));
         reverb_level = reverb_row[2];
+        reverb_row_loaded = true;
+        reverb_row_edited = false;
+    }
+
+    void load_chorus_row()
+    {
+        chorus_row = EffectProgrammer::chorus_macro_row(notes->rom(), chorus_type.value_or(2));
         chorus_level = chorus_row[1];
         chorus_to_reverb_level = chorus_row[6];
         chorus_to_delay_level = chorus_row[7];
-        reverb_row_edited = false;
+        chorus_row_loaded = true;
         chorus_row_edited = false;
+    }
+
+    void load_macro_rows()
+    {
+        load_reverb_row();
+        load_chorus_row();
     }
 
     // What each effect was last built for. Distinct from the selection above so that reselecting
@@ -1611,8 +1630,20 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
                     delay_row_edited = true;
                 }
             } else if (a3 >= 0x31 && a3 <= 0x37) {
-                // Reverb parameters, straight into the row the macro filled in. Level is byte [2]
-                // and is kept out of the network -- see `reverb_level`.
+                // Reverb parameters, into the row the macro filled in -- and if no macro has been
+                // selected yet, into the row the *current* macro would have filled in.
+                //
+                // Without the seed an edit lands in a zeroed array and `reverb_row_edited` then
+                // sends that array to be compiled, so one byte of intent replaces a whole macro
+                // with silence-adjacent nonsense. Nothing selects a macro at reset; the type is
+                // simply the power-on default, and a stream is entitled to assume it is there.
+                // Roland's own demonstration disks assume exactly that: `roland_allstars`,
+                // `roland_sc55_demo13`, `roland_sc88_y03` and `roland_sc88_y05` all edit a row
+                // before ever selecting one. Level is byte [2] and is kept out of the network --
+                // see `reverb_level`.
+                if (!reverb_row_loaded) {
+                    load_reverb_row();
+                }
                 reverb_row[static_cast<std::size_t>(a3 - 0x31)] =
                     static_cast<std::uint8_t>(value);
                 if (a3 == 0x33) {
@@ -1621,6 +1652,10 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
                     reverb_row_edited = true;
                 }
             } else if (a3 >= 0x39 && a3 <= 0x40) {
+                // The same seed, for the same reason -- see the reverb branch above.
+                if (!chorus_row_loaded) {
+                    load_chorus_row();
+                }
                 chorus_row[static_cast<std::size_t>(a3 - 0x39)] =
                     static_cast<std::uint8_t>(value);
                 if (a3 == 0x3A) {
