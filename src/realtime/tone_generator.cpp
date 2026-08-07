@@ -577,6 +577,8 @@ struct ToneGenerator::Impl {
 
     void gs_bulk_dump(int block_port, int address, std::span<const std::uint8_t> data);
 
+    void gs_drum_bulk_dump(int block_port, int a2, std::span<const std::uint8_t> data);
+
     /// The patch bulk dump's walk, carried across messages.
     ///
     /// `48 <a2> <a3>` is not a page, it is a position in a 16-bit address space -- the engine's
@@ -1688,6 +1690,15 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
         return;
     }
 
+    // The drum-set bulk dump. `sysex_drumset_dump_dispatch` handles this and `41` alike -- it is
+    // the same per-key data, arriving a plane at a time instead of a parameter at a time. There is
+    // no `59` mirror: the address table's search reaches `0x7f` before it reaches `0x59`, so a
+    // port-B form would be skipped, and this engine takes the port from the message instead.
+    if (a1 == 0x49) {
+        gs_drum_bulk_dump(block_port, a2, data);
+        return;
+    }
+
     if (a1 == 0x41 || a1 == 0x51) {
         // Drum setup: a2 is (map << 4) | parameter, a3 the first key. The map nibble picks which
         // of the two per-map setup buffers the module writes -- bit 12 of the address index, so
@@ -2162,6 +2173,87 @@ void ToneGenerator::Impl::gs_part_parameter(int part_index,
         }
         break;
     }
+}
+
+void ToneGenerator::Impl::gs_drum_bulk_dump(int block_port,
+                                           int a2,
+                                           std::span<const std::uint8_t> data)
+{
+    // Nibble-packed like the patch dump: two payload bytes a value, high nibble first.
+    if (data.size() % 2 != 0 || data.size() > 256) {
+        return;
+    }
+    for (const std::uint8_t byte : data) {
+        if (byte > 0x0F) {
+            return;
+        }
+    }
+
+    // `a2` carries the whole addressing, and it is arithmetic rather than a table. Bit 4 picks the
+    // kit slot -- the same bit `41` uses for its map. The low nibble picks a per-key plane in
+    // *pairs*: the even member carries keys 0-63 and the odd member 64-127, so one plane takes two
+    // messages. `0x0e` and `0x0f` are the two odd ones out.
+    const int map = (a2 >> 4) & 1;
+    const int low = a2 & 0x0F;
+
+    int parameter = 0;
+    int first_key = 0;
+    if (low == 0x0E) {
+        // The twelve-character kit name, and nothing here displays one.
+        return;
+    }
+    if (low == 0x0F) {
+        parameter = 0x09;   // delay send, unpaired
+    } else {
+        parameter = ((low & 0x0E) >> 1) + 1;
+        first_key = (low & 1) * 64;
+    }
+
+    const auto count = static_cast<int>(data.size() / 2);
+
+    // The module walks off the end here as it does everywhere else on this path -- `49 0e 00` starts
+    // at `+0x500` in buffers spaced `0x50c`, so a full payload writes into the next one. Refuse
+    // rather than reproduce.
+    if (first_key + count > 128) {
+        return;
+    }
+
+    std::array<std::uint8_t, 128> values{};
+    for (int i = 0; i < count; ++i) {
+        values[static_cast<std::size_t>(i)] = static_cast<std::uint8_t>(
+            (data[static_cast<std::size_t>(i) * 2] << 4)
+            | data[(static_cast<std::size_t>(i) * 2) + 1]);
+    }
+    const std::span<const std::uint8_t> plane{values.data(), static_cast<std::size_t>(count)};
+
+    // Rx note-off and Rx note-on share one plane, because on the module they share one *byte*:
+    // `sysex_drumset_rxnote_bit0` and `sysex_drumset_rxnote_bit4` write bit 0 and bit 4 of
+    // `part+0x480`. The per-parameter form addresses them separately and this one cannot, so the
+    // byte is split back out here.
+    if (parameter == 0x07) {
+        std::array<std::uint8_t, 128> bit{};
+        for (int i = 0; i < count; ++i) {
+            bit[static_cast<std::size_t>(i)] = values[static_cast<std::size_t>(i)] & 0x01;
+        }
+        gs_drum_setup(block_port, map, 0x07, first_key,
+                      std::span<const std::uint8_t>{bit.data(), static_cast<std::size_t>(count)});
+        for (int i = 0; i < count; ++i) {
+            bit[static_cast<std::size_t>(i)] = values[static_cast<std::size_t>(i)] & 0x10;
+        }
+        gs_drum_setup(block_port, map, 0x08, first_key,
+                      std::span<const std::uint8_t>{bit.data(), static_cast<std::size_t>(count)});
+        return;
+    }
+
+    gs_drum_setup(block_port, map, parameter, first_key, plane);
+
+    // **This lands and is then thrown away on the files that need it most.** `darkness3.mid` sends
+    // its whole dump at tick 0 on track 0 and a program change for every channel at tick 0 on tracks
+    // 2-10, including `ch10 = 0`. A drum program change resets `Part::drum_keys` here whenever the
+    // kit resolves, so the dump's per-key data survives about a block. The module keeps this in a
+    // buffer per *map* rather than per part, and reseeds it from the kit record only when the kit
+    // actually changes -- selecting the kit already loaded reloads nothing. Which of those two is
+    // right is measurable and not yet measured; see the task list.
 }
 
 void ToneGenerator::Impl::gs_drum_setup(int port,
