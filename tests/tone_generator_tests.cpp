@@ -418,6 +418,20 @@ namespace {
     return message;
 }
 
+/// The same, for a message assembled at run time rather than written out.
+[[nodiscard]] std::vector<std::uint8_t> dt1(const std::vector<int>& address_and_data)
+{
+    std::vector<std::uint8_t> message{0xF0, 0x41, 0x10, 0x42, 0x12};
+    int sum = 0;
+    for (const int byte : address_and_data) {
+        message.push_back(static_cast<std::uint8_t>(byte));
+        sum += byte;
+    }
+    message.push_back(static_cast<std::uint8_t>((0x80 - (sum & 0x7F)) & 0x7F));
+    message.push_back(0xF7);
+    return message;
+}
+
 } // namespace
 
 TEST_CASE("the controller set the engine dispatches is handled", "[stream][sccore]")
@@ -988,6 +1002,93 @@ TEST_CASE("the four-band EQ engages only when a part opts in", "[stream][sccore]
 
     // Both together, and a low note loses energy.
     CHECK(render(true, true) < plain * 0.95);
+}
+
+TEST_CASE("the GS delay parameter block reaches the network", "[stream][sccore]")
+{
+    // `40 01 51`-`5A`, the ten bytes of the delay block, in the same order the stored preset table
+    // holds them. They used to fall through the handler untouched: a stream could select a macro
+    // and then tune it, and got the macro's stored row regardless. Only the type was live.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // CC#94 is the delay send. A macro has to be selected first -- with none, the delay is whatever
+    // type 0 compiles to and no edit has a row to land in.
+    const auto render = [&](int send, std::vector<std::vector<int>> edits) {
+        ToneGenerator generator{notes};
+        generator.send_sysex(dt1({0x40, 0x01, 0x50, 0x00}));
+        for (const std::vector<int>& edit : edits) {
+            generator.send_sysex(dt1(edit));
+        }
+        generator.send_channel(0xB0, 94, send);
+        generator.send_channel(0x90, 40, 100);
+
+        std::vector<float> left(32000);
+        std::vector<float> right(32000);
+        generator.render(left, right);
+
+        double energy = 0.0;
+        for (const float sample : left) {
+            energy += static_cast<double>(sample) * static_cast<double>(sample);
+        }
+        return energy;
+    };
+
+    const double dry = render(0, {});
+    const double wet = render(127, {});
+    REQUIRE(dry > 0.0);
+
+    // The premise: with the send open the delay is audible at all. Without this the rest of the
+    // case would pass on a network that never speaks.
+    REQUIRE(wet != dry);
+
+    SECTION("the three tap levels silence the wet exactly")
+    {
+        // `55`, `56`, `57` are the centre, left and right tap gains. Zeroing all three leaves the
+        // network running and its output identically zero, so the render has to come back bit for
+        // bit equal to one with the send closed -- not merely close to it.
+        const double silenced = render(127,
+                                       {{0x40, 0x01, 0x55, 0x00},
+                                        {0x40, 0x01, 0x56, 0x00},
+                                        {0x40, 0x01, 0x57, 0x00}});
+        CHECK(silenced == dry);
+    }
+
+    SECTION("the delay time moves the echo")
+    {
+        // Type 0's stored time is 97, which is 340 ms -- 10880 samples, most of this window. A
+        // short time puts the echoes inside it instead, so the two renders cannot agree.
+        CHECK(render(127, {{0x40, 0x01, 0x52, 0x1E}}) != wet);
+    }
+
+    SECTION("the feedback reaches it too")
+    {
+        CHECK(render(127, {{0x40, 0x01, 0x59, 0x78}}) != wet);
+    }
+
+    SECTION("a ratio moves a side tap, once that side has a level")
+    {
+        // Type 0 puts both side levels at zero and everything in the centre, so editing a ratio on
+        // its own is *correctly* inaudible -- it moves a tap nothing reads. Testing it against the
+        // stored row would have asserted that the address does nothing, and passed for the wrong
+        // reason. The side has to be opened first, and the ratio compared against that.
+        const double left_open = render(127, {{0x40, 0x01, 0x56, 0x64}});
+        REQUIRE(left_open != wet);
+        CHECK(render(127, {{0x40, 0x01, 0x56, 0x64}, {0x40, 0x01, 0x53, 0x06}}) != left_open);
+    }
+
+    SECTION("reselecting the macro restores the row")
+    {
+        // A macro reload has to undo an edit even when the type has not changed, which comparing
+        // types alone would miss -- the network would keep standing on the edited row.
+        CHECK(render(127,
+                     {{0x40, 0x01, 0x55, 0x00},
+                      {0x40, 0x01, 0x56, 0x00},
+                      {0x40, 0x01, 0x57, 0x00},
+                      {0x40, 0x01, 0x50, 0x00}})
+              == wet);
+    }
 }
 
 TEST_CASE("the control matrix arrives over SysEx", "[stream][sccore]")

@@ -343,6 +343,20 @@ struct ToneGenerator::Impl {
     bool reverb_row_edited = false;
     bool chorus_row_edited = false;
 
+    /// The live delay parameter row, `40 01 51`-`5A`.
+    ///
+    /// Ten values in exactly the order the stored preset table holds them, which is why the address
+    /// maps to an index by subtraction and nothing has to be reordered: pre-LPF, time, ratio left
+    /// and right, level centre / left / right, level, feedback, send to reverb.
+    ///
+    /// Two of those ten never reach `SystemDelay` -- `[7]` and `[9]` are the wet level and the send
+    /// into the reverb, which are ramped in the mixer. They are kept in the row anyway because the
+    /// row *is* the delay block as the stream sees it, and a macro reload has to restore all ten.
+    std::array<int, EffectProgrammer::delay_preset_stride> delay_row{};
+    bool delay_row_loaded = false;
+    bool delay_row_edited = false;
+    bool delay_built_from_row = false;
+
     /// Wet levels, `40 01 33`, `40 01 3A` and `40 01 58`, which are not coefficients.
     ///
     /// They scale what leaves each network rather than shaping it, so they are applied at the mix
@@ -368,6 +382,24 @@ struct ToneGenerator::Impl {
 
     /// The level that means unity, which is also the power-on value.
     static constexpr int unity_level = 0x40;
+
+    /// Loads the delay's row from the macro's stored preset, the reverb and chorus equivalent.
+    void load_delay_row()
+    {
+        const auto& stored =
+            EffectPresets::defaults()
+                .delay()
+                .raw_presets[static_cast<std::size_t>(delay_type.value_or(0))];
+        std::copy(stored.begin(), stored.end(), delay_row.begin());
+        delay_level = delay_row[7];
+        delay_to_reverb_level = delay_row[9];
+        delay_row_loaded = true;
+
+        // A macro replaces the row, so a network standing on an *edited* one has to be rebuilt --
+        // including when the type has not changed, which comparing types alone would miss. When it
+        // was not edited, nothing is marked, and reselecting a type keeps the tail it already has.
+        delay_row_edited = delay_built_from_row;
+    }
 
     /// Loads a macro's row, which is what selecting a type does before any edit.
     void load_macro_rows()
@@ -1424,18 +1456,24 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
                 // Selecting a macro reloads its level, the way the other two macros reload theirs.
                 // All ten stored rows carry 64, so this only ever restores unity -- but it restores
                 // it, which matters to a stream that edits the level and then changes type.
-                const auto& row = EffectPresets::defaults()
-                                      .delay()
-                                      .raw_presets[static_cast<std::size_t>(
-                                          delay_type.value_or(0))];
-                delay_level = row[7];
-                delay_to_reverb_level = row[9];
-            } else if (a3 == 0x58) {
-                // The delay's wet level. See `delay_level`: the network carries none of it.
-                delay_level = value;
-            } else if (a3 == 0x5A) {
-                // The delay's send into the reverb. Likewise a matrix coefficient, not a tap gain.
-                delay_to_reverb_level = value;
+                load_delay_row();
+            } else if (a3 >= 0x51 && a3 <= 0x5A) {
+                // The delay parameter block, into the row the macro loaded. An edit that arrives
+                // before any macro has been selected still has to land on something, so the row is
+                // filled from the current type first rather than being written into zeroes.
+                if (!delay_row_loaded) {
+                    load_delay_row();
+                }
+                delay_row[static_cast<std::size_t>(a3 - 0x51)] = value;
+                if (a3 == 0x58) {
+                    // The wet level and the send into the reverb are matrix coefficients rather
+                    // than tap gains, so they move a ramp instead of recompiling the network.
+                    delay_level = value;
+                } else if (a3 == 0x5A) {
+                    delay_to_reverb_level = value;
+                } else {
+                    delay_row_edited = true;
+                }
             } else if (a3 >= 0x31 && a3 <= 0x37) {
                 // Reverb parameters, straight into the row the macro filled in. Level is byte [2]
                 // and is kept out of the network -- see `reverb_level`.
@@ -1472,12 +1510,11 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
             // rather than a gap, and files that set it are asking for something the SC-VA does not
             // provide.
             //
-            // The patch name (00-0F) has no audible counterpart. The individual reverb (32-37) and
-            // chorus (39-40) parameters go into the row the macro loaded and recompile the network;
-            // the delay's (51-57, 59-5A) do not yet, and are carried by the preset table the macro
-            // selects -- applying those edits on top is follow-up DSP work (`sysex_delay_params`).
-            // The delay's *level* (58) is handled above, because it is not a network coefficient at
-            // all: it is the mixer's ramp, like the other two levels.
+            // The patch name (00-0F) has no audible counterpart. All three parameter blocks are
+            // now live: reverb (32-37), chorus (39-40) and delay (51-5A) each go into the row their
+            // macro loaded and recompile the network, except for the four addresses that are not
+            // network coefficients at all -- the three wet levels (33, 3A, 58) and the three sends
+            // between networks (3F, 40, 5A), which move a ramp in the mixer instead.
             return;
         }
 
@@ -2344,9 +2381,16 @@ void ToneGenerator::Impl::ensure_effects()
         chorus_built_for = chorus_type;
         chorus_row_edited = false;
     }
-    if (options.delay && (!delay || delay_built_for != delay_type)) {
-        delay.emplace(SystemDelay::for_type(delay_type.value_or(0)));
+    if (options.delay && (!delay || delay_built_for != delay_type || delay_row_edited)) {
+        // Once a row exists it is the authority, exactly as the reverb's and chorus's are. An
+        // unedited row compiles to what `for_type` produces -- same function, same ten values --
+        // so selecting a macro and changing nothing is not a different network, only a longer way
+        // of naming the same one.
+        delay.emplace(delay_row_loaded ? SystemDelay{SystemDelay::compile(delay_row)}
+                                       : SystemDelay::for_type(delay_type.value_or(0)));
+        delay_built_from_row = delay_row_loaded;
         delay_built_for = delay_type;
+        delay_row_edited = false;
     }
 }
 
