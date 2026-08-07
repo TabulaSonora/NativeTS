@@ -34,9 +34,14 @@ struct PartSnapshot {
 
     /// The MIDI channel this part listens on, zero-based -- **not** its slot.
     ///
-    /// A mixer row has to be labelled with this. The two agree until something moves a part, and
-    /// then they do not: `darkness3.mid`'s bulk dump writes every part's receive channel, and a row
-    /// labelled by slot silently claims the wrong one for anything the dump rearranges.
+    /// A mixer row has to be labelled with this. Parts here are channel-indexed, so the slot and
+    /// the receive channel coincide until a `40 1x 02` or a bulk dump actually *moves* a part --
+    /// and then a row labelled by slot silently claims a channel the file is not addressing.
+    ///
+    /// No corpus file currently exercises it. `darkness3.mid` looks like it should, since its dump
+    /// writes all sixteen receive channels, but it writes each one to its own default and so moves
+    /// nothing. This is a latent case, taken care of because the mixer had no way to be right about
+    /// it rather than because anything was observed being wrong.
     int rx_channel = 0;
 
     /// The tone map this part's program resolves against, as `ToneMap`.

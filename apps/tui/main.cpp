@@ -278,10 +278,9 @@ struct Ui {
         }
     }
 
-    // In the order the rows are *labelled*, which is the receive channel and not the slot. The two
-    // agree until something moves a part, and then a list built in slot order reads as though the
-    // numbering were scrambled -- `darkness3.mid`'s bulk dump writes every part's receive channel,
-    // and a mixer that shows 10, 1, 2, 3 down the left edge looks broken rather than informative.
+    // In the order the rows are *labelled*, which is the receive channel and not the slot. Parts
+    // are channel-indexed, so the two coincide until something moves a part; once one does, a list
+    // built in slot order reads as though the numbering were scrambled.
     //
     // Port first, so a multi-port score still groups the way an interface labels it, and the slot
     // breaks ties: two parts pointed at one channel is legal in GS and both rows have to appear.
