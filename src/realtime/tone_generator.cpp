@@ -12,6 +12,7 @@
 #include <array>
 #include <cmath>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <vector>
 
@@ -171,10 +172,9 @@ struct ToneGenerator::Impl {
 
     /// The chunk each part last opened a note-on batch on, or -1.
     ///
-    /// Unused since the setup draws became `seed_note_lfo_nodes`, and kept because the question it
-    /// was answering is still open: a probe measured two notes struck on one tick costing the same
-    /// as one, while the same two twelve ticks apart cost twice. Seeding per node says two notes
-    /// should cost twice either way. One of the two readings is wrong and it has not been settled.
+    /// Unused: `seed_part_lfo_nodes` gets the same batching from the sorted run of equal parts,
+    /// without a side table to keep in step with the pool's size. Kept only until something needs a
+    /// per-part-per-chunk gate again.
     std::vector<std::int64_t> note_batch_chunk;
 
     /// One voice per slot, or empty. Recycled through `spare` rather than reallocated per note.
@@ -538,8 +538,8 @@ struct ToneGenerator::Impl {
     void stop_note(int channel, int note, int damper = 0);
     void start_note(int channel, int note, int velocity);
     void start_drum(int channel, int note, int velocity);
-    /// Seeds every LFO node a note claims from the shared generator, in claim order.
-    void seed_note_lfo_nodes(PendingNote& note);
+    /// Seeds one part's LFO nodes for a chunk: the first note draws, the rest copy.
+    void seed_part_lfo_nodes(std::span<PendingNote> batch);
     /// Reads one already-seeded note's parameters and installs its voices.
     void read_pending_note(PendingNote& note);
     /// Takes a slot for a voice, stealing if the pool is full. Dispatch-time, arrival order.
@@ -2293,11 +2293,7 @@ void ToneGenerator::Impl::start_pending_voices()
             ++end;
         }
 
-        for (std::size_t index = begin; index < end; ++index) {
-            if (!starting[index].voices.empty()) {
-                seed_note_lfo_nodes(starting[index]);
-            }
-        }
+        seed_part_lfo_nodes(std::span{starting}.subspan(begin, end - begin));
 
         for (std::size_t index = begin; index < end; ++index) {
             read_pending_note(starting[index]);
@@ -2435,7 +2431,7 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     }
 
     // Resolved at dispatch, because allocation happens here even though nothing is read yet: the
-    // count of voices the note takes is what `seed_note_lfo_nodes` later seeds from, and
+    // count of voices the note takes is what `seed_part_lfo_nodes` later seeds from, and
     // it comes from the queued list rather than being carried separately.
     std::vector<ResolvedTone> layers;
     layers.reserve(tones.size());
@@ -2728,42 +2724,72 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     }
 }
 
-void ToneGenerator::Impl::seed_note_lfo_nodes(PendingNote& note)
+void ToneGenerator::Impl::seed_part_lfo_nodes(std::span<PendingNote> batch)
 {
     // What `note_on_voice_setup @ 18005f5c0` takes from the shared generator before a single one of
-    // the note's own parameters is read, and **it is not a discard**. Every LFO node it initialises
-    // gets `+0x7a = prng_lfsr()`, unconditionally -- that register is the random shapes' held
-    // value, so a sample-and-hold opens on a real draw rather than at zero.
+    // the part's parameters is read, and **it is not a discard**. Every LFO node it initialises gets
+    // `+0x7a = prng_lfsr()`, unconditionally -- that register is the random shapes' held value, so a
+    // sample-and-hold opens on a real draw rather than at zero.
     //
-    // The count follows from what a note claims: one LFO1 node for the whole note plus one LFO2
-    // node per partial, which is the `partials + 1` a probe measured before the reason was known.
-    // A part whose SysEx panpot is zero repositions every note from the generator, so a probe of
-    // well-separated notes on such a part reads the sequence back out and the spacing between the
-    // positions is the consumption. Four shapes, all exact over 40-48 notes:
+    // **One batch per part per dispatch chunk, not one per note.** Measured with `scdec lfotrace`,
+    // which reads the module's own nodes rather than inferring from audio, on `Bubble` -- two
+    // partials and a random LFO1, so three nodes and three draws. The generator's sequence from the
+    // 0xEFA6/0x9C23 seeds opens 20373, 19301, 31980, -29494, 8988, ...
     //
-    //   one-partial tone, alone           pan at draw 2, every 3   -> 2 before the pan
-    //   two-partial tone, alone           pan at draw 3, every 4   -> 3 before the pan
-    //   plus one one-partial note elsewhere        every 5         -> that note cost 2
-    //   plus one two-partial note elsewhere        every 6         -> that note cost 3
+    //   one note                    LFO1 seeds on draw 1, wraps resume at 4
+    //   two notes, two channels     LFO1 seeds on draws 1 and 4 -- each part pays
+    //   two notes, one channel      both LFO1 nodes seed on draw 1, wraps resume at 4
     //
-    // Confirmed against the module rather than only counted. `scdec lfotrace` on `Bubble` -- two
-    // partials, a random LFO1 -- shows three live nodes, one of type 1 and two of type 2, and the
-    // type 1 node reads **20373** at its first control tick with no wrap having happened. 20373 is
-    // the first draw from the `0xEFA6`/`0x9C23` seeds, and the four values it takes at its next
-    // four wraps are draws 4, 5, 6 and 7. Draws 2 and 3 are the two LFO2 nodes.
+    // So a second note arriving on a part in the same chunk pays nothing: its nodes come up already
+    // carrying the first note's values. That is the observation. The path is presumably
+    // `voice_init_from_parent`, which `note_on_voice_setup` calls before its node loop, but the
+    // linkage was not traced -- what is measured is that no second draw happens.
     //
-    // Order is the claim order in `partial_alloc_node`: the shared LFO1 first, then each partial's
-    // LFO2.
-    if (note.voices.empty()) {
-        return;
-    }
+    // **An older probe had both halves of this right and they were being conflated.** It measured
+    // "two notes on the same tick cost the same as one", which is true *on one part*, and "a second
+    // note elsewhere costs `partials + 1`", which is true *across parts*. Taking the first as the
+    // general rule kept a blind discard here; taking the second as the general rule made a chord
+    // draw too much and cost `roland_sc88_y03` and `roland_suplex` their balance rows.
+    //
+    // The pan is the exception and stays per note -- see `read_pending_note`. With the part's panpot
+    // at a literal zero, one note's wraps resume at 5 instead of 4 and a two-note chord's at 6, so
+    // each note draws its own position even when the nodes were only seeded once.
+    //
+    // Order within the batch is the claim order in `partial_alloc_node`: the shared LFO1 first, then
+    // each partial's LFO2.
+    PendingNote* first = nullptr;
+    for (PendingNote& note : batch) {
+        if (note.voices.empty()) {
+            continue;
+        }
 
-    if (const std::shared_ptr<LfoRunner>& shared = note.voices.front().setup.lfo1) {
-        shared->seed_random();
-    }
-    for (PendingVoice& pending : note.voices) {
-        if (pending.setup.lfo2) {
-            pending.setup.lfo2->seed_random();
+        if (first == nullptr) {
+            first = &note;
+            if (const std::shared_ptr<LfoRunner>& shared = note.voices.front().setup.lfo1) {
+                shared->seed_random();
+            }
+            for (PendingVoice& pending : note.voices) {
+                if (pending.setup.lfo2) {
+                    pending.setup.lfo2->seed_random();
+                }
+            }
+            continue;
+        }
+
+        const std::shared_ptr<LfoRunner>& source = first->voices.front().setup.lfo1;
+        const std::shared_ptr<LfoRunner>& shared = note.voices.front().setup.lfo1;
+        if (source && shared && shared != source) {
+            shared->copy_random_hold(*source);
+        }
+
+        // Positional, because the module's nodes are claimed in partial order. A layered note with
+        // more voices than the one that seeded simply has nothing to copy for the extras.
+        const std::size_t common = std::min(note.voices.size(), first->voices.size());
+        for (std::size_t index = 0; index < common; ++index) {
+            if (note.voices[index].setup.lfo2 && first->voices[index].setup.lfo2) {
+                note.voices[index].setup.lfo2->copy_random_hold(
+                    *first->voices[index].setup.lfo2);
+            }
         }
     }
 }

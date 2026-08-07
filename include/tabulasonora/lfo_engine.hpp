@@ -287,6 +287,16 @@ public:
     /// The random shapes' held register — the value a sample-and-hold is currently outputting.
     [[nodiscard]] int random_hold() const noexcept { return held_; }
 
+    /// Copies a held register in rather than drawing one.
+    ///
+    /// A second note arriving on a part in the same dispatch chunk does **not** pay the generator
+    /// again: its LFO nodes come up carrying the first note's values. Measured on the module with
+    /// two notes struck together on one channel — both LFO1 nodes read the same seed, and the first
+    /// wrap resumes at draw 4, so only one note's worth of draws was spent. Two notes on *different*
+    /// channels do pay twice, seeding at draws 1 and 4, which is why this is a per-part rule rather
+    /// than a per-chunk one.
+    void copy_random_hold(const LfoRunner& other) noexcept { held_ = other.held_; }
+
     /// The pitch modulation with a mod-wheel depth folded in, in milli-semitones.
     ///
     /// The offline path's spelling of the same thing: the wheel reaches LFO1 pitch depth through

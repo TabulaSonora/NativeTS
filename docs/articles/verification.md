@@ -411,6 +411,55 @@ change is in the binary; the numbers say it did not cost anything, and the spect
 keeps three shorts per partial inside the node itself at `+0x7c + i*8`. Sharing the runner without
 splitting the depths would have been a different and wrong change.
 
+### The draw cadence, read off the module {#the-draw-cadence}
+
+The probes above turned out to be the instrument for a bigger question. `scdec lfotrace` dumps every
+live LFO node once a control tick, and a node's random register **is** a position in the generator's
+sequence — so a tone with a random LFO reads the cadence back out directly, where every earlier
+attempt inferred it from where notes landed in the stereo field.
+
+The sequence from the `0xEFA6`/`0x9C23` reset seeds opens 20373, 19301, 31980, −29494, 8988, 23420,
+−18341. `Bubble` has two partials and a random LFO1, so it claims three nodes. Reading its LFO1 node
+on a fresh engine:
+
+| what was struck | LFO1 seeds on | first wrap resumes at |
+|---|---|---|
+| one note | draw 1 | draw 4 |
+| one note, part panpot 0 | draw 1 | draw **5** |
+| two notes, two channels | draws 1 and **4** | — |
+| two notes, one channel | draw 1 **for both** | draw 4 |
+| two notes, one channel, panpot 0 | draw 1 for both | draw **6** |
+
+Five readings, and together they settle the whole cadence:
+
+- **Every LFO node takes one draw at note-on**, unconditionally — `note_on_voice_setup @ 18005f5c0`
+  writes `+0x7a = prng_lfsr()` whatever the waveform, so even a triangle spends one. One LFO1 for
+  the note plus one LFO2 per partial is the `partials + 1` a probe had measured years before the
+  reason was known, and the values are *used*, not discarded.
+- **The batch is per part, not per note.** A second note arriving on the same part in the same
+  dispatch chunk pays nothing: both LFO1 nodes come up carrying draw 1. Two notes on *different*
+  parts pay separately, at draws 1 and 4.
+- **The pan is per note even so.** Panpot at a literal zero costs one extra draw before the wraps
+  resume — one for a single note, two for a two-note chord whose nodes were seeded only once.
+
+The last two are the interesting pair, because an older probe had measured both and the two readings
+looked contradictory: "two notes on the same tick cost the same as one" and "a second note elsewhere
+costs `partials + 1`". Both are true. The first was measured on one part and the second across
+parts, and taking either as the general rule breaks the other — which it did, twice, once by keeping
+a blind discard in place and once by making a chord draw too much and costing two songs their
+balance row.
+
+
+ote The pan needs the **GS SysEx panpot** to reach zero at all. CC#10 cannot produce one: its
+handler stores `value == 0 ? 1 : value`, so the wheel's zero is hard left and not a random position.
+That is why the corpus so rarely exercises random pan, and why `lfotrace` grew a panpot argument
+rather than using a controller.
+
+Against the module the change trades well: the note gate's `program 48 note 72 map 4` pitch row
+passes, `rainy`'s balance improves from 0.1266 to 0.1172, and `roland_sc88_y03` and `roland_suplex`
+come back inside their balance bounds. One row moved the other way — `roland_allstars` at 2 kHz, by
+0.05 dB — and it is carried as a debt rather than absorbed.
+
 The probes found something larger than what they were built for, which is the ordinary return on
 pointing a measurement somewhere nothing had looked. **`Bubble` is 14–20 dB loud in the 2 kHz band**
 on all three keys while its overall level agrees to within 0.15 dB, and **`Stream` sits 5–7 dB low
@@ -1353,17 +1402,10 @@ Stated plainly, because they are not covered by the numbers above:
   across a claim — they do not; the offset was misread and `note_on_voice_setup` writes a fresh draw
   into every node it initialises.
 
-  What is matched: five consumers each drawing only when their own byte is non-zero; a chunk's
-  voices set up in GS block order with the drum part first; one LFO1 node per note and one LFO2 per
-  partial, each seeded with one draw, all of a part's seeded before any of its parameters are read.
-  On a fresh engine this engine's first LFO1 node opens on **20373**, which is the module's first
-  draw from its reset seeds and the value `scdec lfotrace` reads off the node.
-
-  What is not: where the **random pan** draw sits relative to those seeds. Its position came from
-  the same probe that also concluded two simultaneous notes cost the generator no more than one —
-  a claim since disproved directly, two notes on one tick seeding their nodes at draws 1 and 4. Two
-  songs' balance rows say the pan is a draw or two out of place in dense music. See
-  \ref sharing-lfo1.
+  The cadence is now measured end to end rather than inferred, and \ref the-draw-cadence has the
+  readings. What is left is the *part-level* LFO branch and the fact that a random modulation
+  reaching the right sort of value at the right moment is the parameter working, which is the
+  intended side of the "audible fidelity, not bit accuracy" line.
 - **LFO1 is now shared per note, as the module shares it.** That was a departure until it was
   measured; \ref sharing-lfo1 has what the measurement took to build. Still open is the *part-level*
   branch of the same allocator — bit 5 of the tone header's `+0x0e` and of the partial block's

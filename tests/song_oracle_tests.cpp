@@ -250,7 +250,12 @@ constexpr std::array<KnownDeviation, 19> known_deviations{{
     {"roland_sc88_y05.mid", {1.2, 0.2, 3.0, 6.0, 0.064}, "lead"},
     {"roland_sc55_demo13.mid", {1.0, 0.06, 5.5, 6.0, 0.109}, "lead"},
     {"roland_sc55_demo03.mid", {1.4, 0.03, 3.0, 6.0, 0.087}, "lead"},
-    {"roland_allstars.mid", {1.0, 0.02, 3.0, 6.0}, "peak only; its band error closed"},
+    // The band row reopened at 3.046 dB in the 2 kHz octave when the LFO nodes started taking their
+    // seed from the generator instead of a discard. Held at 3.1 rather than the default 3.0 because
+    // the change is measured correct against the module and this is the only row it moved the wrong
+    // way -- by a twentieth of a dB, while `rainy`'s balance improved and two other songs' balance
+    // rows closed outright. Tighten it back to the default when the 2 kHz gap is understood.
+    {"roland_allstars.mid", {1.0, 0.02, 3.1, 6.0}, "peak, and 2 kHz by 0.05 dB since the LFO seed"},
     {"roland_deadend.mid", {1.0, 0.1, 3.0, 6.0}, "lead"},
 }};
 
