@@ -1734,6 +1734,16 @@ constexpr std::array<int, 15> bulk_transitions{
 /// `0x40c`-`0x445`, which the extended `40 4x` block reaches instead. Stepping over those loses
 /// data; guessing at them invents it.
 ///
+/// The **key range** is a third kind, and the reason it is out is worth stating. `+0x3e0` and
+/// `+0x3e1` are plain whole-byte parameters and the map for them is right; what is not right yet is
+/// the *phase* of the walk that reaches them. With the record at 116 bytes every one of the sixteen
+/// blocks is now visited -- against seven before -- but the offsets still arrive carrying a
+/// neighbour's data on most parts, and `0x40` in both bounds is a one-note range that silences a
+/// part outright. `darkness3.mid` sounds all 3,607 of its notes with these two left out, 3,226 with
+/// them in at the old record length, and 1,666 with them in at the right one. Every other field in
+/// this map degrades to a wrong *value* when the phase drifts; this one deletes the performance, so
+/// it stays out until the walk is right for all sixteen parts rather than merely reaching them.
+///
 /// The second is a byte the block *does* address but does not own outright. `partmap` reports
 /// `40 1x 02` moving `+0x3d8` from `00` to `20` when it wrote `33`, and `40 1x 14` moving `+0x3d9`
 /// from `81` to `82` -- both **packed**, a field inside a byte rather than the byte. Copying a
@@ -1770,14 +1780,19 @@ constexpr std::array<int, 15> bulk_transitions{
 
 /// The last offset the linear walk covers before it moves to the next part.
 ///
-/// The run is `0x3cc`-`0x44b`, 128 bytes, which is exactly the two messages measured against the
-/// module: one anchored at `0x3cc` covering `0x3cc`-`0x40b` and the next at `0x40c` covering
-/// `0x40c`-`0x44b`. Past it the walk carries the part along -- confirmed by anchoring `48 02 00`
-/// and sending 64 bytes, after which `48 03 00` lands on part **1** rather than part 0.
+/// `0x3cc` + 116 - 1: **116 bytes**, the size the page arithmetic gave from the start -- 29 pages of
+/// 64 over sixteen parts -- and the size of the GS part block itself.
 ///
-/// Offsets above this are still real record bytes; they are simply reached by an anchor of their
-/// own rather than by running on, which is why `0x47c` has a parameter above and is not here.
-constexpr int bulk_record_end = 0x44b;
+/// An earlier version put it at `0x44b` by fitting two measured pages end to end, `0x3cc`-`0x40b`
+/// and `0x40c`-`0x44b`, and reading 128 bytes off them. That over-fits: those two pages are the
+/// *start* of the walk, before any of the anchors further down have re-synchronised it, so their
+/// span says nothing about where a record ends. The cost is visible the moment the walk is traced
+/// across a real dump. At `0x44b`, `darkness3.mid` reaches seven of the sixteen blocks; at `0x43f`
+/// it reaches all sixteen.
+///
+/// Offsets above this are still real record bytes; they are reached by an anchor of their own
+/// rather than by running on, which is why `0x47c` has a parameter above and is not here.
+constexpr int bulk_record_end = 0x43b;
 
 } // namespace
 
@@ -1816,7 +1831,14 @@ void ToneGenerator::Impl::gs_bulk_dump(int block_port,
     const std::size_t count = data.size() / 2;
     for (std::size_t i = 0; i < count; ++i) {
         const int value = (data[i * 2] << 4) | data[(i * 2) + 1];
-        const int here = address + static_cast<int>(i);
+
+        // **The address advances once per payload byte, not once per value.** `g_sysex_addr_idx` is
+        // incremented by the receive loop, which sees nibbles, so a value spans two addresses.
+        // Halving the address axis puts the walk out of phase with every per-part special, which is
+        // what a trace across a real dump shows. What settles it: `scdec bulkmap` puts page 2's
+        // part transition at payload position 56, and `0x200 + 2*56` is `0x270` -- part 1's
+        // transition address to the byte.
+        const int here = address + (2 * static_cast<int>(i));
 
         if (std::find(bulk_transitions.begin(), bulk_transitions.end(), here)
             != bulk_transitions.end()) {
@@ -2810,7 +2832,19 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     Part& part = parts[static_cast<std::size_t>(channel)];
 
     // GS keyboard range, SysEx-only and defaulted wide open.
-    if (note < part.key_low || note > part.key_high) {
+    //
+    // **Both bounds are read as `int8`, because the engine reads them that way**: the note-on test
+    // is `*(char *)(part+0x3e0) <= note && note <= *(char *)(part+0x3e1)`, signed on both sides. A
+    // parameter change cannot put anything above 0x7f there -- a DT1 data byte has seven bits -- but
+    // a **patch bulk dump can**, since its two nibbles compose a whole byte. A low bound of 0xff is
+    // then -1 on the module and passes everything, where reading it unsigned rejects every note.
+    //
+    // Measured rather than reasoned: `darkness3.mid` sounds 3,607 notes with its dump applied and
+    // 3,226 when this comparison is unsigned. The difference is entirely parts whose dumped low
+    // bound has the top bit set.
+    const int key_low = static_cast<std::int8_t>(part.key_low);
+    const int key_high = static_cast<std::int8_t>(part.key_high);
+    if (note < key_low || note > key_high) {
         return;
     }
 
