@@ -279,6 +279,14 @@ by **0.0289** of worst-window balance against the 0.1416 a phase-aligned render 
 module by. At most a fifth of what is left is history; the other four fifths are a real difference
 in where the wet is placed, and no amount of seeding reaches them.
 
+**Nor is the reverb network itself.** `scdec revir` drives `fx_reverb_process` directly with an
+impulse, and `dump-effect reverb` does the same here: at Hall 2 the two impulse responses agree to a
+**residual of −128.7 dB against a −53.8 dB signal**, which is float rounding and nothing else. The
+output tap assignment matches too, read off the listing rather than inferred — left sums tank A and
+B at `+0x28` and `+0x20`, right at `+0x2c` and `+0x24`, exactly as this port sums them. So the wet's
+shape is right and its stereo structure is right; what is left has to be the level reaching the
+reverb or the dry path beside it, and that is where to look next.
+
 What the gate compares is length, then peak, RMS,
 per-octave level and a coarse RMS envelope — the envelope catching a note that goes missing or
 arrives late without being sensitive to phase. The oracle audio is kept beside the fixture so a
