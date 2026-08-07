@@ -389,6 +389,19 @@ ResolvedTone PatchDirectory::resolve(int tone_number, int note, int velocity) co
          ++partial_index) {
         const PartialParameters& partial = record->partials()[partial_index];
         if (!partial.accepts_velocity(velocity)) {
+            // **A two-slot tone sounding one partial is usually not a fault**, and it reads like
+            // one, so here is the worked example. `Piano 1` (tone 0, the capital piano on the
+            // SC-88Pro and SC-8820 maps) carries both slots, and only ever one of them sounds: slot
+            // 0 takes velocity 80-127 and slot 1 takes 0-79. It is a velocity split, and the halves
+            // are different multisamples -- 0 and 1 -- rather than a layer and its release.
+            //
+            // Checked against the module both sides of the boundary, which is what settles it
+            // rather than reading the bytes: at velocity 40 both engines sound one voice off wave
+            // 20 with loop 168096, and at 100 both sound one off wave 7 with loop 478944.
+            //
+            // `Honky-tonk` (tone 1290) is the contrast worth having beside it -- both slots span
+            // the whole velocity range, so both always sound, which is what makes it two detuned
+            // pianos rather than a split.
             continue;
         }
 
