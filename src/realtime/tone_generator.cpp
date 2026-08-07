@@ -593,6 +593,16 @@ struct ToneGenerator::Impl {
     int bulk_part_block = -1;
     int bulk_record_offset = -1;
 
+    /// The program a dump has supplied but not yet acted on.
+    ///
+    /// Tone selection is three record bytes and the order is the point. `+0x3d4` is the bank MSB,
+    /// `+0x3d5` the program, and `+0x3d9` both the melodic/drum selector *and* the moment the
+    /// change fires -- `part_param_write_all` writes that byte and then branches on its own bits
+    /// 0x10 and 0x20 into `part_program_change` or `drum_part_program_change`. Applying the program
+    /// when it arrives instead would resolve the patch before the byte that says whether the part
+    /// is a drum part at all, and would be overwritten by everything the record still has to say.
+    int bulk_pending_program = -1;
+
     /// Whether XG System On has been seen and not since revoked.
     ///
     /// XG is a whole second parameter dialect rather than a set of extra messages, and the module
@@ -1719,6 +1729,17 @@ constexpr std::array<BulkAnchor, 24> bulk_anchors{{
 /// A stride of 0x1e0 inside a group of four parts and 0x160 between groups. These are mid-walk, so
 /// the dispatcher above leaves them alone and the byte writer does the work: the byte carries the
 /// next part's bank MSB and the cursor restarts at that part's `+0x3d5`.
+/// Where a part's program change fires: its transition address plus ten.
+///
+/// **Part 0 has none, and that is the binary's own asymmetry rather than an omission here.** The
+/// lowest case in `part_param_write_all`'s switch is `0x270`, part 1's transition; nothing exists
+/// around `0x110`, which is where part 0's would be. A part reached by an *anchor* rather than by a
+/// transition gets plain writes for the whole of its record, so a dump restores part 0's mixer but
+/// never re-selects its patch. `wwtbam.mid` is the case that says so: it sends only `48 00 10` and
+/// `48 01 10`, and firing a program change on part 0 from it costs four assertions against the
+/// module that not firing one does not.
+constexpr int bulk_program_fire_offset = 0x0a;
+
 constexpr std::array<int, 15> bulk_transitions{
     0x0270, 0x0450, 0x0630, 0x0810, 0x0970, 0x0b50, 0x0d30, 0x0f10,
     0x1070, 0x1250, 0x1430, 0x1610, 0x1770, 0x1950, 0x1b30,
@@ -1760,6 +1781,7 @@ constexpr std::array<int, 15> bulk_transitions{
         return 0x40 + (offset - 0x3ee);   // the twelve scale-tuning bytes
     }
     switch (offset) {
+    case 0x3d4: return 0x00;   // bank MSB; one byte, so no program change follows it
     case 0x3da: return 0x16;   // key shift
     case 0x3dc: return 0x19;   // part level
     case 0x3dd: return 0x1C;   // panpot
@@ -1850,14 +1872,15 @@ void ToneGenerator::Impl::gs_bulk_dump(int block_port,
             ++bulk_part_block;
             bulk_record_offset = 0x3d5;
 
-            // The byte is the new part's bank MSB. It is stored and **not** acted on: the module
-            // separates the tone-number byte from the program change, which arrives ten bytes later
-            // through its own case and calls `part_program_change` or `drum_part_program_change`.
-            // That second half is not implemented here, so a dump currently restores a mixer's
-            // levels and routing but not its tone selection -- see the note on `bulk_parameter_of`.
+            // The byte is the new part's bank MSB, stored rather than acted on. The program
+            // follows at `+0x3d5` and the change fires at `+0x3d9`, which is also where the record
+            // says whether this is a drum part -- see `bulk_pending_program`. Any program the
+            // previous part left unfired belongs to that part and is dropped here rather than
+            // landing on this one.
             const int index =
                 part_of(block_port, sequence_builder::channel_from_block(bulk_part_block));
             parts[static_cast<std::size_t>(index)].bank = value;
+            bulk_pending_program = -1;
             continue;
         }
 
@@ -1876,16 +1899,43 @@ void ToneGenerator::Impl::gs_bulk_dump(int block_port,
             return;
         }
 
-        const int parameter = bulk_parameter_of(bulk_record_offset);
+        const int offset = bulk_record_offset;
         ++bulk_record_offset;
-        if (parameter < 0) {
-            continue;
-        }
 
         const int index =
             part_of(block_port, sequence_builder::channel_from_block(bulk_part_block));
+        Part& part = parts[static_cast<std::size_t>(index)];
+
+        // The program is carried at `+0x3d5` and acted on later, by address rather than by
+        // offset -- only a part the walk *transitioned* into has a case that fires it.
+        if (offset == 0x3d5) {
+            bulk_pending_program = value & 0x7F;
+            continue;
+        }
+
+        const bool fires_program =
+            std::any_of(bulk_transitions.begin(), bulk_transitions.end(),
+                        [here](int t) { return t + bulk_program_fire_offset == here; });
+        if (fires_program) {
+            // The same byte says whether this is a drum part: bit 0x10 is use-for-rhythm and 0x20
+            // picks which of the two kit slots. The engine folds them into the low five bits of
+            // `part+0x12` and only then calls the melodic or the drum loader, so the selector has
+            // to be in place before the program resolves. `darkness3.mid` carries 0xb0 here for
+            // block 0 -- channel 10 -- which is both bits, and block 0 is the drum part.
+            part.rhythm = (value & 0x10) == 0 ? 0 : ((value & 0x20) != 0 ? 2 : 1);
+            if (bulk_pending_program >= 0) {
+                program_change(index, part, bulk_pending_program);
+                bulk_pending_program = -1;
+            }
+            continue;
+        }
+
+        const int parameter = bulk_parameter_of(offset);
+        if (parameter < 0) {
+            continue;
+        }
         const std::array<std::uint8_t, 1> one{static_cast<std::uint8_t>(value)};
-        gs_part_parameter(index, parts[static_cast<std::size_t>(index)], parameter, one);
+        gs_part_parameter(index, part, parameter, one);
     }
 }
 
