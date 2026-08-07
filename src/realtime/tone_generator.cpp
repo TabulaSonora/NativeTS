@@ -1544,6 +1544,13 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
         return;
     }
 
+    // Not reached, and one of them matters. **`48 <page> 00` is the GS patch bulk dump**: a linear
+    // image of every part's parameters, 64 bytes a message, pages 0x01-0x1d. The arithmetic closes
+    // exactly -- 29 pages of 64 is 1856 bytes, which over sixteen parts is 116 each, and the part
+    // block `40 1x 00`..`40 1x 73` is 116 bytes. A file built by dumping a configured module carries
+    // its whole mixer that way, and 5,659 files in a 131,997-file archive do. The module honours it;
+    // this engine renders those files with every part at its default. `49` is the same shape at
+    // 2,738 file-hits and its destination is not yet known.
     if (a1 == 0x41 || a1 == 0x51) {
         // Drum setup: a2 is (map << 4) | parameter, a3 the first key. The map nibble picks which
         // of the two per-map setup buffers the module writes -- bit 12 of the address index, so
