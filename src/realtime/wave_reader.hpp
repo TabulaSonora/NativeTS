@@ -29,13 +29,26 @@ public:
     /// Whether the wave has run out and is now silent.
     [[nodiscard]] bool finished() const noexcept { return finished_; }
 
-    /// Whether the read position has reached the wave's loop point.
+    /// Takes the wave's pending loop event, if one has been raised.
     ///
-    /// The module's decoder raises an event on that transition -- `voice_report_finished` turns it
-    /// into `voice+4`, and the control tick after that adopts the wave's second fine tune. See
-    /// `WaveDescriptor::second_fine_tune`. Latched, because the event fires once: a looping wave
-    /// crosses the point again every period and the module does not raise it again.
-    [[nodiscard]] bool passed_loop_start() const noexcept { return passed_loop_start_; }
+    /// The module's decoder raises a flag when the read position reaches the loop point;
+    /// `voice_report_finished` @18008aec0 scans it, clears it, and sets `voice+4`; and
+    /// `voices_control_update` drains `voice+4` on the next control tick, which is where the
+    /// wave's second fine tune is adopted. See `WaveDescriptor::second_fine_tune`.
+    ///
+    /// Consumed on read, so the reaction is driven by an event drained once rather than by a
+    /// condition polled every tick -- the same shape the module has, and what keeps the adoption
+    /// tied to the crossing instead of to whatever else happens to be true later.
+    ///
+    /// The loop *start*: `param_1[2]+0xc` is sampler state +0x2c, which reads 3026 for prog 73
+    /// note 60 against this port's `loop_start` of 3026. Retriggering it on the far end instead
+    /// was measured and cost an assertion on the gate.
+    [[nodiscard]] bool take_loop_event() noexcept
+    {
+        const bool raised = loop_event_;
+        loop_event_ = false;
+        return raised;
+    }
 
     /// Starts a wave from its beginning.
     void start(const DecodedWave& wave);
@@ -66,7 +79,7 @@ private:
 
     double position_ = 0.0;
     bool finished_ = true;
-    bool passed_loop_start_ = false;
+    bool loop_event_ = false;
 
     std::array<float, ping_pong_window> ring_{};
     std::int64_t generated_ = 0;

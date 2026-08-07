@@ -573,12 +573,12 @@ void PartialVoice::control(double bend_milli_semitones,
     // The second fine tune, adopted between the block's two endpoints so the ramp glides into it.
     //
     // `voices_control_update` copies `voice+0x200` over `voice+0x1fc` on the first tick after the
-    // decoder has passed the loop point, and the pitch ramp is *retargeted* rather than reassigned:
-    // traced on the module, the target moves and the current value chases it over two slots. Doing
-    // it here -- after `entry_ratio_` was formed from the old tuning and before `ratio_` is formed
-    // from the new -- is that retarget, because `render` arms the ramp between the two. Assigning
-    // it underneath the ramp instead is what made an earlier attempt at this fail.
-    if (second_fine_shift_ != second_fine_offset_ && reader_.passed_loop_start()) {
+    // decoder has reached the loop *end*, and the pitch ramp is *retargeted* rather than
+    // reassigned: traced on the module, the target moves and the current value chases it over two
+    // slots. Doing it here -- after `entry_ratio_` was formed from the old tuning and before
+    // `ratio_` is formed from the new -- is that retarget, because `render` arms the ramp between
+    // the two. Assigning it underneath the ramp instead is what made an earlier attempt fail.
+    if (second_fine_shift_ != second_fine_offset_ && reader_.take_loop_event()) {
         second_fine_shift_ = second_fine_offset_;
     }
 

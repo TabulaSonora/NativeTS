@@ -12,7 +12,7 @@ void WaveReader::start(const DecodedWave& wave)
     wave_ = &wave;
     position_ = 0.0;
     finished_ = false;
-    passed_loop_start_ = false;
+    loop_event_ = false;
     buffer_ = wave.is_looping() ? std::span<const float>{wave.loop_buffer}
                                 : std::span<const float>{wave.samples};
 
@@ -51,10 +51,13 @@ float WaveReader::next(double ratio) noexcept
         wave->mode == SamplerMode::ping_pong ? read_ping_pong(ratio) : read_linear(*wave, ratio);
     position_ += ratio;
 
-    // Tested before the wrap, and against the position the reader walks: every mode's first leg
-    // runs forward from zero through the loop point, so this is the same transition in all three.
-    if (!passed_loop_start_ && position_ >= static_cast<double>(wave->loop_start)) {
-        passed_loop_start_ = true;
+    // Raised on the loop point the module's samplers actually compare against. `param_1[2]` is
+    // sampler state +0x20, so the compared field is +0x2c -- which `scdec sampstate` dumps, and
+    // which reads 3026 for prog 73 note 60 against this port's `loop_start` of 3026 exactly. It is
+    // the loop *start*; +0x30 is the far end. Tested before the wrap below, which pulls the
+    // position back and would hide a crossing a large increment jumped in one step.
+    if (!loop_event_ && position_ >= static_cast<double>(wave->loop_start)) {
+        loop_event_ = true;
     }
 
     if (wave->is_looping()) {
