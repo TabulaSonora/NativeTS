@@ -142,14 +142,17 @@ TEST_CASE("every send-effect network matches the module by impulse response", "[
 
             const Response response = impulse(network.kind, type, captured_samples);
 
-            // The delay's level lives downstream of the module's processor and inside this
-            // engine's tap gains, so the captured response carries no level and ours does.
-            double scale = 1.0;
-            if (std::string{network.kind} == "delay") {
-                const auto& raw = EffectPresets::defaults().delay().raw_presets[
-                    static_cast<std::size_t>(type)];
-                scale = raw[7] / 127.0;
-            }
+            // No compensation. This used to scale the delay's reference by `raw[7] / 127.0`, on
+            // the belief that the module's level "lives downstream of its processor" and so was
+            // absent from the capture. It is not downstream: `fx_chorus_stage_r` multiplies its own
+            // outputs by the level register before it writes them, and `dlyir` prints that very
+            // register as `gainOut`. The reference always carried the level.
+            //
+            // What the factor was really doing was cancelling an identical error on this side --
+            // `SystemDelay::compile` folded the same `/127` into its tap gains -- so the comparison
+            // agreed while both engines rendered 6 dB apart. Both are now `raw[7] / 64.0`, which is
+            // what the live register reads, and the two sides are compared as they stand.
+            const double scale = 1.0;
 
             // Non-vacuity first: a silent network agrees with anything, and delay type 2 does not
             // speak until sample 32000.
@@ -269,6 +272,80 @@ TEST_CASE("a delay preset compiles to tap lengths and gains", "[effects]")
 
     const std::array<int, 10> maximum{0, 97, 1, 1, 127, 0, 0, 64, 127, 0};
     CHECK(SystemDelay::compile(maximum).feedback > 0.9);
+}
+
+TEST_CASE("the three cross-feeds between the networks carry signal", "[effects]")
+{
+    testdata::require_effect_presets();
+
+    // Chorus -> reverb and chorus -> delay (`40 01 3F` and `40 01 40`), and delay -> reverb
+    // (`40 01 5A`). All three are zero in every stored macro, so the only way to see them is to
+    // program them -- which is exactly the position a stream that sends those addresses is in, and
+    // `th07_19_user_gm.mid` sends the first of them at 112.
+    ChorusPreset preset = EffectPresets::defaults().chorus().types.at(2);
+    preset.gain_to_reverb = 112.0 / 128.0;
+    preset.gain_to_delay = 64.0 / 128.0;
+    Chorus chorus{preset};
+
+    constexpr std::size_t frames = 8192;
+    std::vector<float> input(frames, 0.0F);
+    for (std::size_t i = 0; i < 64; ++i) {
+        input[i] = 1.0F;
+    }
+    std::vector<float> left(frames), right(frames), to_reverb(frames), to_delay(frames);
+    chorus.process(input, left, right, to_reverb, to_delay);
+
+    double feed_peak = 0.0;
+    for (std::size_t i = 0; i < frames; ++i) {
+        feed_peak = std::max(feed_peak, std::abs(static_cast<double>(to_reverb[i])));
+
+        // The feed is the mono sum ahead of the return level, and this preset's return level is
+        // unity, so the two sides relate exactly.
+        const double mono = static_cast<double>(left[i]) + static_cast<double>(right[i]);
+        CHECK_THAT(static_cast<double>(to_reverb[i]),
+                   WithinAbs(mono * preset.gain_to_reverb, 1e-6));
+        CHECK_THAT(static_cast<double>(to_delay[i]), WithinAbs(mono * preset.gain_to_delay, 1e-6));
+    }
+    CHECK(feed_peak > 1e-3);
+
+    // And the reverb really sums it: the same send bus with a chorus feed added must not render
+    // the same as without one. A silent difference here is the fault this whole path was missing.
+    std::vector<float> bus(frames, 0.0F);
+    bus[0] = 1.0F;
+    std::vector<float> bare_left(frames), bare_right(frames);
+    std::vector<float> fed_left(frames), fed_right(frames);
+    Reverb::for_type(4).process(bus, bare_left, bare_right);
+    Reverb::for_type(4).process(bus, to_reverb, {}, fed_left, fed_right);
+
+    double difference = 0.0;
+    for (std::size_t i = 0; i < frames; ++i) {
+        difference = std::max(difference,
+                              std::abs(static_cast<double>(fed_left[i])
+                                       - static_cast<double>(bare_left[i])));
+    }
+    CHECK(difference > 1e-4);
+
+    // The delay's own feed is the three taps summed with the centre counted once, so it cannot be
+    // reconstructed from the stereo pair -- only checked for presence and for tracking the send.
+    std::array<int, 10> row{0, 97, 12, 24, 100, 120, 60, 64, 64, 96};
+    SystemDelay delay{SystemDelay::compile(row)};
+    CHECK_THAT(SystemDelay::compile(row).send_to_reverb, WithinAbs(96.0 / 128.0, 1e-12));
+
+    std::vector<float> delay_left(frames), delay_right(frames), delay_feed(frames);
+    delay.process(input, delay_left, delay_right, delay_feed);
+    double delay_feed_peak = 0.0;
+    for (const float sample : delay_feed) {
+        delay_feed_peak = std::max(delay_feed_peak, std::abs(static_cast<double>(sample)));
+    }
+    CHECK(delay_feed_peak > 1e-3);
+
+    row[9] = 0;
+    SystemDelay silent{SystemDelay::compile(row)};
+    std::vector<float> silent_feed(frames, 1.0F);
+    silent.process(input, delay_left, delay_right, silent_feed);
+    for (const float sample : silent_feed) {
+        REQUIRE(sample == 0.0F);
+    }
 }
 
 TEST_CASE("an out-of-range effect type is refused", "[effects]")

@@ -75,10 +75,15 @@ public:
     void
     process(std::span<const float> input, std::span<float> left, std::span<float> right) override;
 
-    /// Processes a block with the chorus feeding into it; either chorus span may be empty.
+    /// Processes a block with the other two networks feeding into it; either span may be empty.
+    ///
+    /// The reverb is last in the module's chain for a reason: `fx_reverb_process` opens by summing
+    /// **three** buffers, not one -- its own send bus, the chorus's send-to-reverb scratch, and the
+    /// delay's. Both cross-feeds are produced by networks that already ran this block, so this is a
+    /// within-block route and not a one-block-late approximation of one.
     void process(std::span<const float> input,
-                 std::span<const float> chorus_left,
-                 std::span<const float> chorus_right,
+                 std::span<const float> from_chorus,
+                 std::span<const float> from_delay,
                  std::span<float> left,
                  std::span<float> right);
 
@@ -130,6 +135,18 @@ public:
     void
     process(std::span<const float> input, std::span<float> left, std::span<float> right) override;
 
+    /// Processes a block, also writing the two routes out of the chorus.
+    ///
+    /// `to_reverb` and `to_delay` receive the **mono sum of the two taps**, taken before the return
+    /// level and scaled by their own send gains -- so the chorus can be loud in the mix and feed
+    /// nothing onward, or the reverse. Either span may be empty. See `ChorusPreset::gain_to_reverb`
+    /// for why both gains are zero unless a stream sends `40 01 3F` / `40 01 40`.
+    void process(std::span<const float> input,
+                 std::span<float> left,
+                 std::span<float> right,
+                 std::span<float> to_reverb,
+                 std::span<float> to_delay);
+
     /// Places the LFO accumulator, which otherwise free-runs from zero.
     ///
     /// The module's chorus LFO is a 24-bit accumulator advanced by `rate << 6` every sample, and
@@ -173,6 +190,13 @@ struct DelayParameters {
     double right_gain = 0.0;
     double feedback = 0.0;
     int pre_low_pass = 0;
+
+    /// The delay's own route into the reverb, `40 01 5A` -- the third cross-feed, and the only one
+    /// any stored preset turns on: type 8 carries 36, the rest zero. Quantised over 128.
+    ///
+    /// The module scales the *pre-return-level* tap sum by this, so the delay can be inaudible in
+    /// the mix and still be reverberated. Nothing here carries the return level: it is the mixer's
+    /// ramp, exactly as the chorus's and the reverb's are.
     double send_to_reverb = 0.0;
 };
 
@@ -208,6 +232,16 @@ public:
 
     void
     process(std::span<const float> input, std::span<float> left, std::span<float> right) override;
+
+    /// Processes a block, also writing the delay's route into the reverb.
+    ///
+    /// `to_reverb` receives `left_gain·l + right_gain·r + centre_gain·centre` -- the centre tap
+    /// counted **once**, not once per side as summing the two outputs would -- taken before the
+    /// return level and scaled by `send_to_reverb`. May be empty.
+    void process(std::span<const float> input,
+                 std::span<float> left,
+                 std::span<float> right,
+                 std::span<float> to_reverb);
 
 private:
     static constexpr int ring_mask = ring_size - 1;

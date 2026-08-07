@@ -335,10 +335,13 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
 [[nodiscard]] ChorusPreset compute_chorus(const RomImage& rom, const std::uint8_t* row)
 {
     const int pre_lpf = row[0];
+    // row[1] is the return level; it is the mixer's ramp, not a network coefficient.
     const int feedback = row[2];
     const int delay = row[3];
     const int rate = row[4];
     const int depth = row[5];
+    const int to_reverb = row[6];
+    const int to_delay = row[7];
 
     // `chorus_apply_params`: the LFO increment and tap bases go through the dispatcher's
     // signed-14-bit decode, where a negative value is a 12.12 fixed-point base rather than a
@@ -357,7 +360,15 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
         .tap2_base = base,
         .feedback = fixed14((feedback << 6) & 0xFFFF),
         .gain_write = gain(0x4000),
+        // Unity, and deliberately so: the chorus **return level** is not a coefficient of this
+        // network. It is `MatrixRamp`, applied in the mixer, whose `level << 8` over `1/16384` is
+        // the same `raw / 64` law the live gain register shows -- 0.5 at raw 32, 1.984375 at raw
+        // 127. Compiling the level in here as well renders it twice; `ff5_1_16_harvest.mid`, which
+        // sends `40 01 3A` 120, is what says so out loud.
         .gain_tap = gain(0x4000),
+        // Quantised over 128, and zero in every macro. See `ChorusPreset`.
+        .gain_to_reverb = gain(to_reverb << 7),
+        .gain_to_delay = gain(to_delay << 7),
     };
 }
 

@@ -38,8 +38,8 @@ void Reverb::process(std::span<const float> input, std::span<float> left, std::s
 }
 
 void Reverb::process(std::span<const float> input,
-                     std::span<const float> chorus_left,
-                     std::span<const float> chorus_right,
+                     std::span<const float> from_chorus,
+                     std::span<const float> from_delay,
                      std::span<float> left,
                      std::span<float> right)
 {
@@ -54,8 +54,8 @@ void Reverb::process(std::span<const float> input,
 
     for (std::size_t i = 0; i < input.size(); ++i) {
         const double wet = static_cast<double>(input[i])
-                           + (i < chorus_left.size() ? static_cast<double>(chorus_left[i]) : 0.0)
-                           + (i < chorus_right.size() ? static_cast<double>(chorus_right[i]) : 0.0);
+                           + (i < from_chorus.size() ? static_cast<double>(from_chorus[i]) : 0.0)
+                           + (i < from_delay.size() ? static_cast<double>(from_delay[i]) : 0.0);
 
         // Input conditioner: the DC blocker, then a one-pole damping filter.
         const double x = (wet * DcBlocker::input_coefficient) + dc_state_;
@@ -157,6 +157,15 @@ void Chorus::reset()
 
 void Chorus::process(std::span<const float> input, std::span<float> left, std::span<float> right)
 {
+    process(input, left, right, {}, {});
+}
+
+void Chorus::process(std::span<const float> input,
+                     std::span<float> left,
+                     std::span<float> right,
+                     std::span<float> to_reverb,
+                     std::span<float> to_delay)
+{
     const ChorusPreset& p = preset_;
 
     for (std::size_t i = 0; i < input.size(); ++i) {
@@ -182,6 +191,14 @@ void Chorus::process(std::span<const float> input, std::span<float> left, std::s
 
         left[i] = static_cast<float>(wet1 * p.gain_tap);
         right[i] = static_cast<float>(wet2 * p.gain_tap);
+
+        // The two cross-feeds carry the mono sum, ahead of the return level.
+        if (i < to_reverb.size()) {
+            to_reverb[i] = static_cast<float>((wet1 + wet2) * p.gain_to_reverb);
+        }
+        if (i < to_delay.size()) {
+            to_delay[i] = static_cast<float>((wet1 + wet2) * p.gain_to_delay);
+        }
     }
 }
 
@@ -258,8 +275,21 @@ DelayParameters SystemDelay::compile(std::span<const int> raw, int sample_rate)
     const int left = round_even(centre * raw[2] / 24.0);
     const int right = round_even(centre * raw[3] / 24.0);
 
-    // The return level scales the whole wet output and is kept separate from the send.
-    const double return_level = raw[7] / 127.0;
+    // The return level, `raw[7]`, is deliberately absent from everything below.
+    //
+    // It used to be folded into the three tap gains as `raw[7] / 127.0`, which was wrong twice
+    // over. Wrong in law: read straight off the live engine's own output-gain register
+    // (`0x181a6f170`, which is what the delay processor multiplies its outputs by), a raw 32 gives
+    // exactly 0.5 and the 64 every stored preset carries gives exactly 1.0 -- it quantises over
+    // **64**, so `/127` ran every delay type at 0.504 of level, 6 dB down. And wrong in place: the
+    // level is a *ramp*, the same `MatrixRamp` the chorus and reverb levels take, walking sixteen
+    // times a block. Baked into a coefficient it can neither ramp nor be edited, which is why
+    // `40 01 58` did nothing at all.
+    //
+    // The `/127` survived the impulse gate because the gate was compensating for it: the captured
+    // reference *does* carry the level, and the comparison scaled that reference by the same
+    // `raw[7] / 127.0` on the belief that it did not. Two matching errors either side of an equals
+    // sign agree perfectly. See `tests/effects_tests.cpp`.
 
     return DelayParameters{
         .centre_samples = std::max(1, centre),
@@ -267,9 +297,9 @@ DelayParameters SystemDelay::compile(std::span<const int> raw, int sample_rate)
         .right_samples = std::max(1, right),
         // The tap gains quantise over 128, not 127: the live engine's registers read 0.9921875
         // for a raw 127 and 0.7578125 for a raw 97, which is n/128 exactly, on every type.
-        .centre_gain = raw[4] / 128.0 * return_level,
-        .left_gain = raw[5] / 128.0 * return_level,
-        .right_gain = raw[6] / 128.0 * return_level,
+        .centre_gain = raw[4] / 128.0,
+        .left_gain = raw[5] / 128.0,
+        .right_gain = raw[6] / 128.0,
         // Raw 0-127 maps to -1..+1 over a 31/32 full scale, not a whole one: read back off the
         // live engine's own feedback register, all ten types come out at exactly 31/32 of
         // `(raw - 64) / 64` -- 0.2421875 where that gives 0.25, 0.12109375 where it gives 0.125,
@@ -277,7 +307,8 @@ DelayParameters SystemDelay::compile(std::span<const int> raw, int sample_rate)
         // gains show at 127/128. The display range is -64..+63.
         .feedback = (raw[8] - 64) * 31.0 / 2048.0,
         .pre_low_pass = raw[0],
-        .send_to_reverb = raw[9] / 127.0,
+        // Over 128, like the tap gains and like the chorus's two sends -- not over 127.
+        .send_to_reverb = raw[9] / 128.0,
     };
 }
 
@@ -294,7 +325,16 @@ void SystemDelay::process(std::span<const float> input,
                           std::span<float> left,
                           std::span<float> right)
 {
+    process(input, left, right, {});
+}
+
+void SystemDelay::process(std::span<const float> input,
+                          std::span<float> left,
+                          std::span<float> right,
+                          std::span<float> to_reverb)
+{
     const DelayParameters& p = parameters_;
+
 
     for (std::size_t i = 0; i < input.size(); ++i) {
         // The delay's input carries the same 20 Hz DC blocker the reverb and chorus inputs do --
@@ -343,6 +383,13 @@ void SystemDelay::process(std::span<const float> input,
         // making every delay type a sixteenth-note late at 120 bpm.
         left[i] = wet_left;
         right[i] = wet_right;
+
+        // The centre tap counts once here, not once per side.
+        if (i < to_reverb.size()) {
+            to_reverb[i] = static_cast<float>(
+                ((p.left_gain * l) + (p.right_gain * r) + (p.centre_gain * centre))
+                * p.send_to_reverb);
+        }
     }
 }
 

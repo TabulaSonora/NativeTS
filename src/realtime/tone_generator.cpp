@@ -198,6 +198,7 @@ struct ToneGenerator::Impl {
     /// The wet levels' coefficient smoothers, and the per-sample gains they produce.
     MatrixRamp reverb_level_ramp;
     MatrixRamp chorus_level_ramp;
+    MatrixRamp delay_level_ramp;
     std::array<double, block_size> level_gains{};
 
     std::array<float, block_size> reverb_bus{};
@@ -205,6 +206,13 @@ struct ToneGenerator::Impl {
     std::array<float, block_size> delay_bus{};
     std::array<float, block_size> wet_left{};
     std::array<float, block_size> wet_right{};
+
+    // The three cross-feeds between the networks. They are separate buffers rather than additions
+    // to the send buses because a network runs *after* its bus has been filled and mixed: writing
+    // the chorus's output back into `reverb_bus` would be a block late, where the module's is not.
+    std::array<float, block_size> chorus_to_reverb{};
+    std::array<float, block_size> chorus_to_delay{};
+    std::array<float, block_size> delay_to_reverb{};
     std::array<float, block_size> block_left{};
     std::array<float, block_size> block_right{};
 
@@ -326,12 +334,18 @@ struct ToneGenerator::Impl {
     bool reverb_row_edited = false;
     bool chorus_row_edited = false;
 
-    /// Wet levels, `40 01 33` and `40 01 3A`, which are not coefficients.
+    /// Wet levels, `40 01 33`, `40 01 3A` and `40 01 58`, which are not coefficients.
     ///
     /// They scale what leaves each network rather than shaping it, so they are applied at the mix
     /// and not folded into a preset. 0x40 is the power-on value and means unity.
+    ///
+    /// The delay's is the newest of the three and used to be neither: it was compiled into the tap
+    /// gains, so it could not ramp and `40 01 58` did nothing at all. All ten stored presets carry
+    /// 64, which is why only a stream that sends that address -- `roland_sc88_y05.mid` sends 15 --
+    /// could tell.
     int reverb_level = 0x40;
     int chorus_level = 0x40;
+    int delay_level = 0x40;
 
     /// The level that means unity, which is also the power-on value.
     static constexpr int unity_level = 0x40;
@@ -1386,6 +1400,15 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
             } else if (a3 == 0x50 && value <= 9) {
                 delay_type =
                     options.delay_type ? options.delay_type : std::optional{value};
+                // Selecting a macro reloads its level, the way the other two macros reload theirs.
+                // All ten stored rows carry 64, so this only ever restores unity -- but it restores
+                // it, which matters to a stream that edits the level and then changes type.
+                delay_level = EffectPresets::defaults()
+                                  .delay()
+                                  .raw_presets[static_cast<std::size_t>(delay_type.value_or(0))][7];
+            } else if (a3 == 0x58) {
+                // The delay's wet level. See `delay_level`: the network carries none of it.
+                delay_level = value;
             } else if (a3 >= 0x31 && a3 <= 0x37) {
                 // Reverb parameters, straight into the row the macro filled in. Level is byte [2]
                 // and is kept out of the network -- see `reverb_level`.
@@ -1418,10 +1441,12 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
             // rather than a gap, and files that set it are asking for something the SC-VA does not
             // provide.
             //
-            // The patch name (00-0F) has no audible counterpart, and the individual reverb (32-37),
-            // chorus (39-40) and delay (51-5A) parameters are carried by the preset tables the
-            // macros select -- applying single-parameter edits on top is follow-up DSP work
-            // (`sysex_reverb_params` / `sysex_chorus_params` / `sysex_delay_params`).
+            // The patch name (00-0F) has no audible counterpart. The individual reverb (32-37) and
+            // chorus (39-40) parameters go into the row the macro loaded and recompile the network;
+            // the delay's (51-57, 59-5A) do not yet, and are carried by the preset table the macro
+            // selects -- applying those edits on top is follow-up DSP work (`sysex_delay_params`).
+            // The delay's *level* (58) is handled above, because it is not a network coefficient at
+            // all: it is the mixer's ramp, like the other two levels.
             return;
         }
 
@@ -2218,17 +2243,25 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
         }
     };
 
-    // The same order the module mixes in: chorus, delay, then reverb.
+    // The same order the module mixes in: chorus, delay, then reverb. The order is not cosmetic --
+    // it is what lets the chorus feed the delay and both feed the reverb inside one block.
+    chorus_to_reverb.fill(0.0F);
+    chorus_to_delay.fill(0.0F);
+    delay_to_reverb.fill(0.0F);
+
     if (chorus) {
-        chorus->process(chorus_bus, wet_left, wet_right);
+        chorus->process(chorus_bus, wet_left, wet_right, chorus_to_reverb, chorus_to_delay);
         add(&chorus_level_ramp, chorus_level);
     }
     if (delay) {
-        delay->process(delay_bus, wet_left, wet_right);
-        add(nullptr, 0);
+        // The chorus's send-to-delay lands on the delay's own bus, ahead of its input conditioner,
+        // exactly where a part's delay send lands.
+        simd::add(chorus_to_delay, delay_bus);
+        delay->process(delay_bus, wet_left, wet_right, delay_to_reverb);
+        add(&delay_level_ramp, delay_level);
     }
     if (reverb) {
-        reverb->process(reverb_bus, wet_left, wet_right);
+        reverb->process(reverb_bus, chorus_to_reverb, delay_to_reverb, wet_left, wet_right);
         add(&reverb_level_ramp, reverb_level);
     }
 }
