@@ -277,6 +277,22 @@ void PartialVoice::note_off(int damper)
 
     if (hold_samples_ == EnvelopeMachine::hold_forever) {
         // A key-off layer fires here rather than releasing: the note-off is consumed arming it.
+        //
+        // **Ten partials in the whole table are these**, and Roland's own naming gives them away --
+        // the `.o` suffix is "off": `Harpsi.o` (tones 44, 1647), `Clav.o` (53), `Organ o` (99),
+        // `Nylon Gt.o` (163, 1499, 1669), plus `MandolinTrem`, `Aqua` and `Biwa 3`. Find them by
+        // scanning the tone table for a partial whose block `+0x00` is `0xff`.
+        //
+        // **No piano has one**, which answers a question worth not re-asking: a harpsichord's
+        // note-off click is the jack falling back, real pianos thump when the dampers return, and
+        // the obvious guess is that Roland sampled both. They did not sample the piano's. The
+        // instruments that carry a key-off layer are the plucked and stopped ones.
+        //
+        // Nor is the layer a second partial of the capital tone. `Harpsichord` at bank 0 has one
+        // partial and no release slot; `Harpsi.o` is a separate two-partial tone at bank 24, slot 0
+        // being the key-off layer and slot 1 an ordinary partial, and a sequencer selects it rather
+        // than getting it for free. Measured against the module on that tone: level agrees to
+        // 0.01 dB while the note is held and 0.3 dB after the note-off.
         hold_samples_ = SegmentEnvelope::defer_to_control_tick(sample_, control_block);
         return;
     }
