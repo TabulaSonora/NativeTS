@@ -425,7 +425,8 @@ int dump_effect_command(
 /// `--stream` drives the real-time block loop instead of rendering note by note. The two share
 /// their DSP, so what the flag exposes is the difference the architecture makes: a 64-voice limit
 /// that actually steals, live controllers, and effect types that can change mid-song.
-int render_command(const std::string& dll,
+int render_command(int chorus_phase,
+                   const std::string& dll,
                    const fs::path& midi,
                    const fs::path& output,
                    int map,
@@ -469,6 +470,9 @@ int render_command(const std::string& dll,
         engine_options.channels = options.channels;
 
         ts::ToneGenerator generator{notes, engine_options};
+        if (chorus_phase != 0) {
+            generator.seed_chorus_phase(chorus_phase);
+        }
         // Not an engine option: the row is settable while the engine runs, because it is what the
         // module would have taken from a bank select.
         generator.set_drum_map_row(options.drum_map_row);
@@ -1062,6 +1066,11 @@ int main(int argc, char** argv)
             ->transform(CLI::CheckedTransformer(ts::tone_map_choices(), CLI::ignore_case));
     render->add_option(
         "--tail", render_options.tail_seconds, "Seconds to render past the last note");
+    int chorus_phase = 0;
+    render->add_option("--chorus-phase", chorus_phase,
+                       "Place the chorus LFO accumulator before rendering. Its 24-bit counter is "
+                       "never reset on the module, so a reference render's wet depends on how long "
+                       "that engine ran first; scdec prints the value it reached");
     render->add_option("--end", render_options.end_seconds, "Stop at this many seconds");
     render->add_option("--volume", render_options.output_gain, "Linear output gain");
     render->add_option("--drum-map", render_options.drum_map_row, "Drum map row, 0-5");
@@ -1189,7 +1198,8 @@ int main(int argc, char** argv)
                 render_options.channels = &mask;
             }
 
-            return render_command(dll, midi_path, output_file, map, render_options, stream,
+            return render_command(chorus_phase, dll, midi_path, output_file, map,
+                                  render_options, stream,
                                   polyphony, ports, loops, fade_seconds);
         }
         if (bench->parsed()) {

@@ -371,6 +371,13 @@ public:
     void send_channel_at(int sample_offset, int port, int status, int data1, int data2);
 
     /// Applies one system-exclusive message on port A, including the leading `F0`.
+    /// Places the chorus LFO accumulator, which otherwise free-runs from zero.
+    ///
+    /// For comparing against a reference render rather than for playback: the module's accumulator
+    /// is never reset, so its phase at the start of a song depends on how long that engine had been
+    /// running first. `scdec` prints the value it reached, and the song fixture records it.
+    void seed_chorus_phase(int phase) noexcept;
+
     void send_sysex(std::span<const std::uint8_t> bytes);
 
     /// Applies a SysEx message at a position inside the buffer about to be rendered.

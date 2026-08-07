@@ -143,8 +143,12 @@ Chorus Chorus::for_type(std::optional<int> type)
 
 void Chorus::reset()
 {
+    // **The LFO accumulator is deliberately not cleared here.** Measured on the module: run it for
+    // 20,480 samples, send a GS reset, process 32 more, and the phase moves by exactly 32 x 192 --
+    // the reset does not touch it. This engine used to zero it, so a file with a GS reset at the
+    // top restarted its chorus LFO where the module's kept free-running, and a file with several
+    // restarted it several times.
     std::fill(ring_.begin(), ring_.end(), 0.0);
-    phase_ = 0;
     dc_state_ = 0.0;
     lowpass_ = 0.0;
     feedback_ = 0.0;

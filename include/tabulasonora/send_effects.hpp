@@ -130,6 +130,22 @@ public:
     void
     process(std::span<const float> input, std::span<float> left, std::span<float> right) override;
 
+    /// Places the LFO accumulator, which otherwise free-runs from zero.
+    ///
+    /// The module's chorus LFO is a 24-bit accumulator advanced by `rate << 6` every sample, and
+    /// **nothing resets it** — not a GS reset, not a macro change. So its phase when a song starts
+    /// is a function of how long that engine has been running, and two engines that agree on every
+    /// note still place their wet differently unless they agree on this too.
+    ///
+    /// Not cosmetic. Rendering `panwet.mid` through the module at three warm-up lengths — changing
+    /// nothing but this accumulator — moves the worst window of the stereo balance measure by up to
+    /// **0.50**, which is larger than the gap that measure reports between this engine and the
+    /// module. A comparison that does not align the phase cannot see wet *placement* at all.
+    void set_phase(int phase) noexcept { phase_ = phase & (phase_sign - 1); }
+
+    /// Where the accumulator stands.
+    [[nodiscard]] int lfo_phase() const noexcept { return phase_; }
+
 private:
     static constexpr int ring_mask = ring_size - 1;
     static constexpr int phase_sign = 1 << 24;

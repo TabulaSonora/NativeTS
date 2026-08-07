@@ -289,6 +289,9 @@ struct ToneGenerator::Impl {
 
     std::optional<Reverb> reverb;
     std::optional<Chorus> chorus;
+    /// Where the chorus LFO starts, for matching a reference render. See
+    /// `ToneGenerator::seed_chorus_phase`.
+    int chorus_phase_seed = 0;
     std::optional<SystemDelay> delay;
 
     /// The insertion EFX block, built the first time a stream touches it — a file that never
@@ -683,6 +686,16 @@ int ToneGenerator::effective_drum_map_row() const noexcept
 bool ToneGenerator::xg_mode() const noexcept
 {
     return impl_->xg_mode;
+}
+
+void ToneGenerator::seed_chorus_phase(int phase) noexcept
+{
+    // Remembered as well as applied, because the chorus is rebuilt whenever a file selects a macro
+    // and a seed applied only to the object standing now would not survive the first one.
+    impl_->chorus_phase_seed = phase;
+    if (impl_->chorus) {
+        impl_->chorus->set_phase(phase);
+    }
 }
 
 ToneMap ToneGenerator::part_tone_map(int index) const noexcept
@@ -2203,9 +2216,16 @@ void ToneGenerator::Impl::ensure_effects()
         reverb_row_edited = false;
     }
     if (options.chorus && (!chorus || chorus_built_for != chorus_type || chorus_row_edited)) {
+        // **The LFO accumulator survives the rebuild**, because on the module it survives a macro
+        // change: watching the register through a GS reset shows the rate replaced from 1024 to
+        // 192 while the phase carries straight on, and a reset does not zero it either. Building a
+        // fresh `Chorus` here would restart the LFO every time a file selected a chorus type, which
+        // most files do once at the top and some do repeatedly.
+        const int carried = chorus ? chorus->lfo_phase() : chorus_phase_seed;
         chorus.emplace(chorus_row_edited
                            ? Chorus{EffectProgrammer::chorus_from_row(notes->rom(), chorus_row)}
                            : Chorus::for_type(chorus_type));
+        chorus->set_phase(carried);
         chorus_built_for = chorus_type;
         chorus_row_edited = false;
     }
