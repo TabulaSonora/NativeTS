@@ -1391,10 +1391,22 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
                     chorus_row_edited = true;
                 }
             }
-            // Recognised and left alone: the patch name (00-0F) and voice reserve (10-1F) have no
-            // audible counterpart here, and the individual reverb (32-37), chorus (39-40) and
-            // delay (51-5A) parameters are carried by the preset tables the macros select --
-            // applying single-parameter edits on top is follow-up DSP work
+            // Recognised and left alone, and one of these was checked rather than assumed.
+            //
+            // **Voice reserve (10-1F) is inert on the module too.** An address census over 131,997
+            // archive files found 2,641 of them setting it -- more than send anything else this
+            // engine ignores -- and it is the parameter that decides which part keeps its notes
+            // when the 64 voices run out, so it looked like the most valuable thing on the list.
+            // It is not: seven shapes of the message rendered through the DLL, on a file that
+            // provably steals, all produce **byte-identical audio** to sending nothing.
+            // Block-ordered 64/0 and 0/64, a flat 4 to every part, 64 to the first byte, and
+            // sixteen single-byte writes -- inert, every one. So this is the module's behaviour
+            // rather than a gap, and files that set it are asking for something the SC-VA does not
+            // provide.
+            //
+            // The patch name (00-0F) has no audible counterpart, and the individual reverb (32-37),
+            // chorus (39-40) and delay (51-5A) parameters are carried by the preset tables the
+            // macros select -- applying single-parameter edits on top is follow-up DSP work
             // (`sysex_reverb_params` / `sysex_chorus_params` / `sysex_delay_params`).
             return;
         }
