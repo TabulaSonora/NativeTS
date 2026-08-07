@@ -1299,6 +1299,71 @@ TEST_CASE("the random LFO shapes redraw on the phase wrapping", "[dsp]")
 
 
 
+TEST_CASE("an LFO node opens on a draw from the generator, not at zero", "[dsp][sccore]")
+{
+    // `note_on_voice_setup @ 18005f5c0` writes `+0x7a = prng_lfsr()` into **every** node it
+    // initialises, right after the rate and delay, whatever the waveform. So a sample-and-hold
+    // sounds a real value from its first control tick rather than sitting flat until its first
+    // wrap -- which on a slow LFO is a quarter of a second of the note.
+    //
+    // The number is the module's own. `scdec lfotrace` on `Bubble` (tone 1199, two partials, a
+    // random LFO1) reads 20373 off the type-1 node at the first tick with no wrap having happened,
+    // and 20373 is the first draw from the 0xEFA6/0x9C23 reset seeds. Its next four values, taken
+    // at wraps, are draws 4, 5, 6 and 7 -- draws 2 and 3 going to the note's two LFO2 nodes, which
+    // is what makes a note's cost `partials + 1`.
+    const Fixture fixture = Fixture::make();
+
+    EngineNoise noise;
+    LfoEngine engine{fixture.tables(), &noise};
+
+    LfoConfig config;
+    config.waveform = 1;
+    config.increment = 0x2000;
+    config.delay_rate = 0xFFFF;
+    config.fade_rate = 0xFFFF;
+    config.pitch_depth = 0;
+
+    SECTION("the first node seeded takes the generator's first draw")
+    {
+        LfoRunner runner = engine.create_runner(config);
+        CHECK(runner.random_hold() == 0);
+
+        runner.seed_random();
+        CHECK(runner.random_hold() == 20373);
+    }
+
+    SECTION("the draw is spent whatever the waveform")
+    {
+        // A triangle never reads the register, and the module writes it anyway. If this stopped
+        // being true every later consumer of the one shared generator would sit a draw early.
+        config.waveform = 6;
+        LfoRunner triangle = engine.create_runner(config);
+        triangle.seed_random();
+
+        config.waveform = 1;
+        LfoRunner hold = engine.create_runner(config);
+        hold.seed_random();
+        CHECK(hold.random_hold() != 20373);
+    }
+
+    SECTION("a sample and hold sounds it before any wrap")
+    {
+        config.pitch_depth = 6000;
+        LfoRunner runner = engine.create_runner(config);
+        runner.seed_random();
+
+        // 0x2000 wraps on the eighth tick, so the first seven are the seed and nothing else.
+        runner.tick();
+        const double first = runner.value(LfoDestination::pitch);
+        CHECK(first != 0.0);
+        for (int tick = 1; tick < 7; ++tick) {
+            runner.tick();
+            INFO("tick " << tick);
+            CHECK(runner.value(LfoDestination::pitch) == first);
+        }
+    }
+}
+
 TEST_CASE("an LFO's delay holds back the patch's depth, not a controller's", "[dsp]")
 {
     const Fixture fixture = Fixture::make();

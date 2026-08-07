@@ -311,11 +311,23 @@ case before it**, and that is a property of the harness rather than of the DLL.
 
 `scdec notebatch` rendered the whole 239-case sweep in one process with a `GsReset()` between cases,
 under a comment asserting that a case "must not depend on what preceded it". For most cases that
-holds. It does not hold for a tone with a random LFO. Those live in a 128-slot pool with a LIFO
-freelist; `partial_shared_node_free` clears the tick gate and pushes the slot back, and
-`partial_shared_node_alloc` resets only the link fields. The random shapes' registers at `+0x77` have
-exactly one writer in the whole decompilation, the per-tick save-back. A GS reset frees the nodes and
-does not zero them, so the next case's LFO opens on the previous case's values.
+holds. It does not hold for a tone with a random LFO — but **the reason first given here was wrong,
+and the corrected one is simpler and worse**.
+
+The claim was that the LFO nodes carry stale random registers across a reset. They do not: the
+offset was misread as `+0x77` when it is `+0x7a`, and `note_on_voice_setup @ 18005f5c0` writes it at
+every note-on with a fresh `prng_lfsr()`. A node opens on a new draw, never on a leftover.
+
+What actually carries is **the generator itself**. `GsReset()` does not reseed it, and every note-on
+spends `partials + 1` draws on it before a single parameter is read — one per LFO node the note
+claims. So the sequence position at the start of case N is a function of every case before it, and
+that reaches far more than the random-LFO tones: the random pan and both pitch jitters draw from the
+same sequence. The batched harvest was contaminated more broadly than the first diagnosis said, not
+less.
+
+That the corrected mechanism is the true one falls out of the fix itself: if a reset reseeded the
+generator, every case would open on the same first draw and an isolated re-render would reproduce
+the batch exactly. Re-rendering moved 45 of 238 cases by more than half a cent.
 
 Measured, rendering a case alone in a fresh process against its value in the sweep:
 
@@ -402,11 +414,19 @@ splitting the depths would have been a different and wrong change.
 The probes found something larger than what they were built for, which is the ordinary return on
 pointing a measurement somewhere nothing had looked. **`Bubble` is 14–20 dB loud in the 2 kHz band**
 on all three keys while its overall level agrees to within 0.15 dB, and **`Stream` sits 5–7 dB low
-at 500 Hz** on two of three. A single octave band that far out while the total level is right is
-energy in the wrong place rather than too much of it — the signature of a filter or a wave chosen
-wrong, not of a gain. Both are ordinary GS variation tones one bank select away, and neither the
-note sweep nor the song corpus covers either, so nothing else here would have found it. Sharing
-LFO1 improved both bands slightly and closed neither.
+at 500 Hz** on two of three. Both are ordinary GS variation tones one bank select away, and neither
+the note sweep nor the song corpus covers either.
+
+Two measurements say what it is not. Cut into 238 ms segments — the LFO's own wrap period — the RMS
+agrees within about a dB in every segment while the 2 kHz band is **+17 to +23 dB in every one of
+them**. A random modulation that disagreed would scatter, some segments better and some worse; a
+constant offset is a static defect. And the loudest spectral peaks put this engine at roughly 615
+and 1400 Hz where the module is at 510 and 1100 — about three to four semitones sharp.
+
+So it is **pitch**, not the filter and not the LFO. The note is key 60 against a key centre of 64,
+four semitones below it, and `Bubble`'s two partials carry key-follow bytes of `0x41` and `0x42`
+where `Stream`'s carry `0x43` — which is also the shape of the smaller error on `Stream`. That is
+the lead: this engine follows the key less than the module does on a small `block[0x13]`.
 
 ### What the first authoritative measurement says
 
@@ -1326,19 +1346,24 @@ Stated plainly, because they are not covered by the numbers above:
 - **Drum tones with the 4-partial layout are not reversed** upstream. A melodic tone here has two
   partial slots (ts::Tone::partial_slots), and asking for more throws rather than guessing. General
   MIDI kits resolve to ordinary melodic tones, so the common path works.
-- **The random LFO waveforms do not draw the same numbers as the module**, though they now draw
-  from the same generator by the same law. Shapes 1, 2 and 3 are implemented (see below); what is
-  not reproduced is *which* draw a given voice gets. This bullet used to say the consumption order
-  was "an accident of its allocator rather than a behaviour", and that was wrong on both counts.
-  It is a behaviour, it is in the binary, and most of it is now matched: five consumers each draw
-  only when their own byte is non-zero, a chunk's voices are set up in GS block order with the drum
-  part first, and each part spends `voices + 1` draws before its notes. What remains is **the LFO
-  node pool**. The module's 128 slots carry the random registers at `+0x77`, nothing zeroes them on
-  free or on a GS reset, and a note claiming a recycled slot opens on the previous note's values
-  where this engine opens at zero. Until that is modelled the values cannot align, and the shape,
-  rate, step timing and depth being right is the intended side of the "audible fidelity, not bit
-  accuracy" line: a random modulation that steps at the right moments to the right *sort* of value
-  is the parameter working.
+- **The random LFO waveforms now draw the module's own numbers on a single note, and the remaining
+  gap is in dense music.** This bullet has been wrong twice and both corrections are worth keeping.
+  It first said the consumption order was "an accident of its allocator rather than a behaviour" —
+  it is a behaviour and it is in the binary. It then said the LFO nodes carry stale random registers
+  across a claim — they do not; the offset was misread and `note_on_voice_setup` writes a fresh draw
+  into every node it initialises.
+
+  What is matched: five consumers each drawing only when their own byte is non-zero; a chunk's
+  voices set up in GS block order with the drum part first; one LFO1 node per note and one LFO2 per
+  partial, each seeded with one draw, all of a part's seeded before any of its parameters are read.
+  On a fresh engine this engine's first LFO1 node opens on **20373**, which is the module's first
+  draw from its reset seeds and the value `scdec lfotrace` reads off the node.
+
+  What is not: where the **random pan** draw sits relative to those seeds. Its position came from
+  the same probe that also concluded two simultaneous notes cost the generator no more than one —
+  a claim since disproved directly, two notes on one tick seeding their nodes at draws 1 and 4. Two
+  songs' balance rows say the pan is a draw or two out of place in dense music. See
+  \ref sharing-lfo1.
 - **LFO1 is now shared per note, as the module shares it.** That was a departure until it was
   measured; \ref sharing-lfo1 has what the measurement took to build. Still open is the *part-level*
   branch of the same allocator — bit 5 of the tone header's `+0x0e` and of the partial block's

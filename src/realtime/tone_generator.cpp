@@ -171,11 +171,10 @@ struct ToneGenerator::Impl {
 
     /// The chunk each part last opened a note-on batch on, or -1.
     ///
-    /// `note_on_voice_setup` runs once for a part and walks everything waiting on it, so notes that
-    /// arrive together are seeded together and only the first of them pays -- see
-    /// `spend_voice_setup_draws`. Chunks are the grid the module's own MIDI ring dispatches on, and
-    /// they are what separates "together" from "one after another" here: a probe whose two notes
-    /// sat twelve ticks apart paid twice, and the same two notes on one tick paid once.
+    /// Unused since the setup draws became `seed_note_lfo_nodes`, and kept because the question it
+    /// was answering is still open: a probe measured two notes struck on one tick costing the same
+    /// as one, while the same two twelve ticks apart cost twice. Seeding per node says two notes
+    /// should cost twice either way. One of the two readings is wrong and it has not been settled.
     std::vector<std::int64_t> note_batch_chunk;
 
     /// One voice per slot, or empty. Recycled through `spare` rather than reallocated per note.
@@ -539,7 +538,10 @@ struct ToneGenerator::Impl {
     void stop_note(int channel, int note, int damper = 0);
     void start_note(int channel, int note, int velocity);
     void start_drum(int channel, int note, int velocity);
-    void spend_voice_setup_draws(int channel, int voice_count);
+    /// Seeds every LFO node a note claims from the shared generator, in claim order.
+    void seed_note_lfo_nodes(PendingNote& note);
+    /// Reads one already-seeded note's parameters and installs its voices.
+    void read_pending_note(PendingNote& note);
     /// Takes a slot for a voice, stealing if the pool is full. Dispatch-time, arrival order.
     [[nodiscard]] int allocate_slot(int channel, int note, int velocity, int group);
     /// Puts a fully-read voice into the slot `allocate_slot` returned. Block-ordered pass.
@@ -2277,11 +2279,39 @@ void ToneGenerator::Impl::start_pending_voices()
     std::vector<PendingNote> starting;
     starting.swap(pending_notes);
 
-    for (PendingNote& note : starting) {
-        if (note.voices.empty()) {
-            continue;
+    // Two passes per part, not one pass per note, and the difference only shows on a chord.
+    // `note_on_voice_setup @ 18005f5c0` calls nothing but `voice_init_fresh`,
+    // `voice_init_from_parent` and `prng_lfsr`: it gathers every node waiting on the part and seeds
+    // all of them before any partial's parameters are read. Interleaving the two -- seed a note,
+    // read it, seed the next -- puts every draw after the first note at the wrong position, which
+    // is audible through the random pan and cost two songs their balance row when it was tried.
+    //
+    // `starting` is sorted by block order and stable, so a run of equal `part` is one batch.
+    for (std::size_t begin = 0; begin < starting.size();) {
+        std::size_t end = begin;
+        while (end < starting.size() && starting[end].part == starting[begin].part) {
+            ++end;
         }
-        spend_voice_setup_draws(note.part, static_cast<int>(note.voices.size()));
+
+        for (std::size_t index = begin; index < end; ++index) {
+            if (!starting[index].voices.empty()) {
+                seed_note_lfo_nodes(starting[index]);
+            }
+        }
+
+        for (std::size_t index = begin; index < end; ++index) {
+            read_pending_note(starting[index]);
+        }
+        begin = end;
+    }
+}
+
+void ToneGenerator::Impl::read_pending_note(PendingNote& note)
+{
+    {
+        if (note.voices.empty()) {
+            return;
+        }
 
         // One pan for the whole note, drawn at the end of the first voice's parameter load -- after
         // that voice's own two pitch draws, which is where `tvf_env_prep` sits in
@@ -2405,7 +2435,7 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     }
 
     // Resolved at dispatch, because allocation happens here even though nothing is read yet: the
-    // count of voices the note takes is what `spend_voice_setup_draws` is later counted from, and
+    // count of voices the note takes is what `seed_note_lfo_nodes` later seeds from, and
     // it comes from the queued list rather than being carried separately.
     std::vector<ResolvedTone> layers;
     layers.reserve(tones.size());
@@ -2698,39 +2728,44 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     }
 }
 
-void ToneGenerator::Impl::spend_voice_setup_draws(int channel, int voice_count)
+void ToneGenerator::Impl::seed_note_lfo_nodes(PendingNote& note)
 {
     // What `note_on_voice_setup @ 18005f5c0` takes from the shared generator before a single one of
-    // the note's own parameters is read: one value per voice it initialises, seeded into the
-    // voice's +0x7a, plus one more.
+    // the note's own parameters is read, and **it is not a discard**. Every LFO node it initialises
+    // gets `+0x7a = prng_lfsr()`, unconditionally -- that register is the random shapes' held
+    // value, so a sample-and-hold opens on a real draw rather than at zero.
     //
-    // **The count is measured, not read off the decompilation.** A part whose SysEx panpot is zero
-    // repositions every note from the generator, so a probe of well-separated notes on such a part
-    // reads the sequence back out and the spacing between the positions is the consumption. Four
-    // shapes, all exact over 40-48 notes:
+    // The count follows from what a note claims: one LFO1 node for the whole note plus one LFO2
+    // node per partial, which is the `partials + 1` a probe measured before the reason was known.
+    // A part whose SysEx panpot is zero repositions every note from the generator, so a probe of
+    // well-separated notes on such a part reads the sequence back out and the spacing between the
+    // positions is the consumption. Four shapes, all exact over 40-48 notes:
     //
     //   one-partial tone, alone           pan at draw 2, every 3   -> 2 before the pan
     //   two-partial tone, alone           pan at draw 3, every 4   -> 3 before the pan
     //   plus one one-partial note elsewhere        every 5         -> that note cost 2
     //   plus one two-partial note elsewhere        every 6         -> that note cost 3
     //
-    // so the cost is `partials + 1`, and the pan is the draw after it. The last two shapes also say
-    // what a batch is: two notes struck on the same tick cost the same as one (a third made no
-    // difference either), while the same two twelve ticks apart cost twice. The module runs this
-    // pass once for a part and walks every note waiting on it, so simultaneous notes are seeded
-    // together -- which is why this is charged per part per chunk.
+    // Confirmed against the module rather than only counted. `scdec lfotrace` on `Bubble` -- two
+    // partials, a random LFO1 -- shows three live nodes, one of type 1 and two of type 2, and the
+    // type 1 node reads **20373** at its first control tick with no wrap having happened. 20373 is
+    // the first draw from the `0xEFA6`/`0x9C23` seeds, and the four values it takes at its next
+    // four wraps are draws 4, 5, 6 and 7. Draws 2 and 3 are the two LFO2 nodes.
     //
-    // The values themselves are discarded. Where they land is not established; that they are taken
-    // is, and that is what every later draw depends on.
-    const auto index = static_cast<std::size_t>(channel);
-    if (index >= note_batch_chunk.size()) {
+    // Order is the claim order in `partial_alloc_node`: the shared LFO1 first, then each partial's
+    // LFO2.
+    if (note.voices.empty()) {
         return;
     }
-    if (note_batch_chunk[index] == block_index) {
-        return;
+
+    if (const std::shared_ptr<LfoRunner>& shared = note.voices.front().setup.lfo1) {
+        shared->seed_random();
     }
-    note_batch_chunk[index] = block_index;
-    notes->noise().discard(voice_count + 1);
+    for (PendingVoice& pending : note.voices) {
+        if (pending.setup.lfo2) {
+            pending.setup.lfo2->seed_random();
+        }
+    }
 }
 
 void ToneGenerator::Impl::release_sustained(int channel, Part& part)

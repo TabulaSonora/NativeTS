@@ -369,6 +369,13 @@ double LfoRunner::value_at_depth(LfoDestination destination,
     return apply(effective, limits.rounding);
 }
 
+void LfoRunner::seed_random() noexcept
+{
+    // Unconditional, exactly as the module writes it -- the draw is spent whether or not this
+    // waveform will ever read the register.
+    held_ = fx::i16(engine_->noise().next());
+}
+
 double LfoRunner::pitch_value(double wheel_depth) const noexcept
 {
     return value(LfoDestination::pitch, static_cast<int>(wheel_depth));

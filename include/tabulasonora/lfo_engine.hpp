@@ -271,6 +271,22 @@ public:
                                         int patch_depth,
                                         int matrix_depth = 0) const noexcept;
 
+    /// Seeds the random shapes' held register from the shared generator.
+    ///
+    /// `note_on_voice_setup @ 18005f5c0` does this for **every** LFO node it initialises, whatever
+    /// the waveform, right after writing the rate and delay: `+0x7a = prng_lfsr()`. So the draw is
+    /// spent even on a triangle, and a sample-and-hold opens on a real value rather than at zero —
+    /// which is the whole first cycle of the LFO, up to a quarter of a second on a slow one.
+    ///
+    /// Measured against the module on `Bubble`: its LFO1 reads 20373 at the first control tick with
+    /// no wrap in sight, and 20373 is the first draw from the `0xEFA6`/`0x9C23` seeds. The four
+    /// values it takes at the next four wraps are draws 4, 5, 6 and 7 — the two in between going to
+    /// the note's two LFO2 nodes, which is what makes the count `partials + 1`.
+    void seed_random() noexcept;
+
+    /// The random shapes' held register — the value a sample-and-hold is currently outputting.
+    [[nodiscard]] int random_hold() const noexcept { return held_; }
+
     /// The pitch modulation with a mod-wheel depth folded in, in milli-semitones.
     ///
     /// The offline path's spelling of the same thing: the wheel reaches LFO1 pitch depth through
@@ -306,17 +322,23 @@ private:
     int output_ = 0;
 
     /// The random shapes' two registers: the value last drawn from the generator, and the value
-    /// walking toward it. They live at `+0x77` of the module's shared LFO node.
+    /// walking toward it. They are the module's `+0x7a` and `+0x78` on the shared LFO node.
     ///
-    /// Both start at zero here, and that is a **departure**, now measured rather than assumed. The
-    /// module's nodes come from a 128-slot pool with a LIFO freelist:
-    /// `partial_shared_node_free` clears the tick gate and pushes the slot back,
-    /// `partial_shared_node_alloc` resets only the link fields, and the pair at `+0x77` has exactly
-    /// one writer in the whole decompilation — the per-tick save-back. Nothing zeroes them, so a
-    /// note claiming a recycled slot opens its sample-and-hold on whatever the *previous* note left
-    /// there, where this one opens at zero until its first wrap. Even a GS reset only frees the
-    /// nodes. This is not a small detail: it contaminated the note-oracle sweep when that was
-    /// harvested in one process, which is what \ref oracle-harvest-isolation is about.
+    /// Both are written at note-on rather than inherited. `note_on_voice_setup @ 18005f5c0`
+    /// initialises every node it claims — phase from the waveform byte's top two bits, out, delay
+    /// and fade accumulators and the slewed register to zero, rate and delay from the tone — and
+    /// then `+0x7a = prng_lfsr()`. See `seed_random`, which is that write.
+    ///
+    /// **An earlier reading of this had the offset wrong and the conclusion with it.** It named the
+    /// held register `+0x77`, said the per-tick save-back was its only writer, and concluded that a
+    /// recycled node opens on the previous note's values. Reading `lfo_advance_waveform`'s globals
+    /// against the node layout puts out at `+0x70`, phase at `+0x72`, slewed at `+0x78` and held at
+    /// `+0x7a`, and the trace agrees: on `Bubble` the module reads 20373 off a freshly claimed node
+    /// at its first control tick, which is the generator's first draw and not a leftover.
+    ///
+    /// The one branch that *does* inherit is the part-level one, `+0xa0 != 0`, where phase, out,
+    /// held and slewed are all copied from the parent node instead. That is the case bit 5 of the
+    /// waveform byte selects, and this port does not implement it.
     int held_ = 0;
     int slewed_ = 0;
 };
