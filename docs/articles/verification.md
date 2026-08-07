@@ -141,15 +141,35 @@ passage rides the pedal every half second over constantly re-struck notes and lo
 reference behaviour — all of them in that passage, none elsewhere in the song, each cut 20–80 ms
 after sounding.
 
-**The pitch increment ceiling.** The module's resampler increment saturates at four times a wave's
-native rate, and a portamento glide is summed into that same quantity. A note-on picks its wave for
-the key being *struck*, so a slide beginning three octaves higher is pinned at the ceiling and does
-not move until it has descended past it. `MIDI-Corona-Baby Baby.mid` holds its bass dive for 0.6 s
-on the SC-55 map and dives properly on SC-8820, from the same file — the difference is only that the
-two maps' waves sit 10142 milli-semitones apart and one ceiling falls above where the glide starts.
+**The pitch increment ceiling.** **On by default; off for any comparison against the DLL.**
+
+The cause is the resampler's increment word, and it is worth naming precisely because the symptom
+looks like a portamento bug and is not. ts::PitchRamp encodes the sampler increment logarithmically:
+`unity = 0x38000`, `units_per_octave = 0x4000`, and `domain_max = 0x3FFFF`. That last constant is
+the module's own word, and `(0x3FFFF - 0x38000) / 0x4000` is two octaves exactly — **the read caps
+at 4.0× a wave's native rate.** The same limit is expressed a second time as
+`max_increment_milli_semitones = 24000` in the voice's ratio, which matters: lifting either one
+alone renders **byte-identical** audio, because the other clamps the value straight back.
+
+A glide's offset is summed into that capped quantity, and a note-on picks its wave for the key being
+*struck*. So a slide beginning three octaves above its target asks for more than the word can hold
+and is pinned at the ceiling — the pitch does not move at all until the glide has descended past it,
+and only then does the slide become audible. Traced on `MIDI-Corona-Baby Baby.mid`'s bass dive, the
+two maps differ only in the wave underneath:
+
+| map | base | glide | sum | wave's native pitch | wanted | played |
+|---|---|---|---|---|---|---|
+| SC-55 | 34932 | +36067 | 70999 | 39912 | 6.0234× | **4.0000×, clamped** |
+| SC-8820 | 34932 | +36067 | 70999 | 50054 | 3.3529× | 3.3529× |
+
+Identical file, identical glide arithmetic. The ceiling sits at `native + 24000`, which is 63912 —
+key 64 — on the SC-55 map and 74054 on SC-8820, and the eleven semitones between the two plateaus
+are just those tones' native pitches, 10142 milli-semitones apart. One map's ceiling falls above
+where the glide starts and the other's does not.
 
 Nuked-SC55 on an SC-55mkII ROM set has no ceiling at any key tested to 99. It aliases badly getting
-there, but the pitch is right:
+there — at key 99 the fundamental carries 52.6 dB less of the total than a real key-99 note — but
+the pitch is right, so the module clamps where the machine it models does not:
 
 | engine | glide start tracks the source key up to | plateaus from |
 |---|---|---|
@@ -164,9 +184,13 @@ rejection at the folding frequency holds at −28.3 dB from 1× to 8× where the
 to −6.6 dB at 6×. Measured on `bigben.mid`, the file the ceiling was introduced for: the audible
 bands move by +0.03 to +0.18 dB and 12–14 kHz falls **16.65 dB**, which was fold-down.
 
-Unlike the four above, this one is switchable, and both oracle gates and the one-LSB self-baseline
-turn it off. A gate that left it on would be asserting the reference against a deliberate departure
-from the reference. `--module-resampler` does the same for a render.
+**Which way the switch goes, and why.** ts::ToneGeneratorOptions::extended_interpolation defaults
+**on**, because the ceiling is a defect of the module against the hardware it models and a caller
+who has not asked for the module's defects should not get them. It is turned **off** by everything
+that verifies against `SCCore.dll` — both oracle gates, the one-LSB self-baseline, and
+`--module-resampler` for a render — because a gate that left it on would be asserting the reference
+against a deliberate departure from the reference, and would fail on purpose. That is the whole rule:
+on for listening, off for verifying.
 
 \note The last two unconditional cases are enforced by the digest gates rather than by tests named
 for them. They are
@@ -1554,16 +1578,18 @@ into, so this does not have to be guessed at.
 Stated plainly, because they are not covered by the numbers above:
 
 - **The pitch increment ceiling is corrected rather than reproduced, and it is switchable.** The
-  module clamps a resampler increment at four times a wave's native rate and a portamento glide is
-  summed into that quantity, so a slide starting above it is held rather than played. The hardware
-  has no such ceiling. ts::ToneGeneratorOptions::extended_interpolation removes it on
-  ts::SincInterpolator, on by default and off wherever the DLL is the reference — see *Where this
-  engine departs from the reference* above for the measurements. It is listed here because it is
-  the one place a caller's configuration decides which of two instruments they get.
+  module's increment word caps a read at 4.0× a wave's native rate — `PitchRamp::domain_max =
+  0x3FFFF` against `unity = 0x38000` and `units_per_octave = 0x4000` — and a portamento glide is
+  summed into that capped quantity, so a slide starting above the cap is held rather than played.
+  The hardware has no such ceiling. ts::ToneGeneratorOptions::extended_interpolation removes it on
+  ts::SincInterpolator: **on by default, off in everything that verifies against the DLL** — see
+  *Where this engine departs from the reference* above for the trace and the measurements. It is
+  listed here because it is the one place a caller's configuration decides which of two instruments
+  they get.
 
   One trap worth recording: the same 4× limit is expressed twice, as `PitchRamp::domain_max` and as
   `max_increment_milli_semitones`. Lifting either alone renders **byte-identical** audio, because
-  the ramp clamps the word straight back.
+  the other clamps the value straight back.
 - **Voice stealing is an approximation.** The original's allocator was located and named during
   reverse engineering but its selection rules were never traced. The policy in ts::VoicePool — free
   slot, then oldest releasing note, then oldest held note — is an invention, isolated so it can be

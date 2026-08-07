@@ -341,6 +341,14 @@ These are all asserted in the test suite, because each one is silent when wrong:
   common case rather than the exotic one — of 131,998 archive files, 7,133 edit a reverb or chorus
   row and **4,886 of those never select a macro first** — and four of Roland's own demonstration
   disks are among them.
+- **The increment word caps a read at 4× a wave's native rate, and a glide is summed into it.**
+  `PitchRamp::domain_max = 0x3FFFF` with `unity = 0x38000` and `units_per_octave = 0x4000` is two
+  octaves exactly, and `max_increment_milli_semitones = 24000` says it again — so lifting either one
+  alone changes nothing at all, byte for byte. A note-on picks its wave for the key being *struck*,
+  so a glide starting three octaves higher is pinned at the ceiling until it descends past it, which
+  sounds like a held note rather than a slide. ts::ToneGeneratorOptions::extended_interpolation
+  lifts both on a band-limiting kernel; it is on by default and off wherever the DLL is the
+  reference.
 - **The input queue is finite and drops what will not fit.** 2048 four-byte packets between two
   drains, a channel message costing one and a SysEx of *n* bytes costing `ceil(n/3)`. It is not a
   robustness concern but a fidelity one: `darkness3.mid` opens 104 events on a single tick and the
