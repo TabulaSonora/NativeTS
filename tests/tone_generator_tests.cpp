@@ -2120,8 +2120,9 @@ TEST_CASE("the extended resampler frees the glide without brightening the note",
             double im = 0.0;
             const double w = 2.0 * std::numbers::pi * hz / rate;
             for (std::size_t i = 0; i < signal.size(); ++i) {
-                re += signal[i] * std::cos(w * static_cast<double>(i));
-                im += signal[i] * std::sin(w * static_cast<double>(i));
+                const auto value = static_cast<double>(signal[i]);
+                re += value * std::cos(w * static_cast<double>(i));
+                im += value * std::sin(w * static_cast<double>(i));
             }
             total += (re * re) + (im * im);
         }
@@ -2229,7 +2230,7 @@ TEST_CASE("an effect parameter edit lands on the current macro's row", "[tone_ge
     CHECK(worst == 0.0);
 
     // And the reverb is actually sounding, so the case cannot pass by both sides being silent.
-    const double peak =
-        *std::ranges::max_element(seeded, {}, [](float s) { return std::abs(s); });
+    const auto peak = static_cast<double>(
+        *std::ranges::max_element(seeded, {}, [](float s) { return std::abs(s); }));
     CHECK(std::abs(peak) > 0.01);
 }
