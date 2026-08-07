@@ -2175,3 +2175,61 @@ TEST_CASE("the extended resampler frees the glide without brightening the note",
         CHECK(high_extended > high_module);
     }
 }
+
+TEST_CASE("an effect parameter edit lands on the current macro's row", "[tone_generator]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+
+    // Two streams that must sound the same: one selects the power-on macro before editing a
+    // parameter, the other edits without ever selecting anything. Nothing selects a macro at reset
+    // -- the type is simply the default -- so the row an edit lands in has to already hold that
+    // macro's values rather than zeroes.
+    //
+    // The module settles this directly: rendered through `scdec`, these two streams come back
+    // byte-identical. Before the row was seeded this port had them 1159 of full scale apart, which
+    // is a whole reverb network built out of one edited byte and nine zeroes.
+    //
+    // Exactness is the right assertion here, unlike the extended-resampler case: both sides are the
+    // same code path and the same kernel, so any difference at all is the defect.
+    const auto render = [&](bool select_macro) {
+        NoteRenderer notes{rom};
+        ToneGeneratorOptions options;
+        options.ports = 1;
+        options.map = ToneMap::sc55;
+        options.extended_interpolation = false;
+        ToneGenerator generator{notes, options};
+
+        if (select_macro) {
+            generator.send_sysex(dt1({0x40, 0x01, 0x30, 4}));   // the power-on reverb macro
+        }
+        generator.send_sysex(dt1({0x40, 0x01, 0x34, 0x50}));    // reverb time
+
+        generator.send_channel(0xB0, 7, 110);
+        generator.send_channel(0xB0, 91, 127);
+        generator.send_channel(0xB0, 93, 0);
+        generator.send_channel(0xC0, 48, 0);
+        generator.send_channel(0x90, 60, 100);
+
+        std::vector<float> left(64000);
+        std::vector<float> right(64000);
+        generator.render(left, right);
+        return left;
+    };
+
+    const std::vector<float> seeded = render(true);
+    const std::vector<float> bare = render(false);
+
+    REQUIRE(seeded.size() == bare.size());
+    double worst = 0.0;
+    for (std::size_t i = 0; i < seeded.size(); ++i) {
+        worst = std::max(worst, static_cast<double>(std::abs(seeded[i] - bare[i])));
+    }
+    INFO("largest difference between the two streams: " << worst);
+    CHECK(worst == 0.0);
+
+    // And the reverb is actually sounding, so the case cannot pass by both sides being silent.
+    const double peak =
+        *std::ranges::max_element(seeded, {}, [](float s) { return std::abs(s); });
+    CHECK(std::abs(peak) > 0.01);
+}

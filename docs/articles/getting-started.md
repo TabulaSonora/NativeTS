@@ -96,6 +96,7 @@ tabula-sonora render song.mid out.wav --map 4
 | `--stream` | limit polyphony to the hardware's 64 voices |
 | `--polyphony N` | voice limit outright; `0` grows the pool on demand, and is the default |
 | `--ports 1\|2\|4` | 16, 32 or 64 parts; two is the hardware |
+| `--module-resampler` | the module's own 4-tap resampler and its 4× pitch increment ceiling, instead of the wide band-limiting one. What a render being compared against `SCCore.dll` needs; it also restores the module's held portamento |
 
 Every render goes through the block loop — there is no second renderer to choose between, and
 `--stream` no longer selects one. What it selects is the module's own voice limit, so that the

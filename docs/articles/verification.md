@@ -96,7 +96,10 @@ judging a residual against the DLL, not a test gate — nothing in the suite pas
 
 ## Where this engine departs from the reference
 
-Four cases, each deliberate, each because the hardware was measured and disagreed.
+Five cases, each deliberate, each because the hardware was measured and disagreed. Four of them are
+unconditional. The fifth is behind ts::ToneGeneratorOptions::extended_interpolation, which is on by
+default and off wherever the DLL is the reference, because it is the only one where reproducing the
+module and reproducing the hardware cannot both be done at once.
 
 **The loop's last sample.** The reference stops decoding one sample short of a loop's data end, so
 its forward loop substitutes the loop's *first* sample for the last and plays it twice per pass.
@@ -138,7 +141,35 @@ passage rides the pedal every half second over constantly re-struck notes and lo
 reference behaviour — all of them in that passage, none elsewhere in the song, each cut 20–80 ms
 after sounding.
 
-\note The last two are enforced by the digest gates rather than by tests named for them. They are
+**The pitch increment ceiling.** The module's resampler increment saturates at four times a wave's
+native rate, and a portamento glide is summed into that same quantity. A note-on picks its wave for
+the key being *struck*, so a slide beginning three octaves higher is pinned at the ceiling and does
+not move until it has descended past it. `MIDI-Corona-Baby Baby.mid` holds its bass dive for 0.6 s
+on the SC-55 map and dives properly on SC-8820, from the same file — the difference is only that the
+two maps' waves sit 10142 milli-semitones apart and one ceiling falls above where the glide starts.
+
+Nuked-SC55 on an SC-55mkII ROM set has no ceiling at any key tested to 99. It aliases badly getting
+there, but the pitch is right:
+
+| engine | glide start tracks the source key up to | plateaus from |
+|---|---|---|
+| Nuked SC-55mkII | 99, every key tested | never |
+| SC-VA, SC-55 map | 64 | 65 |
+| SC-VA, SC-8820 map | 75 | 76 |
+
+Removing the ceiling needs a kernel that can do the filtering the ceiling was standing in for, which
+is ts::SincInterpolator — fitted to the module's own 4-tap response rather than merely better than
+it, at **0.165 dB RMS** below a quarter of the sample rate, and widening with the read rate so
+rejection at the folding frequency holds at −28.3 dB from 1× to 8× where the 4-tap kernel collapses
+to −6.6 dB at 6×. Measured on `bigben.mid`, the file the ceiling was introduced for: the audible
+bands move by +0.03 to +0.18 dB and 12–14 kHz falls **16.65 dB**, which was fold-down.
+
+Unlike the four above, this one is switchable, and both oracle gates and the one-LSB self-baseline
+turn it off. A gate that left it on would be asserting the reference against a deliberate departure
+from the reference. `--module-resampler` does the same for a render.
+
+\note The last two unconditional cases are enforced by the digest gates rather than by tests named
+for them. They are
 load-bearing for a byte-identical render, so a regression in either shows up as a failed SHA-256,
 but the failure will not name the cause.
 
@@ -1522,50 +1553,17 @@ into, so this does not have to be guessed at.
 
 Stated plainly, because they are not covered by the numbers above:
 
-- **The pitch increment ceiling is corrected, and the correction is the one thing here that is not
-  the module.** The module's resampler increment saturates at four times a wave's native rate --
-  `PitchRamp::domain_max = 0x3FFFF`, with `unity = 0x38000` and `units_per_octave = 0x4000` making
-  that exactly 4.0x, and `max_increment_milli_semitones = 24000` saying the same thing again. A
-  glide's offset is summed into that quantity, and a note-on picks its wave for the key being
-  *struck*, so a slide starting three octaves higher is pinned at the ceiling and does not move at
-  all until it has descended past it.
+- **The pitch increment ceiling is corrected rather than reproduced, and it is switchable.** The
+  module clamps a resampler increment at four times a wave's native rate and a portamento glide is
+  summed into that quantity, so a slide starting above it is held rather than played. The hardware
+  has no such ceiling. ts::ToneGeneratorOptions::extended_interpolation removes it on
+  ts::SincInterpolator, on by default and off wherever the DLL is the reference — see *Where this
+  engine departs from the reference* above for the measurements. It is listed here because it is
+  the one place a caller's configuration decides which of two instruments they get.
 
-  `MIDI-Corona-Baby Baby.mid` is in the corpus at **both** map 1 and map 4 for this. Its bass dives
-  from key 71 to key 35 four times. On the SC-55 map the wave is native 39912, the ceiling lands at
-  63912 -- key 64 -- the glide needs 6.02x, and the note is held for 0.6 s before the dive is
-  audible. The same file on SC-8820 dives properly only because that map's wave is native 50054 and
-  the ceiling falls eleven semitones higher, above where the glide starts. Nothing in the file
-  differs between the two renders; the wave does.
-
-  **The hardware has no such ceiling.** Nuked-SC55 on an SC-55mkII ROM set tracks a glide's start
-  one semitone at a time to key 99 and beyond. It aliases doing it -- at key 99 the fundamental
-  carries 52.6 dB less of the total than a real key-99 note -- but the pitch is right, so the module
-  clamps where the machine it models does not.
-
-  `ToneGeneratorOptions::extended_interpolation` removes the ceiling, and `SincInterpolator` is what
-  makes that safe. The kernel is fitted to the module's own 4-tap response rather than merely being
-  better than it: a windowed sinc whose cutoff and window shoulder were chosen by least squares
-  against the averaged magnitude of the 4-tap bank, landing **0.165 dB RMS** and no worse than 0.26
-  dB anywhere below a quarter of the sample rate. Above that it diverges on purpose -- -26.2 dB
-  against -14.2 dB at Nyquist -- and it widens with the read rate, so rejection at the folding
-  frequency stays at -28.3 dB from 1x to 8x where the 4-tap kernel collapses to -6.6 dB at 6x.
-
-  The widening is why the tap count is not fixed at eight. The kernel spans `radius / scale` samples
-  each side, so a 6x read wants about fifty taps; capping at eight -- which the reference
-  implementation this borrows from does -- lets the rejection collapse at exactly the ratios the
-  thing exists to serve. It costs nothing when unused: past the radius the kernel is zero, so at 1x
-  the eight-tap and sixty-four-tap sums are the same number.
-
-  Measured on `bigben.mid`, the file the ceiling was introduced for -- a Kalimba wave asked for
-  4.80x. It does not explode; it improves. The audible bands move by +0.03 to +0.18 dB and total
-  energy by +0.02 dB, while 12-14 kHz falls **16.65 dB**. That band was fold-down, and it is gone
-  rather than merely contained.
-
-  **It is on by default and off wherever the DLL is the reference** -- both oracle gates and the
-  one-LSB self-baseline set it false, because a gate that left it on would be asserting the
-  reference against a deliberate departure from the reference. `--module-resampler` does the same
-  for a render. One trap worth recording: lifting `max_increment_milli_semitones` alone produces
-  **byte-identical** audio, because the ramp clamps the word straight back.
+  One trap worth recording: the same 4× limit is expressed twice, as `PitchRamp::domain_max` and as
+  `max_increment_milli_semitones`. Lifting either alone renders **byte-identical** audio, because
+  the ramp clamps the word straight back.
 - **Voice stealing is an approximation.** The original's allocator was located and named during
   reverse engineering but its selection rules were never traced. The policy in ts::VoicePool — free
   slot, then oldest releasing note, then oldest held note — is an invention, isolated so it can be

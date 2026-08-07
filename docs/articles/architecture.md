@@ -64,10 +64,12 @@ flowchart TD
     subgraph voice["Per-voice render &mdash; audio rate"]
         CODEC["Sampler<br/><small>block-floating-point DPCM</small>"]
         INTERP["Interpolator<br/><small>4-tap FIR, 128 phases</small>"]
+        SINC["SincInterpolator<br/><small>fitted, widening &mdash; extended mode</small>"]
         SVF["StateVariableFilter<br/><small>Chamberlin, four taps</small>"]
         TVA["TvaChain<br/><small>log-domain level chain</small>"]
         PAN["PanLaw<br/><small>exact 128-entry table</small>"]
         CODEC --> INTERP --> SVF --> TVA --> PAN
+        CODEC -.-> SINC -.-> SVF
     end
 
     subgraph control["Modulation &mdash; 100 Hz control tick"]
@@ -75,6 +77,7 @@ flowchart TD
         MOD["PartModifiers<br/><small>CC 71&ndash;78, NRPN, GS part SysEx</small>"]
         PITCH["PitchChain<br/><small>absolute milli-semitones</small>"]
         RAMP["PitchRamp<br/><small>glide, one increment per 8 samples</small>"]
+        QUEUE["input queue<br/><small>2048 packets a control tick</small>"]
         LFO["LfoEngine<br/><small>two engines, three destinations</small>"]
         TVF["TvfChain<br/><small>cutoff envelope, f and q</small>"]
         MTX -.-> PITCH & LFO & TVF
@@ -330,6 +333,19 @@ These are all asserted in the test suite, because each one is silent when wrong:
   table.
 - **The velocity level-scale is split** — one byte for the first two envelope segments, another for
   the rest. Sharing one makes later segments run about 1.45× too fast.
+- **An effect parameter edit has to land on the current macro's row.** Nothing selects a macro at
+  reset — the type is the power-on default — so a stream that edits one parameter without ever
+  selecting a macro is entitled to find that macro's values already in the row. Compiling a network
+  from the edited byte and nine zeroes instead is silent until you compare it: the module renders
+  the two streams byte-identically, and this port had them 1159 of full scale apart. It is the
+  common case rather than the exotic one — of 131,998 archive files, 7,133 edit a reverb or chorus
+  row and **4,886 of those never select a macro first** — and four of Roland's own demonstration
+  disks are among them.
+- **The input queue is finite and drops what will not fit.** 2048 four-byte packets between two
+  drains, a channel message costing one and a SysEx of *n* bytes costing `ceil(n/3)`. It is not a
+  robustness concern but a fidelity one: `darkness3.mid` opens 104 events on a single tick and the
+  module never receives the last 58 of them, so a port that accepts everything plays instruments the
+  module never selects.
 - **Every layer borrows the one below it.** ts::NoteRenderer keeps a reference to the image,
   ts::ToneGenerator one to the renderer and ts::SequencePlayer a raw pointer to the engine, so a
   host that holds the chain by value and is then moved leaves them addressing moved-from shells.
