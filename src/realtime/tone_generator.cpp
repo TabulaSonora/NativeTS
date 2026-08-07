@@ -2100,7 +2100,21 @@ void ToneGenerator::Impl::gs_bulk_dump(int block_port,
             // `part+0x12` and only then calls the melodic or the drum loader, so the selector has
             // to be in place before the program resolves. `darkness3.mid` carries 0xb0 here for
             // block 0 -- channel 10 -- which is both bits, and block 0 is the drum part.
-            part.rhythm = (value & 0x10) == 0 ? 0 : ((value & 0x20) != 0 ? 2 : 1);
+            // Bit 0x10 is use-for-rhythm, and **bit 0x40 is the map** -- not 0x20, which is what
+            // this read first. The two are separate flags rather than one selector, and reading
+            // the wrong one swaps MAP1 and MAP2.
+            //
+            // Measured with `scdec smfstate`. After a bare GS reset block 0 carries `0xb1`. Send
+            // `40 14 15 = 01` and block 4 also becomes `0xb1`, selector `0x20`, and a program
+            // change on it writes through to block 0 -- MAP1 shares the drum channel's kit slot.
+            // Send `= 02` instead and block 4 becomes `0xd1`, selector `0x21`, with block 0 left
+            // alone. So `0xb1` is 1 and `0xd1` is 2, and the differing bit is 0x40.
+            //
+            // `darkness3.mid` is where it showed: its dump puts blocks 0 to 3 on `0xb1` and block 4
+            // on `0xd1`. Read through 0x20 those came out swapped, which put block 4 on the same
+            // slot as the default drum channel -- so block 4's program 56 landed in it and channel
+            // 10 sounded the SFX kit where the module has Standard 2.
+            part.rhythm = (value & 0x10) == 0 ? 0 : ((value & 0x40) != 0 ? 2 : 1);
             if (bulk_pending_program >= 0) {
                 program_change(index, part, bulk_pending_program);
                 bulk_pending_program = -1;
