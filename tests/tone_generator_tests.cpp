@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <ranges>
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
@@ -2003,4 +2004,52 @@ TEST_CASE("a message is placed inside the buffer by its sample offset", "[stream
     CHECK(onset_at(320) - base == 320);
     CHECK(onset_at(1000) - base == 992);
     CHECK(onset_at(3200) - base == 3200);
+}
+
+TEST_CASE("the input queue drops a flush past its capacity", "[tone_generator]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // The module's ready buffer holds 2048 four-byte packets and `TG_flushMidi` discards anything
+    // that will not fit, silently. A channel message is one packet, so the 2049th note-on handed
+    // over for a single flush never reaches a part.
+    const auto sounding_after = [&](int messages) {
+        ToneGenerator generator{notes};
+        generator.send_channel(0xB0, 7, 127);
+        generator.send_channel(0xB0, 91, 0);
+        generator.send_channel(0xB0, 93, 0);
+        generator.send_channel(0xC0, 99, 0);
+
+        // Pad to one short of the bound with a controller that changes nothing, then strike. The
+        // four messages above are already charged, so the note is packet 2048 or 2049 depending on
+        // how much padding precedes it.
+        for (int i = 0; i < messages; ++i) {
+            generator.send_channel(0xB0, 7, 127);
+        }
+        generator.send_channel(0x90, 48, 127);
+
+        std::vector<float> left(4096);
+        std::vector<float> right(4096);
+        generator.render(left, right);
+        return std::ranges::any_of(left, [](float sample) { return std::abs(sample) > 1e-4F; });
+    };
+
+    CHECK(sounding_after(2043));
+    CHECK_FALSE(sounding_after(2044));
+
+    // The bound is per control tick, not per song: the same traffic spread over two ticks lands.
+    ToneGenerator generator{notes};
+    generator.send_channel(0xB0, 7, 127);
+    generator.send_channel(0xC0, 99, 0);
+    for (int i = 0; i < 2100; ++i) {
+        generator.send_channel(0xB0, 7, 127);
+    }
+    generator.send_channel_at(320, 0x90, 48, 127);
+
+    std::vector<float> left(4096);
+    std::vector<float> right(4096);
+    generator.render(left, right);
+    CHECK(std::ranges::any_of(left, [](float sample) { return std::abs(sample) > 1e-4F; }));
 }

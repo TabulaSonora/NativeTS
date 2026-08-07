@@ -277,6 +277,63 @@ struct ToneGenerator::Impl {
     /// deferral counted in host calls would drift with them.
     std::int64_t block_index = 0;
 
+    /// The module's input queue is finite, and it drops what will not fit **without saying so**.
+    ///
+    /// `TG_flushMidi` moves each ring entry into the ready buffer only `if (sVar4 < DAT_181a63492)`
+    /// and discards it otherwise -- no error, no back-pressure. That buffer is `0x181a634a0` to
+    /// `0x181a654a0`, 8192 bytes of four-byte USB-MIDI packets, and its bound is initialised to
+    /// **2048** by `_DAT_181a63490 = 0x8000000` (count in the low half, capacity in the high). Read
+    /// back out of the running engine, it is still 2048.
+    ///
+    /// A channel message is one packet; a SysEx of `n` bytes is `ceil(n / 3)`, since each packet
+    /// carries at most three data bytes. Counted that way against `darkness3.mid`'s opening tick,
+    /// the cumulative total passes 2048 at the 47th message -- 2045 before it, 2091 after -- which
+    /// is exactly where a probe watching a trailing program change stops seeing it applied.
+    ///
+    /// **This is not robustness, it is fidelity.** That file opens with 104 events on one tick:
+    /// thirty `48` patch-dump messages, thirty `49` drum-set messages, then nine program changes,
+    /// every one of them past the limit. The module never receives them, so it plays the patches
+    /// the dump chose. An engine that accepts everything plays the file's instead -- a piano where
+    /// the module plays a string ensemble -- and implementing the bulk dump correctly is what made
+    /// that audible, because before it both engines ignored the dump and agreed by accident.
+    static constexpr int flush_capacity_packets = 2048;
+
+    /// 10 ms at 32 kHz: the module's control tick, and the block the oracle harness drives it in.
+    static constexpr int control_tick_samples = 320;
+
+    std::int64_t flush_block = -1;
+    int flush_packets = 0;
+
+    /// Whether an event of `packets` fits in the flush that will carry it.
+    ///
+    /// Keyed on the control tick the event's own offset falls in, not on the block being
+    /// rendered. A caller hands over a whole stretch at once -- `SequencePlayer::dispatch_within`
+    /// walks every event up to the end of the buffer before a single sample is produced -- so
+    /// `block_index` has not moved yet and would put the entire song in one window.
+    ///
+    /// The window is a control tick because that is what the bound is actually measuring.
+    /// `DAT_181a63490` is the ready buffer's *occupancy*, not a per-message counter, and
+    /// `TG_flushMidi` never clears it: `midi_drain_ready_to_ports` empties the buffer outright
+    /// (`while (DAT_181a63490 != 0)`) on the way through `TG_Process`. So what has to fit is
+    /// whatever a host hands over between two of those drains. `TG_flushMidi` is exported and
+    /// called by the host, and the harness that renders every oracle fixture feeds a 320-sample
+    /// block, flushes, and processes -- 10 ms at 32 kHz, the module's own 100 Hz control tick.
+    ///
+    /// Charges `packets` whether or not it fits, so a message that overflows does not leave room
+    /// for a later, smaller one: the ring is walked in arrival order and the drop is positional.
+    [[nodiscard]] bool accepts(int sample_offset, int packets) noexcept
+    {
+        const std::int64_t slot =
+            (block_index * ToneGenerator::block_size + sample_offset) / control_tick_samples;
+        if (flush_block != slot) {
+            flush_block = slot;
+            flush_packets = 0;
+        }
+        const bool room = flush_packets < flush_capacity_packets;
+        flush_packets += packets;
+        return room;
+    }
+
     /// The module's output stage, run over each chunk on its way to the host.
     OutputFilter output_filter;
 
@@ -942,6 +999,10 @@ void ToneGenerator::send_channel_at(int sample_offset, int port, int status, int
     // Held for the pipeline when one is configured, applied on arrival when it is not. The module
     // always holds: `TG_ShortMidiIn` only puts the message in a ring, and nothing reaches a part
     // until `TG_Process` walks it out. See `ToneGeneratorOptions::event_delay_blocks`.
+    if (!impl_->accepts(sample_offset, 1)) {
+        return;
+    }
+
     const int stamp = impl_->stamp_milliseconds(sample_offset);
     if (impl_->options.event_delay_blocks > 0 || stamp > 0) {
         // Two separate waits, because the module has two. The stamp decides which chunk the message
@@ -1382,6 +1443,11 @@ void ToneGenerator::send_sysex_at(int sample_offset,
                                   int port,
                                   std::span<const std::uint8_t> bytes)
 {
+    // Three data bytes to a packet, which is how the module's input path carries a long message.
+    if (!impl_->accepts(sample_offset, static_cast<int>((bytes.size() + 2) / 3))) {
+        return;
+    }
+
     const int stamp = impl_->stamp_milliseconds(sample_offset);
     if (impl_->options.event_delay_blocks > 0 || stamp > 0) {
         impl_->pending_sysex.push_back(
