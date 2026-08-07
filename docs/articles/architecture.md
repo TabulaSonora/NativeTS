@@ -341,6 +341,13 @@ These are all asserted in the test suite, because each one is silent when wrong:
   common case rather than the exotic one — of 131,998 archive files, 7,133 edit a reverb or chorus
   row and **4,886 of those never select a macro first** — and four of Roland's own demonstration
   disks are among them.
+- **A drum key's assign group is a whole byte, and only zero means "no group".** The module writes
+  the raw value to `key + 0x400` and keeps a has-a-group bit beside it — `drum_setup_assign_group`
+  clears bit 3 of `key + 0x480` when the value is zero and sets it otherwise. So there is no clamp
+  at either end, and both ends of one previously bit: folding the top merged independent groups so
+  they choked each other, and folding zero *up* to 1 was worse, because zero is the overwhelmingly
+  common value. `darkness3.mid` sends it for 113 of its 128 keys, and putting all of those in one
+  choke group made each drum cut the last — a kit that sounds like a part stuck in mono.
 - **The increment word caps a read at 4× a wave's native rate, and a glide is summed into it.**
   `PitchRamp::domain_max = 0x3FFFF` with `unity = 0x38000` and `units_per_octave = 0x4000` is two
   octaves exactly, and `max_increment_milli_semitones = 24000` says it again — so lifting either one

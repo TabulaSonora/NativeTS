@@ -637,9 +637,19 @@ TEST_CASE("drum setup SysEx writes the per-key planes", "[stream][sccore]")
     // only means anything for a part that has a kit.
     CHECK_FALSE(generator.drum_setup_slot(1).level(40).has_value());
 
-    // Assign group clamps to the engine's 1-4.
+    // Assign group is stored as sent -- a whole byte, with **zero and only zero** meaning no group.
+    //
+    // `drum_setup_assign_group` writes the raw value to `key + 0x400` and keeps a has-a-group bit
+    // beside it: zero clears bit 3 of `key + 0x480`, anything else sets it. There is no clamp, and
+    // this case previously asserted one: it expected 7 to fold onto 4. Folding the top merged
+    // independent groups so they choked each other, and folding zero *up* to 1 was worse, because
+    // zero is the overwhelmingly common value -- `darkness3.mid` sends it for 113 of 128 keys --
+    // and putting them all in one group made the kit sound like a part stuck in mono.
     generator.send_sysex(dt1({0x41, 0x03, 40, 7}));
-    CHECK(generator.drum_setup(9).group(40) == 4);
+    CHECK(generator.drum_setup(9).group(40) == 7);
+
+    generator.send_sysex(dt1({0x41, 0x03, 41, 0}));
+    CHECK(generator.drum_setup(9).group(41) == 0);
 
     // The map nibble is part of the address: a MAP2 write (41 1x) lands in the buffer parts on
     // MAP2 read, and the default rhythm part is on MAP1, so nothing here may move. intro-4.mid

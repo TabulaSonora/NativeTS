@@ -2456,8 +2456,21 @@ void ToneGenerator::Impl::gs_drum_setup(int port,
                 planes.set_level(note, value);
                 break;
             case 0x03:
-                // Assign group, clamped to the engine's 1-4 (`drum_setup_assign_group`).
-                planes.set_group(note, std::clamp(value, 1, 4));
+                // Assign group, stored as sent. **Not clamped**, and neither end of the old clamp
+                // was harmless.
+                //
+                // `drum_setup_assign_group` writes the raw byte to `key + 0x400` and then keeps a
+                // has-a-group bit beside it: `param_1 == 0` clears bit 3 of `key + 0x480` and any
+                // other value sets it. So **zero means no group**, explicitly, and it is by far the
+                // common value -- `darkness3.mid` sends 0 for 113 of its 128 keys. Clamping that up
+                // to 1 put every ungrouped key into one choke group, where each drum cut the last,
+                // and a kit whose keys nearly all share a group sounds like a part stuck in mono.
+                //
+                // The upper end mattered too: that file uses groups up to 7, and folding 5, 6 and 7
+                // onto 4 made three independent groups choke each other. The comparison downstream
+                // is equality against `key.group`, which is already guarded by `!= 0`, so the raw
+                // byte is exactly what it wants.
+                planes.set_group(note, value);
                 break;
             case 0x04:
                 planes.set_pan(note, value);
