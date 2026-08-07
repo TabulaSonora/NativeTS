@@ -9,37 +9,45 @@
 namespace ts {
 namespace {
 
-/// The floor `tva_compute_env_rates` puts under segment 0 and the release.
+/// The floor under a TVA segment whose computed duration is ten milliseconds or less.
 ///
-/// Neither of those two stores a duration. Both store a **per-tick step** into a 0x10000 phase --
-/// `0xa0000 / duration_ms`, ten times the reciprocal because a control tick is 10 ms -- and the
-/// step is a `uint16` initialised to 0xffff that the division only ever replaces when the duration
-/// exceeds 10. A duration of 0 does not produce an infinite step and an instant segment; it leaves
-/// 0xffff standing, which walks the phase across in a shade over one tick.
+/// **Every** segment saturates, not only the release. `tva_compute_env_rates` and each of
+/// `tva_env_stage1/2/3_load` carry the identical branch: a segment does not store a duration, it
+/// stores a per-tick **step** into a 0x10000 phase -- `0xa0000 / duration` -- and that step is a
+/// `uint16` seeded 0xffff which the division only ever replaces when the duration exceeds 10. A
+/// duration of zero does not produce an infinite step and an instant segment; it leaves 0xffff
+/// standing. (Ghidra's header comment on `tva_compute_env_rates` says segments 1-3 store a plain
+/// duration, which is true of the storage and not of the effect -- their loaders floor it too.)
 ///
-/// Missing that made every envelope whose release rate falls off the bottom of `g_rate_curve` cut
-/// its partial dead in a single sample. Audibly: `dreaming_i_was_dreaming.mid` on channel 2, whose
-/// Syn.Bass 201 has two partials and where the one with the short release vanished at full gain
-/// 320 samples after each note-off. Eight hard steps in the first 45 seconds where the module has
-/// none, the loudest a jump of 0.535 in one sample -- a click on every note transition.
+/// Missing that made every envelope whose rate falls off the bottom of `g_rate_curve` cut its
+/// partial dead in a single sample. Audibly: `dreaming_i_was_dreaming.mid` on channel 2, whose
+/// Syn.Bass 201 has two partials and where the one with the zero release vanished at gain 0.535 one
+/// block after each note-off. Eight hard steps in the first 45 seconds where the module has none.
 ///
-/// **Applied to the release only, though segment 0 saturates the same way.** Doing both is what the
-/// listing says and it is measurably wrong: a 10 ms floor under the attack costs program 0 note 84
-/// a fifth of its peak against the module, and four more note-oracle cases with it. What segment 0
-/// has that the release does not is the second write beside the step -- `g_env_startphase_b`,
-/// indexed by the *duration* rather than by 10 when it saturates, and that table is `512/n`. So a
-/// short segment 0 is not simply a slow one: the phase it starts from scales with how short it is,
-/// and this port models no start phase at all. Flooring the duration without that is half a
-/// mechanism, and the half that hurts. The release's own start-phase write exists too, so this
-/// floor is provisional on the same table -- but the release is where the audible fault was, and
-/// a 320-sample fade lands its worst step at 160 against the module's 151.
+/// **Four milliseconds is measured, not derived.** `scdec envtrace` reads the module's own gain
+/// word through a note-off on this exact tone: the zero-release partial falls 0.535217 -> 0.401306
+/// -> 0.267395 -> 0.133484 -> 0.00001, four equal steps 32 samples apart, so 128 samples at the
+/// engine's 32 kHz. An earlier version of this reasoned its way to 320 samples instead -- one
+/// control tick, from `0x10000 / 0xffff` -- which is the right regime and 2.5x too long. Neither
+/// is audibly different on the case that motivated it; the trace is what separates them.
+///
+/// **This is a stand-in for a mechanism this port does not have, and it is only right at zero.**
+/// What actually governs the fall is the per-voice amplitude ramp, whose rate word for the current
+/// segment is `0x4000 + g_env_startphase_b[min(duration, 10)]` -- the table being `512/n`, and the
+/// index being the *duration itself* when it saturates rather than 10. So the module answers a
+/// short segment with a fast ramp: 4095 at duration zero, 51 at ten. This port applies its envelope
+/// per sample with no ramp between it and the sampler, so it has one number where the module has a
+/// family, and durations 1 to 10 will be too fast here. Doing this properly means modelling the
+/// ramp, which is also what segment 0 needs -- flooring *its* duration without the ramp costs
+/// program 0 note 84 a fifth of its peak against the module and takes four more note-oracle cases
+/// with it, which is why the floor is applied to the release alone.
 [[nodiscard]] double saturating_floor_ms(double milliseconds) noexcept
 {
     // `if (10 < duration)` in the engine, so 10 itself takes the floor too.
     constexpr double step_saturates_at = 10.0;
 
-    // 0x10000 / 0xffff ticks of 10 ms. The excess over one tick is real but below a sample.
-    constexpr double saturated_ms = 10.000152590219;
+    // 128 samples at 32 kHz, read off the module's gain word.
+    constexpr double saturated_ms = 4.0;
     return milliseconds > step_saturates_at ? milliseconds : saturated_ms;
 }
 

@@ -191,7 +191,19 @@ public:
     /// zero reads entry 256. Must be interpolated, not looked up bare.
     [[nodiscard]] std::span<const std::uint16_t> env_shape() const noexcept { return env_shape_; }
 
-    /// `g_env_startphase` — 128 entries; per-segment initial phase seed.
+    /// `g_env_startphase_b` — 128 entries, `512/n`. **Not a start phase**, despite the symbol.
+    ///
+    /// It is the rate word the per-voice **amplitude ramp** takes for the segment now running.
+    /// Every TVA stage loader writes `table[min(duration, 10)]` to `voice+0x0e`, and
+    /// `voice_block_process` hands it on as `value + 0x4000` to the ramp -- whose low twelve bits
+    /// are the rate and whose bits 12-13 select the same zero mask the volume path uses. So the
+    /// index is the segment's *duration* whenever that duration saturates (10 or less) and 10
+    /// otherwise: the module answers a short segment with a fast ramp, 4095 at zero against 51 at
+    /// ten, so the anti-zipper smoothing never outlasts the segment it is smoothing.
+    ///
+    /// **Nothing reads this yet.** This port applies its TVA envelope per sample with no ramp
+    /// between it and the sampler, which is why `saturating_floor_ms` can only stand in for the
+    /// zero case. Modelling the ramp is what a saturated segment 0 needs -- see that function.
     [[nodiscard]] std::span<const std::uint16_t> env_start_phase() const noexcept
     {
         return env_start_phase_;
