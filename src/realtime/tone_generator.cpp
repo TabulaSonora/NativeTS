@@ -1751,19 +1751,15 @@ constexpr std::array<int, 15> bulk_transitions{
 /// which writes every `40 1x pp` and reports the byte it moved. Two kinds of offset are left at -1
 /// and both matter.
 ///
-/// The first is a record byte the `40 1x` block has no address for at all -- most of
-/// `0x40c`-`0x445`, which the extended `40 4x` block reaches instead. Stepping over those loses
-/// data; guessing at them invents it.
-///
-/// The **key range** is a third kind, and the reason it is out is worth stating. `+0x3e0` and
-/// `+0x3e1` are plain whole-byte parameters and the map for them is right; what is not right yet is
-/// the *phase* of the walk that reaches them. With the record at 116 bytes every one of the sixteen
-/// blocks is now visited -- against seven before -- but the offsets still arrive carrying a
-/// neighbour's data on most parts, and `0x40` in both bounds is a one-note range that silences a
-/// part outright. `darkness3.mid` sounds all 3,607 of its notes with these two left out, 3,226 with
-/// them in at the old record length, and 1,666 with them in at the right one. Every other field in
-/// this map degrades to a wrong *value* when the phase drifts; this one deletes the performance, so
-/// it stays out until the walk is right for all sixteen parts rather than merely reaching them.
+/// The first is a record byte no part-parameter address reaches, which is most of `0x40c`-`0x443`.
+/// That is a **decision, not a gap**. It was recorded here as "reached by the extended `40 4x`
+/// block instead"; sweeping that block with `scdec partmap` says otherwise -- it lands on `+0x44d`,
+/// `+0x44f`, `+0x453`-`+0x45b`, `+0x46e` and `+0x471`, nowhere near. Searched in the binary, only
+/// fifteen of those ~58 offsets are referenced *anywhere at all*, and every one of the fifteen is
+/// read by `lfo_update`, `lfo2_update`, `mod_pitch_control`, `tvf_cutoff_add_lfo` or
+/// `voice_volume_apply`: running modulation state, recomputed each control tick. The rest are never
+/// read by anything. A dump carries them and they are correctly ignored -- `darkness3.mid` fills
+/// the whole stretch with `40 00 00 00` repeating, which is that structure at its neutral setting.
 ///
 /// The second is a byte the block *does* address but does not own outright -- a field inside a byte
 /// rather than the byte. `partmap` reports `40 1x 02` moving `+0x3d8` from `00` to `20` when it
