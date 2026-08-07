@@ -7,6 +7,31 @@
     <title>Tabula Sonora</title>
 
     <!--
+        Icons, served from the site root by Vite's public/ directory. The .ico carries 16/32/48 for
+        legacy browsers and the bookmarks bar; the PNGs are what a modern browser actually picks
+        from. Only apple-touch-icon and the maskable manifest entries are opaque — the master art
+        is a full-bleed squircle with transparent corners, which is right for a favicon drawn on an
+        unknown background and wrong where the OS composites the icon behind a mask of its own,
+        because there the corner shows through as a black wedge.
+    -->
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="48x48" href="/favicon-48x48.png" />
+    <link rel="icon" type="image/png" sizes="96x96" href="/favicon-96x96.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!--
+        The colour the browser tints its own chrome with. These are the page background from
+        losnoco.css, not the icon's orange: the bar sits directly above the page, and a colour that
+        is not the page's reads as a seam. A visitor who has forced a theme against their system
+        setting gets the system one here — the meta tag can only follow prefers-color-scheme.
+    -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F4F3F0" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#111C1A" />
+
+    <!--
         The typefaces are served from LoSnoCo's own host rather than bundled, so the connection and
         the stylesheets are worth starting before the parser reaches the links that need them.
         Nothing here carries any of the user's data: these are font files, and the DLL is read and
