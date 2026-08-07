@@ -279,13 +279,30 @@ by **0.0289** of worst-window balance against the 0.1416 a phase-aligned render 
 module by. At most a fifth of what is left is history; the other four fifths are a real difference
 in where the wet is placed, and no amount of seeding reaches them.
 
-**Nor is the reverb network itself.** `scdec revir` drives `fx_reverb_process` directly with an
-impulse, and `dump-effect reverb` does the same here: at Hall 2 the two impulse responses agree to a
-**residual of −128.7 dB against a −53.8 dB signal**, which is float rounding and nothing else. The
-output tap assignment matches too, read off the listing rather than inferred — left sums tank A and
-B at `+0x28` and `+0x20`, right at `+0x2c` and `+0x24`, exactly as this port sums them. So the wet's
-shape is right and its stereo structure is right; what is left has to be the level reaching the
-reverb or the dry path beside it, and that is where to look next.
+**Nor is the reverb network itself, and it is not even the reverb.** Three isolations, each cheap:
+
+| what was isolated | how | result |
+|---|---|---|
+| the reverb network | `scdec revir` against `dump-effect reverb`, Hall 2 | residual **−128.7 dB** on a −53.8 dB signal |
+| the chorus network | `scdec choir` against `dump-effect chorus` | residual **−108.4 dB** on a −39.9 dB signal |
+| the dry path | `panwet` with both sends zeroed in the file | worst-window balance **0.0006** |
+
+Both networks are exact to float rounding, tap for tap — the chorus's strongest samples land at 481
+and 578 on the two channels in both engines, agreeing to five decimals — and the dry path is
+identical. Zeroing the *reverb* send alone barely moves the gap (0.2206 → 0.1923); zeroing the
+*chorus* takes it to nothing.
+
+So it is the chorus, and the direction is the opposite of what this file's deviation row long
+claimed. The row said this port "pulls toward centre while the module holds the voice's side"; the
+measurement says the reverse. From 0.86 s on, **this engine holds the right side** (0.7642 → 0.9150)
+while the **module relaxes toward centre** (0.6811 → 0.7227).
+
+The cause follows from the levels. With the reverb off, the dry-only renders agree within ±0.4 dB in
+every window, while the chorus-on renders show this engine progressively quieter — −0.41 dB early,
+**−3.76 dB** by the time the wet dominates, asymptotic as the dry vanishes. **The chorus return is
+roughly 3.8 dB too quiet**, and since the dry is panned right and the return is centred, too little
+return leaves the image stuck on the right. The network being exact means the deficit is in the send
+or the return gain, not in the chorus itself.
 
 What the gate compares is length, then peak, RMS,
 per-octave level and a coarse RMS envelope — the envelope catching a note that goes missing or
