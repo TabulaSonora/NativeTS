@@ -1780,19 +1780,17 @@ constexpr std::array<int, 15> bulk_transitions{
 
 /// The last offset the linear walk covers before it moves to the next part.
 ///
-/// `0x3cc` + 116 - 1: **116 bytes**, the size the page arithmetic gave from the start -- 29 pages of
-/// 64 over sixteen parts -- and the size of the GS part block itself.
+/// The last offset a part's record reaches, past which the walk has lost sync.
 ///
-/// An earlier version put it at `0x44b` by fitting two measured pages end to end, `0x3cc`-`0x40b`
-/// and `0x40c`-`0x44b`, and reading 128 bytes off them. That over-fits: those two pages are the
-/// *start* of the walk, before any of the anchors further down have re-synchronised it, so their
-/// span says nothing about where a record ends. The cost is visible the moment the walk is traced
-/// across a real dump. At `0x44b`, `darkness3.mid` reaches seven of the sixteen blocks; at `0x43f`
-/// it reaches all sixteen.
+/// A transition leaves the cursor at `+0x3d5` and the next one falls 112 values later, so a record
+/// runs `+0x3d4` (the bank the transition itself writes) through `+0x443`. That 112 is not fitted:
+/// converted into value positions, every one of the fifteen transition addresses sits exactly 112
+/// apart, because `a3` only runs `0x00`-`0x7e` and each 64-value message fills one `a2` exactly.
+/// With page 29's four bytes per part on top it is 116, the size of the GS part block, which is
+/// where the page arithmetic started.
 ///
-/// Offsets above this are still real record bytes; they are reached by an anchor of their own
-/// rather than by running on, which is why `0x47c` has a parameter above and is not here.
-constexpr int bulk_record_end = 0x43b;
+/// This is a **guard, not an advance**. See the walk.
+constexpr int bulk_record_end = 0x443;
 
 } // namespace
 
@@ -1863,19 +1861,19 @@ void ToneGenerator::Impl::gs_bulk_dump(int block_port,
             continue;
         }
 
-        // Past a record's end the walk moves on to the next part, carrying the base with it. Past
-        // the *last* part there is nowhere to move to, and the module -- which bounds-checks
-        // nothing on this path -- keeps writing into whatever follows its array. Stop instead, and
-        // drop the walk so a later continuation cannot resume from a position that no longer means
-        // anything.
+        // Running past a record's end is desync, not a part advance. **The transitions do all the
+        // advancing** -- they fall every 112 values without exception, which is what a part's record
+        // is worth in the walk -- so a second mechanism here would advance twice and skip a part.
+        // That is exactly what it did: traced across a real dump, two blocks took their level twice
+        // and two never took it at all.
+        //
+        // The module bounds-checks nothing on this path and would keep writing into whatever
+        // follows its array. Drop the walk instead, so a later continuation cannot resume from a
+        // position that no longer means anything.
         if (bulk_record_offset > bulk_record_end) {
-            if (bulk_part_block >= 15) {
-                bulk_part_block = -1;
-                bulk_record_offset = -1;
-                return;
-            }
-            ++bulk_part_block;
-            bulk_record_offset = 0x3cc;
+            bulk_part_block = -1;
+            bulk_record_offset = -1;
+            return;
         }
 
         const int parameter = bulk_parameter_of(bulk_record_offset);
