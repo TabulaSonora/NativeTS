@@ -267,8 +267,19 @@ the fixture records it per case as `chorusLfoPhase`, and the gate places its own
 before rendering. Aligning it took `panwet.mid` — the one-note probe that exists to measure wet
 placement — from **0.2616 to 0.1416** on the balance measure, the largest single movement any figure
 there has made, and improved `rainy` and `roland_sc55_demo03` besides. Two rows went the other way
-by a few hundredths and are carried as debts. The reverb has no equivalent register that anyone has
-found, and is the obvious place to look for what is left. What the gate compares is length, then peak, RMS,
+by a few hundredths and are carried as debts.
+
+**The reverb is not the rest of it, and that is measured rather than assumed.** `fx_reverb_process`
+is a plain Schroeder/Dattorro tank with no LFO — there is no phase to align, only a DC blocker
+accumulator, an input lowpass, the tank states, and a write cursor it shares with the chorus in one
+65536-entry ring. So the question becomes how much *any* free-running state can still be worth, and
+there is a clean way to ask it: 512 warm-up blocks is exactly three chorus periods, so warm-ups of 6
+and 518 enter a song at an identical chorus phase. `panwet.mid` rendered at both still differs, but
+by **0.0289** of worst-window balance against the 0.1416 a phase-aligned render differs from the
+module by. At most a fifth of what is left is history; the other four fifths are a real difference
+in where the wet is placed, and no amount of seeding reaches them.
+
+What the gate compares is length, then peak, RMS,
 per-octave level and a coarse RMS envelope — the envelope catching a note that goes missing or
 arrives late without being sensitive to phase. The oracle audio is kept beside the fixture so a
 failure can be measured rather than only counted.
