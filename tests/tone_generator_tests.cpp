@@ -1067,6 +1067,113 @@ TEST_CASE("a partial with no release time fades rather than cutting", "[stream][
     CHECK(worst_step(held, left.size()) < 0.006);
 }
 
+TEST_CASE("the GS patch bulk dump restores a whole mixer", "[stream][sccore]")
+{
+    // `48 <a2> <a3>` is the patch bulk dump: 5,659 of 131,997 archive files carry it, and a port
+    // that ignores it renders every one of them with all sixteen parts at their defaults. It is not
+    // a set of pages -- the address is `(a2 << 8) + a3` into one continuous walk over all the
+    // parts, and most messages carry neither a part nor a destination, only a continuation of
+    // wherever the last left off.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // The payload is Roland-nibbled: two bytes a value, high nibble first.
+    const auto bulk = [](int a2, int a3, const std::vector<int>& values) {
+        std::vector<int> message{0x48, a2, a3};
+        for (const int v : values) {
+            message.push_back((v >> 4) & 0x0F);
+            message.push_back(v & 0x0F);
+        }
+        return dt1(message);
+    };
+
+    SECTION("an anchored run writes the part it names")
+    {
+        ToneGenerator generator{notes};
+
+        // `48 01 10` anchors part 0 at the top of its record, `+0x3d4`. Part 0 is **block** 0, and
+        // a block is not a channel: block 0 is channel 10, which is part index 9. Getting that
+        // backwards writes a part nobody asked about and reads a part nobody wrote.
+        //
+        // Sixteen values then walk `+0x3d4` to `+0x3e3`, which covers key shift, level, panpot,
+        // the two velocity scalings, the key range and both sends. Offsets with no `40 1x` address
+        // are stepped over, which is why the value at each index below is the one that field gets.
+        std::vector<int> record(16, 0x40);
+        record[6] = 0x4A;    // +0x3da  key shift
+        record[8] = 0x21;    // +0x3dc  part level
+        record[9] = 0x10;    // +0x3dd  panpot
+        record[10] = 0x30;   // +0x3de  velocity sense depth
+        record[11] = 0x50;   // +0x3df  velocity sense offset
+        record[12] = 0x0C;   // +0x3e0  key range low
+        record[13] = 0x60;   // +0x3e1  key range high
+        record[14] = 0x11;   // +0x3e2  chorus send
+        record[15] = 0x22;   // +0x3e3  reverb send
+        generator.send_sysex(bulk(0x01, 0x10, record));
+
+        const Part& part = generator.part(9);
+        CHECK(part.key_shift == 0x4A);
+        CHECK(part.pan == 0x10);
+        CHECK(part.velocity_depth == 0x30);
+        CHECK(part.velocity_offset == 0x50);
+        CHECK(part.key_low == 0x0C);
+        CHECK(part.key_high == 0x60);
+        CHECK(part.chorus_send == 0x11);
+        CHECK(part.reverb_send == 0x22);
+
+        // And it reached exactly one part: the walk names a part, it does not broadcast.
+        CHECK(generator.part(0).pan == ToneGenerator{notes}.part(0).pan);
+    }
+
+    SECTION("a continuation with no anchor is dropped, not walked from nowhere")
+    {
+        // The module holds its cursor in a global and does not check it. Sent this message alone
+        // after a reset it walks from whatever that global happens to hold, off the end of its part
+        // array, and faults -- reachable from a file. Here it has to do nothing at all.
+        ToneGenerator generator{notes};
+        const int before = generator.part(0).reverb_send;
+        generator.send_sysex(bulk(0x03, 0x00, std::vector<int>{0x21, 0x10, 0x30}));
+        CHECK(generator.part(0).reverb_send == before);
+        CHECK(generator.part(0).pan == ToneGenerator{notes}.part(0).pan);
+    }
+
+    SECTION("a malformed payload is refused")
+    {
+        ToneGenerator generator{notes};
+        generator.send_sysex(bulk(0x02, 0x00, std::vector<int>(64, 0x40)));
+        const int settled = generator.part(9).volume_word();
+
+        // An odd byte count cannot be nibble pairs.
+        std::vector<int> odd{0x48, 0x03, 0x00, 0x02, 0x01, 0x03};
+        generator.send_sysex(dt1(odd));
+        CHECK(generator.part(9).volume_word() == settled);
+
+        // A data byte above 0x0f is not a nibble either, and half a value is not a value.
+        std::vector<int> wide{0x48, 0x03, 0x00, 0x02, 0x71};
+        generator.send_sysex(dt1(wide));
+        CHECK(generator.part(9).volume_word() == settled);
+    }
+
+    SECTION("the walk carries across parts and stops at the last one")
+    {
+        // `48 01 10` anchors part 0 at the top of its record. Then a run long enough to cross every
+        // transition address would, on the module, keep advancing past part 15 into whatever
+        // follows the array. It has to stop instead -- and having stopped, refuse to continue.
+        ToneGenerator generator{notes};
+        generator.send_sysex(bulk(0x01, 0x10, std::vector<int>(64, 0x40)));
+        generator.send_sysex(bulk(0x1d, 0x00, std::vector<int>(64, 0x40)));
+
+        std::vector<int> huge(120, 0x40);
+        CHECK_NOTHROW(generator.send_sysex(bulk(0x1d, 0x40, huge)));
+
+        // Whatever it did, it left the engine usable rather than wandering.
+        generator.send_channel(0x90, 60, 100);
+        std::vector<float> left(2048);
+        std::vector<float> right(2048);
+        CHECK_NOTHROW(generator.render(left, right));
+    }
+}
+
 TEST_CASE("the GS delay parameter block reaches the network", "[stream][sccore]")
 {
     // `40 01 51`-`5A`, the ten bytes of the delay block, in the same order the stored preset table

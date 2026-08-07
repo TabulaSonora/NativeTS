@@ -575,6 +575,24 @@ struct ToneGenerator::Impl {
     void
     gs_part_parameter(int part_index, Part& part, int address, std::span<const std::uint8_t> data);
 
+    void gs_bulk_dump(int block_port, int address, std::span<const std::uint8_t> data);
+
+    /// The patch bulk dump's walk, carried across messages.
+    ///
+    /// `48 <a2> <a3>` is not a page, it is a position in a 16-bit address space -- the engine's
+    /// `g_sysex_addr_idx`, built as `(a2 << 8) + a3` -- and the dump is **one continuous walk** over
+    /// all sixteen parts rather than a set of independent messages. Most addresses carry no part
+    /// and no destination of their own: they simply continue from wherever the last message left
+    /// off. So a port has to hold what the module holds in `g_cur_part_base` and
+    /// `g_sysex_write_cursor`, or it cannot decode the second message at all.
+    ///
+    /// `-1` in either means no anchor has been established, and a continuation arriving in that
+    /// state is dropped. **The module does not do that** -- it walks from whatever those globals
+    /// happen to hold and reads or writes off the end of the part array. That is a real fault,
+    /// reachable from a file, and it is the one thing here deliberately not reproduced.
+    int bulk_part_block = -1;
+    int bulk_record_offset = -1;
+
     /// Whether XG System On has been seen and not since revoked.
     ///
     /// XG is a whole second parameter dialect rather than a set of extra messages, and the module
@@ -1651,19 +1669,203 @@ void ToneGenerator::Impl::dispatch_sysex(int port, std::span<const std::uint8_t>
         return;
     }
 
-    // Not reached, and one of them matters. **`48 <page> 00` is the GS patch bulk dump**: a linear
-    // image of every part's parameters, 64 bytes a message, pages 0x01-0x1d. The arithmetic closes
-    // exactly -- 29 pages of 64 is 1856 bytes, which over sixteen parts is 116 each, and the part
-    // block `40 1x 00`..`40 1x 73` is 116 bytes. A file built by dumping a configured module carries
-    // its whole mixer that way, and 5,659 files in a 131,997-file archive do. The module honours it;
-    // this engine renders those files with every part at its default. `49` is the same shape at
-    // 2,738 file-hits and its destination is not yet known.
+    // `49` carries 2,738 file-hits in the same shape as the bulk dump below, writes nothing to the
+    // part array, and its destination is still unidentified.
+    // The patch bulk dump. `48` is port A and `58` its port-B mirror, the same `0x10` bit that
+    // separates `40` from `50`.
+    if (a1 == 0x48 || a1 == 0x58) {
+        gs_bulk_dump(block_port, (a2 << 8) | a3, data);
+        return;
+    }
+
     if (a1 == 0x41 || a1 == 0x51) {
         // Drum setup: a2 is (map << 4) | parameter, a3 the first key. The map nibble picks which
         // of the two per-map setup buffers the module writes -- bit 12 of the address index, so
         // only its low bit counts -- and parts read the buffer of the map they are assigned to.
         gs_drum_setup(block_port, (a2 >> 4) & 1, a2 & 0x0F, a3, data);
         return;
+    }
+}
+
+namespace {
+
+/// Where a bulk-dump address anchors the walk: a part, a record offset, or only one of the two.
+///
+/// Transcribed from `sysex_dt1_addr_dispatch @ 180079a20`, and where that function reaches a
+/// handler this engine has no equivalent for, from `scdec bulkmap` -- which sends a page carrying
+/// its own position index and reads the destination off the part array. `48 01 00` is the second
+/// kind: the dispatcher hands it to `system_set_block_then_partmap`, and what it observably does is
+/// anchor part 0 at `+0x3cc`. It is also the address every real dump starts its parts with, so
+/// leaving it out drops the whole walk at the first message.
+struct BulkAnchor {
+    int address;
+    int block;   ///< -1 keeps the part the walk is already on.
+    int offset;
+};
+
+/// The region starts. The offset cycles 0x40c, 0x41c, 0x42c, 0x43c as the part advances, which is
+/// the same four-parts-per-group shape the transition strides show.
+constexpr std::array<BulkAnchor, 24> bulk_anchors{{
+    {0x0100, 0, 0x3cc},  {0x0110, 0, 0x3d4},  {0x0200, 0, 0x40c},  {0x0300, -1, 0x3dc}, {0x0400, 1, 0x41c},
+    {0x0500, -1, 0x3ec}, {0x0600, 2, 0x42c},  {0x0800, 3, 0x43c},  {0x0900, 4, 0x40c},
+    {0x0b00, 5, 0x41c},  {0x0c00, -1, 0x3ec}, {0x0d00, 6, 0x42c},  {0x0f00, 7, 0x43c},
+    {0x1000, 8, 0x40c},  {0x1100, -1, 0x3dc}, {0x1300, 9, 0x41c},  {0x1400, 10, 0x42c},
+    {0x1500, -1, 0x3fc}, {0x1600, 11, 0x43c}, {0x1700, 12, 0x40c}, {0x1950, 13, 0x41c},
+    {0x1a00, -1, 0x3ec}, {0x1c00, 14, 0x42c}, {0x1d00, 15, 0x43c},
+}};
+
+/// The addresses at which `part_param_write_all` advances to the next part itself.
+///
+/// A stride of 0x1e0 inside a group of four parts and 0x160 between groups. These are mid-walk, so
+/// the dispatcher above leaves them alone and the byte writer does the work: the byte carries the
+/// next part's bank MSB and the cursor restarts at that part's `+0x3d5`.
+constexpr std::array<int, 15> bulk_transitions{
+    0x0270, 0x0450, 0x0630, 0x0810, 0x0970, 0x0b50, 0x0d30, 0x0f10,
+    0x1070, 0x1250, 0x1430, 0x1610, 0x1770, 0x1950, 0x1b30,
+};
+
+/// A record offset's GS part-parameter address, or -1 for one this engine must not write.
+///
+/// The walk is over the module's own part struct, so the map is the inverse of `scdec partmap`,
+/// which writes every `40 1x pp` and reports the byte it moved. Two kinds of offset are left at -1
+/// and both matter.
+///
+/// The first is a record byte the `40 1x` block has no address for at all -- most of
+/// `0x40c`-`0x445`, which the extended `40 4x` block reaches instead. Stepping over those loses
+/// data; guessing at them invents it.
+///
+/// The second is a byte the block *does* address but does not own outright. `partmap` reports
+/// `40 1x 02` moving `+0x3d8` from `00` to `20` when it wrote `33`, and `40 1x 14` moving `+0x3d9`
+/// from `81` to `82` -- both **packed**, a field inside a byte rather than the byte. Copying a
+/// dump's raw byte through the parameter handler sets the whole thing, and `+0x3d8`/`+0x3d9` carry
+/// the Rx channel and the melodic/drum selector: `darkness3.mid` came out with every melodic part
+/// deaf. `+0x446` (`40 1x 26`) and `+0x44c` (`40 1x 60`) are packed the same way. Until the packing
+/// is decoded these are dropped rather than half-applied.
+[[nodiscard]] constexpr int bulk_parameter_of(int offset) noexcept
+{
+    if (offset >= 0x3e4 && offset <= 0x3eb) {
+        return 0x30 + (offset - 0x3e4);   // the eight tone modifiers
+    }
+    if (offset >= 0x3ee && offset <= 0x3f9) {
+        return 0x40 + (offset - 0x3ee);   // the twelve scale-tuning bytes
+    }
+    switch (offset) {
+    case 0x3da: return 0x16;   // key shift
+    case 0x3dc: return 0x19;   // part level
+    case 0x3dd: return 0x1C;   // panpot
+    case 0x3de: return 0x1A;   // velocity sense depth
+    case 0x3df: return 0x1B;   // velocity sense offset
+    case 0x3e0: return 0x1D;   // key range low
+    case 0x3e1: return 0x1E;   // key range high
+    case 0x3e2: return 0x21;   // chorus send
+    case 0x3e3: return 0x22;   // reverb send
+    case 0x3fa: return 0x1F;   // CC1 controller number
+    case 0x3fb: return 0x20;   // CC2 controller number
+    case 0x44a: return 0x2C;   // delay send
+    case 0x44b: return 0x38;   // the ninth tone-modify slot
+    case 0x47c: return 0x50;
+    default: return -1;
+    }
+}
+
+/// The last offset the linear walk covers before it moves to the next part.
+///
+/// The run is `0x3cc`-`0x44b`, 128 bytes, which is exactly the two messages measured against the
+/// module: one anchored at `0x3cc` covering `0x3cc`-`0x40b` and the next at `0x40c` covering
+/// `0x40c`-`0x44b`. Past it the walk carries the part along -- confirmed by anchoring `48 02 00`
+/// and sending 64 bytes, after which `48 03 00` lands on part **1** rather than part 0.
+///
+/// Offsets above this are still real record bytes; they are simply reached by an anchor of their
+/// own rather than by running on, which is why `0x47c` has a parameter above and is not here.
+constexpr int bulk_record_end = 0x44b;
+
+} // namespace
+
+void ToneGenerator::Impl::gs_bulk_dump(int block_port,
+                                       int address,
+                                       std::span<const std::uint8_t> data)
+{
+    // Roland's ordinary nibble packing: two data bytes per value, high nibble first. Real files
+    // send 128 bytes for 64 values, and every byte is 0x0-0xf -- which is how the shape was first
+    // recognised in the archive, and what a raw-versus-packed probe against the module confirmed.
+    if (data.size() % 2 != 0) {
+        return;
+    }
+    for (const std::uint8_t byte : data) {
+        if (byte > 0x0F) {
+            return;
+        }
+    }
+
+    // Anchor, if this address is one. An address in neither table continues the walk -- and if no
+    // walk has been established, there is nothing to continue and the message is dropped.
+    for (const BulkAnchor& anchor : bulk_anchors) {
+        if (anchor.address != address) {
+            continue;
+        }
+        if (anchor.block >= 0) {
+            bulk_part_block = anchor.block;
+        }
+        bulk_record_offset = anchor.offset;
+        break;
+    }
+    if (bulk_part_block < 0 || bulk_record_offset < 0) {
+        return;
+    }
+
+    const std::size_t count = data.size() / 2;
+    for (std::size_t i = 0; i < count; ++i) {
+        const int value = (data[i * 2] << 4) | data[(i * 2) + 1];
+        const int here = address + static_cast<int>(i);
+
+        if (std::find(bulk_transitions.begin(), bulk_transitions.end(), here)
+            != bulk_transitions.end()) {
+            // The walk moves to the next part and this byte is its bank MSB. Past part 15 there is
+            // no next part; the module would carry on into whatever follows the array.
+            if (bulk_part_block >= 15) {
+                bulk_part_block = -1;
+                bulk_record_offset = -1;
+                return;
+            }
+            ++bulk_part_block;
+            bulk_record_offset = 0x3d5;
+
+            // The byte is the new part's bank MSB. It is stored and **not** acted on: the module
+            // separates the tone-number byte from the program change, which arrives ten bytes later
+            // through its own case and calls `part_program_change` or `drum_part_program_change`.
+            // That second half is not implemented here, so a dump currently restores a mixer's
+            // levels and routing but not its tone selection -- see the note on `bulk_parameter_of`.
+            const int index =
+                part_of(block_port, sequence_builder::channel_from_block(bulk_part_block));
+            parts[static_cast<std::size_t>(index)].bank = value;
+            continue;
+        }
+
+        // Past a record's end the walk moves on to the next part, carrying the base with it. Past
+        // the *last* part there is nowhere to move to, and the module -- which bounds-checks
+        // nothing on this path -- keeps writing into whatever follows its array. Stop instead, and
+        // drop the walk so a later continuation cannot resume from a position that no longer means
+        // anything.
+        if (bulk_record_offset > bulk_record_end) {
+            if (bulk_part_block >= 15) {
+                bulk_part_block = -1;
+                bulk_record_offset = -1;
+                return;
+            }
+            ++bulk_part_block;
+            bulk_record_offset = 0x3cc;
+        }
+
+        const int parameter = bulk_parameter_of(bulk_record_offset);
+        ++bulk_record_offset;
+        if (parameter < 0) {
+            continue;
+        }
+
+        const int index =
+            part_of(block_port, sequence_builder::channel_from_block(bulk_part_block));
+        const std::array<std::uint8_t, 1> one{static_cast<std::uint8_t>(value)};
+        gs_part_parameter(index, parts[static_cast<std::size_t>(index)], parameter, one);
     }
 }
 

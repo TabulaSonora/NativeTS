@@ -82,6 +82,20 @@ SONGS = [
     ("pchoral3.mid", 4),
     ("rockarn12.mid", 4),
 
+    # The GS patch bulk dump, `48 <a2> <a3>` -- 402 files in a 132,006-file archive carry it, and
+    # until it was implemented every one of them rendered with all sixteen parts at their defaults.
+    # `ntysoypr` and `darkness3` send the complete sequence (29 and 30 messages, `48 00 00` through
+    # `48 1c 00` / `1d 00`); `wwtbam` sends two, a partial restore rather than a whole mixer.
+    #
+    # The synthetic exercisers beside them in `specv2/testdata/bulkdump` are deliberately **not**
+    # here. They drive an unanchored continuation, a malformed payload, and a walk past the last
+    # part -- and the module faults on all three, so there is no reference render to compare
+    # against. That is the point of them: they are unit-test fixtures for behaviour this engine has
+    # on purpose and the module does not.
+    ("ntysoypr.mid", 4),
+    ("darkness3.mid", 4),
+    ("wwtbam.mid", 4),
+
     # Roland's own demonstration disks, at the map each was written for. These are the general
     # fidelity backbone rather than a feature hunt: they are densely and competently sequenced by
     # the people who built the module, so they exercise ordinary playing -- twenty programs at a
