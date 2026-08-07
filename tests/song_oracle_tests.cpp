@@ -409,7 +409,11 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         // this engine stop matching it -- see `ToneGeneratorOptions::extended_interpolation`. A
         // gate that left it on would be asserting the reference against a deliberate departure
         // from the reference.
-        options.extended_interpolation = false;
+        //
+        // `TS_EXTENDED` turns it back on for a run, which is a measurement rather than a gate:
+        // it answers how far the correction actually moves this corpus, and whether that distance
+        // is inside the tolerances at all. Recorded in `docs/articles/verification.md`.
+        options.extended_interpolation = std::getenv("TS_EXTENDED") != nullptr;
         options.map = static_cast<ToneMap>(entry.at("map").get<int>());
         ToneGenerator generator{notes, options};
 

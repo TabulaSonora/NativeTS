@@ -189,8 +189,28 @@ bands move by +0.03 to +0.18 dB and 12–14 kHz falls **16.65 dB**, which was fo
 who has not asked for the module's defects should not get them. It is turned **off** by everything
 that verifies against `SCCore.dll` — both oracle gates, the one-LSB self-baseline, and
 `--module-resampler` for a render — because a gate that left it on would be asserting the reference
-against a deliberate departure from the reference, and would fail on purpose. That is the whole rule:
-on for listening, off for verifying.
+against a deliberate departure from the reference. On for listening, off for verifying.
+
+**How far off the reference the correction actually is: less than the gate can see.** `TS_EXTENDED`
+runs the song gate with it on, which is a measurement rather than a gate, and the answer is that the
+whole 36-song corpus stays inside the existing tolerances. The same rows fail, the same number of
+assertions fail, and no row crosses a boundary in either direction:
+
+| song | peak with the module's resampler | with the correction | moved |
+|---|---|---|---|
+| `bigben.mid` map 4 | 0.625977 | 0.633575 | +0.0076 |
+| `onestop.mid` map 4 | 0.772522 | 0.777924 | +0.0054 |
+| `roland_allstars.mid` map 1 | 0.564178 | 0.567413 | +0.0032 |
+| `ff5_1_16_harvest.mid` map 4 | 0.261566 | 0.264526 | +0.0030 |
+
+Worst movement across all 23 rows that report a peak is **0.0076, against a tolerance of 0.01** —
+and it is `bigben`, which is the 4.80× case and so exactly where the correction should show most.
+
+That is worth stating plainly because it bounds what the switch is for. The correction is *audible*
+on the case that motivated it — a three-octave dive that holds for 0.6 s instead of sliding — and it
+is *statistically invisible* on ordinary material, which is what fitting the kernel to the module's
+own response was meant to achieve. The gates keep it off on principle rather than out of necessity:
+they would still pass with it on, but they would no longer be measuring what they claim to measure.
 
 \note The last two unconditional cases are enforced by the digest gates rather than by tests named
 for them. They are

@@ -421,7 +421,7 @@ constexpr std::array<KnownDrumDeviation, 19> known_drum_deviations{{
     // And the module's resampler. `extended_interpolation` defaults on because it corrects a defect
     // the module has against the hardware it models; leaving it on here would compare the module
     // against a deliberate departure from the module.
-    options.extended_interpolation = false;
+    options.extended_interpolation = std::getenv("TS_EXTENDED") != nullptr;
     ToneGenerator generator{notes, options};
 
     // The harness renders 8 x 512 frames after the reset and throws them away. Nothing sounds yet,
