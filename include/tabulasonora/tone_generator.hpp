@@ -357,6 +357,15 @@ public:
     /// The drum kit a part would sound, or -1 if it is not a drum part.
     [[nodiscard]] int part_drum_kit(int index) const noexcept;
 
+    /// The MIDI channel a part listens on, zero-based.
+    ///
+    /// **Not the part's index.** Parts are matched by their receive channel rather than indexed by
+    /// it -- `dispatch_channel` walks the list looking for a match -- because GS can point several
+    /// parts at one channel or detach a part from every channel. A mixer that labels a row with its
+    /// slot number is therefore labelling something else, and will disagree with the file as soon
+    /// as a bulk dump or a `40 1x 02` moves a part.
+    [[nodiscard]] int part_rx_channel(int index) const noexcept;
+
     /// Silences everything and returns every part to its power-on state.
     void reset();
 

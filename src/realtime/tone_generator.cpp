@@ -920,6 +920,12 @@ bool ToneGenerator::part_is_drum(int index) const noexcept
     return impl_->is_drum_part(clamped);
 }
 
+int ToneGenerator::part_rx_channel(int index) const noexcept
+{
+    const int clamped = std::clamp(index, 0, static_cast<int>(impl_->parts.size()) - 1);
+    return impl_->parts[static_cast<std::size_t>(clamped)].rx_channel;
+}
+
 int ToneGenerator::part_drum_kit(int index) const noexcept
 {
     if (!part_is_drum(index)) {

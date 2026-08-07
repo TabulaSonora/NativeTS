@@ -90,6 +90,7 @@ void StreamingSource::capture(EngineSnapshot& into) const
 
         // Asked of the engine rather than inferred from the channel number, because under XG both
         // of these move while the music plays.
+        slot.rx_channel = generator_.part_rx_channel(static_cast<int>(i));
         slot.drums = generator_.part_is_drum(static_cast<int>(i));
         slot.kit = generator_.part_drum_kit(static_cast<int>(i));
         slot.map = static_cast<int>(generator_.part_tone_map(static_cast<int>(i)));

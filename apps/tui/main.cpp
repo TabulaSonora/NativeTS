@@ -307,7 +307,6 @@ struct Ui {
 
     for (std::size_t row_index = 0; row_index < listed.size(); ++row_index) {
         const int part_index = listed[row_index];
-        const int channel = part_index % 16;
         const int port = part_index / 16;
         const ts::player::PartSnapshot& part = state.parts[static_cast<std::size_t>(part_index)];
         // From the engine, not from the channel number: GS reroutes a part to the drum path over
@@ -325,6 +324,11 @@ struct Ui {
             // better beside a channel number than two numbers would.
             number << ' ' << static_cast<char>('A' + port) << "   ";
         }
+        // The channel the part *listens on*, from the engine -- not the slot it occupies. Parts are
+        // matched by receive channel rather than indexed by it, so the two part company as soon as
+        // anything moves a part, and a row labelled by slot then names a channel the file is not
+        // addressing.
+        const int channel = part.rx_channel;
         number << (channel + 1 < 10 ? " " : "") << (channel + 1);
 
         Element row = hbox({

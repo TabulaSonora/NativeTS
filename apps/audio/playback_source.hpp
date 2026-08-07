@@ -32,6 +32,13 @@ struct PartSnapshot {
     /// The kit sounding on a drum part, or -1.
     int kit = -1;
 
+    /// The MIDI channel this part listens on, zero-based -- **not** its slot.
+    ///
+    /// A mixer row has to be labelled with this. The two agree until something moves a part, and
+    /// then they do not: `darkness3.mid`'s bulk dump writes every part's receive channel, and a row
+    /// labelled by slot silently claims the wrong one for anything the dump rearranges.
+    int rx_channel = 0;
+
     /// The tone map this part's program resolves against, as `ToneMap`.
     ///
     /// Per part and per moment: a bank LSB names a vintage and XG System On moves every part to the
