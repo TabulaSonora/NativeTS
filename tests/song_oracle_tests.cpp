@@ -429,6 +429,23 @@ TEST_CASE("a whole song matches the reference DLL's own render", "[song][oracle]
         // it answers how far the correction actually moves this corpus, and whether that distance
         // is inside the tolerances at all. Recorded in `docs/articles/verification.md`.
         options.extended_interpolation = std::getenv("TS_EXTENDED") != nullptr;
+
+        // The module's own timing, for the same reason `extended_interpolation` is turned off
+        // above: this file measures against `SCCore.dll`, so it wants the engine the module is,
+        // not the engine that is convenient to write unit tests against.
+        //
+        // Both default off, and both belong on here. `ToneGeneratorOptions::event_delay_blocks`
+        // says so outright -- "anything compared against the oracle wants these three on" -- and
+        // the note gate has set them since it was written. This gate did not, so every song has
+        // been compared against a reference whose events land 128 samples later than ours and
+        // which carries an output stage we skipped. Measured directly on 2026-08-08: a note-on
+        // sounds four 32-sample chunks earlier here than in the module, which is exactly the
+        // staging `TG_ShortMidiIn` and `TG_Process` do before a message reaches a part.
+        //
+        // Not turned on by `TS_EXTENDED`-style opt-in, because unlike the interpolator these are
+        // not a deliberate departure from the module -- they are the module.
+        options.event_delay_blocks = 4;
+        options.bypass_output_filter = false;
         options.map = static_cast<ToneMap>(entry.at("map").get<int>());
         ToneGenerator generator{notes, options};
 

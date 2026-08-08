@@ -483,6 +483,14 @@ int render_command(int chorus_phase,
         engine_options.delay = options.delay;
         engine_options.efx = options.efx;
         engine_options.extended_interpolation = options.extended_interpolation;
+        // The module's own timing, always. `render-note` above has set these since it was written
+        // and this path never did, so a song rendered here started every note four 32-sample
+        // chunks earlier than `SCCore.dll` would have and skipped the output stage the module
+        // always runs. Both are the module rather than an option on it -- `TG_ShortMidiIn` only
+        // rings a message and `TG_Process` walks it out on a later chunk -- so there is nothing to
+        // switch off. Measured against the oracle at 128 samples on 2026-08-08.
+        engine_options.event_delay_blocks = 4;
+        engine_options.bypass_output_filter = false;
         engine_options.reverb_type = options.reverb_type;
         engine_options.chorus_type = options.chorus_type;
         engine_options.delay_type = options.delay_type;
