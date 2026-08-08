@@ -23,6 +23,17 @@ struct DrumKey {
     int group = 0;
     /// Pan position, per key.
     int pan = 0;
+    /// Reverb send depth for this key, 0-127, scaling the part's own send rather than replacing it.
+    ///
+    /// This is per *key*, not per part, and the difference is audible: in `STANDARD 1` the kick
+    /// (36) reads 0 while the snare (38) and crash (49) read 127, so a kit with the part's send
+    /// wide open still has a dry kick. Applying the part's send uniformly puts a room on the one
+    /// drum the module deliberately keeps out of it.
+    ///
+    /// Measured against the module, which multiplies the two: driving key 36 with the send at
+    /// CC91 64 and 127 against per-key 64 and 127 gives reverb tails 0.0012, 0.0024, 0.0024 and
+    /// 0.0048 — doubling either input doubles the tail, and a zero on either side is silence.
+    int reverb = 0;
     /// Whether this key responds to note-off at all — GS `Rx.Note Off`, per key.
     ///
     /// Almost none do. A drum is a struck sound whose envelope is its whole story, so releasing it
@@ -160,7 +171,10 @@ private:
     static constexpr int pitch_plane = 0x180;
     static constexpr int group_plane = 0x200;
     static constexpr int pan_plane = 0x280;
-    // 0x300 reverb depth, 0x380 chorus depth, 0x400 delay depth — per key, and not yet wired.
+    static constexpr int reverb_plane = 0x300;
+    // 0x380 chorus depth, 0x400 delay depth — per key, and still not wired. Only the reverb plane
+    // has been measured against the module; the other two are read the same way when someone does
+    // the same measurement for them.
     /// Receive flags. Bit 0 is `Rx.Note Off`; the byte otherwise reads 0x10 across every kit.
     static constexpr int receive_plane = 0x480;
     /// Twelve ASCII bytes naming the kit.

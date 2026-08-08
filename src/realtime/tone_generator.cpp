@@ -2858,9 +2858,13 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // expression but not with pan -- matching the engine's mono send bus.
     // Read off the voice's slewed levels, not the part's targets: a send that has just been turned
     // down is still feeding the bus on its way there, and one just turned up is not yet at full.
-    const double to_reverb = !efx_part && reverb && voice.reverb_send() > 0.0
-                                 ? Reverb::send_gain(voice.reverb_send())
-                                 : 0.0;
+    // The per-key depth multiplies the part's send rather than replacing it, which is what the
+    // module does: hold key 36 at CC91 64 and 127 against per-key 64 and 127 and the reverb tail
+    // reads 0.0012, 0.0024, 0.0024, 0.0048 -- a product, and silence whenever either side is 0.
+    // For a melodic voice the scale is 1.0, so this is the part's send unchanged.
+    const double reverb_level = voice.reverb_send() * voice.key_reverb_scale();
+    const double to_reverb =
+        !efx_part && reverb && reverb_level > 0.0 ? Reverb::send_gain(reverb_level) : 0.0;
     const double to_chorus = !efx_part && chorus && part.chorus_send_level() > 0.0
                                  ? Chorus::send_gain(part.chorus_send_level())
                                  : 0.0;
@@ -3475,6 +3479,9 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     if (const std::optional<int> level = planes.level(note)) {
         kit_key.level = *level;
     }
+    if (const std::optional<int> reverb = planes.reverb(note)) {
+        kit_key.reverb = *reverb;
+    }
     if (const std::optional<int> group = planes.group(note)) {
         kit_key.group = *group;
     }
@@ -3603,6 +3610,7 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.level_gain = level_gain;
         setup.mute_group = key.group;
         setup.drum_receives_note_off = key.receives_note_off;
+        setup.key_reverb = key.reverb;
 
         PendingVoice pending;
         pending.slot = allocate_slot(channel, note, velocity, group);
