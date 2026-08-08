@@ -2946,6 +2946,30 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
         };
 
     if (chorus) {
+        // The send buses as the effects receive them, for comparison against the module's own.
+        //
+        // `scdec chorusin` reads the module's at 0x181a19070 (chorus) and 0x181a190f0 (delay) --
+        // the arguments `fx_process_block` loads into rdx before each stage. Those had been taken
+        // for the left and right of one stereo chorus, which is why the chorus input never appeared
+        // to respond to CC#93: every earlier read was of the delay's bus. Printing this port's at
+        // the same point makes the two directly comparable, which is what the 5.79x panwet deficit
+        // has been missing -- every coefficient on the path already matches.
+        static const bool probe_buses = std::getenv("TS_SEND_BUS_PROBE") != nullptr;
+        if (probe_buses) {
+            const auto stats = [](std::span<const float> bus) {
+                double peak = 0.0;
+                double sum = 0.0;
+                for (const float v : bus) {
+                    peak = std::max(peak, std::abs(static_cast<double>(v)));
+                    sum += static_cast<double>(v) * static_cast<double>(v);
+                }
+                return std::pair{peak, std::sqrt(sum / static_cast<double>(bus.size()))};
+            };
+            const auto [cp, cr] = stats(chorus_bus);
+            const auto [dp, dr] = stats(delay_bus);
+            std::fprintf(stderr, "sendbus: chorus peak=%.9f rms=%.9f  delay peak=%.9f rms=%.9f\n",
+                         cp, cr, dp, dr);
+        }
         chorus->process(chorus_bus, wet_left, wet_right, chorus_mono);
         add(&chorus_level_ramp, chorus_level);
         scale_feed(chorus_to_reverb_ramp, chorus_to_reverb_level, chorus_mono, chorus_to_reverb);
