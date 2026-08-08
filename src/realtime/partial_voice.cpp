@@ -214,6 +214,7 @@ void PartialVoice::start(VoiceSetup&& setup)
     pitch_ramp_.set_extended(extended_);
     is_drum_ = setup.is_drum;
     drum_receives_note_off_ = setup.drum_receives_note_off;
+    key_reverb_ = setup.key_reverb;
     level_gain_ = setup.level_gain;
     pan_ = setup.pan;
     pan_follows_part_ = setup.pan_follows_part;
