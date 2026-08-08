@@ -372,6 +372,26 @@ int pitch_command(const std::string& path,
                   << "    pitch_word    "
                   << pitch_ramp_word(static_cast<int>(base + sustain - native))
                   << "   (g_voice_ramp_pitch cur/tgt; 1 unit = 375/512 mst)\n";
+
+        // Both LFOs, and specifically whether either takes one of the three random shapes.
+        //
+        // A random shape puts the partial on the engine's *shared* generator, and draw order is
+        // global: `EngineNoise` notes that anything consuming a draw it should not shifts every
+        // later one. So this answers a question the rest of the dump cannot -- whether a patch can
+        // perturb voices other than its own -- which is why it is worth printing beside the pitch
+        // chain rather than only in a trace.
+        const auto [lfo1, lfo2] = renderer.lfo().configure(tone_number, partial, {});
+        const auto lfo_line = [](const char* name, const ts::LfoConfig& c) {
+            std::cout << "    " << name << " waveform " << c.waveform
+                      << (ts::LfoEngine::is_random(c.waveform) ? "  RANDOM (shared generator)"
+                                                               : "  (deterministic)")
+                      << "\n        phase " << c.initial_phase << "  rate " << c.increment
+                      << "  delay " << c.delay_rate << "  fade " << c.fade_rate << '\n'
+                      << "        depths: pitch " << c.pitch_depth << "  tvf " << c.tvf_depth
+                      << "  tva " << c.tva_depth << '\n';
+        };
+        lfo_line("lfo1", lfo1);
+        lfo_line("lfo2", lfo2);
     }
     return 0;
 }
