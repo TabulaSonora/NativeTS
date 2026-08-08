@@ -30,6 +30,20 @@ namespace ts {
 /// interpolation weight is zero, the output is the previous input, and the allpass contributes
 /// nothing to what is heard. That is not a reason to leave it out -- it is a real sample of latency
 /// against the oracle, and the filter stops being a plain delay the moment the ratio is not one.
+///
+/// Read as a resampler rather than a filter, the shape explains itself: the allpass supplies the
+/// odd-index sample of a 2x oversampled grid and the lerp runs on that grid, so this is a **band-
+/// limited linear interpolator** -- most of a real interpolating filter's stopband for one
+/// multiply-add. `1/3` is `(1-d)/(1+d)` at `d = 0.5`, which is why it does not move with the rate.
+///
+/// **This is not a candidate for a peak or gain discrepancy against the oracle, and was measured
+/// out as one on 2026-08-08.** Every probe and both fixture generators run the DLL at 32 kHz, where
+/// the ratio is 1 and the table above applies: peak and rms both unchanged to six figures. It only
+/// starts colouring anything off 1:1 -- +1.5% peak at 44.1 kHz, +1.0% at 48 kHz. The module seeds
+/// its phase at `1e-5` where this seeds at `0.0`, and at 32 kHz that difference is worth a max
+/// sample delta of 5.4e-06, 0.000365% of peak. It cannot account for the two open
+/// peak-moves-but-rms-does-not cases, which need ~49% and ~30%. specv2's FINDINGS carries the
+/// working under *The output stage is a 2x oversampled linear interpolator*.
 class OutputFilter {
 public:
     /// The allpass coefficient, constant across host rates.
