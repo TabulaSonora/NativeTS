@@ -42,6 +42,23 @@ struct DrumKey {
     /// doubles the wet amplitude. It has to be measured over the hit rather than after it: a
     /// chorus is a twenty to thirty millisecond modulated delay and leaves no tail where reverb
     /// and delay leave one.
+    ///
+    /// The plane locations are the ones specv2's FINDINGS records from the NRPN sweep — `0x1D`
+    /// reverb at `+0x300`, `0x1E` chorus at `+0x380`, `0x1F` delay at `+0x400`, found by diffing
+    /// the whole 0x50C record either side of every MSB rather than by looking where a plane was
+    /// expected.
+    ///
+    /// **Not modelled here, and recorded there:** `0x1E` and `0x1F` also write flag bit 3 at
+    /// `+0x480`, with opposite polarity — chorus sets it when the value is zero, delay when it is
+    /// non-zero, last writer wins. That reads as a module bug rather than a design, and this port
+    /// takes the depth planes without it.
+    ///
+    /// The corpus tests this through `ff5_1_16_harvest.mid`, and only through it. That file's drum
+    /// channel selects bank LSB 1 — the SC-55 map — and opens CC#93 to 127 with CC#94 at 0, so the
+    /// part's chorus send is wide open over a kit whose per-key depths are non-zero. The SC-55 kits
+    /// enable chorus by default where the SC-88 kits mostly set it to 0, so an SC-88 bank exercises
+    /// this plane far more weakly even when a file opens the same send. Wiring reverb alone broke
+    /// that row and wiring all three fixed it, which is the check to repeat if any of this changes.
     int chorus = 0;
     /// Delay send depth for this key, on the same law again.
     ///
