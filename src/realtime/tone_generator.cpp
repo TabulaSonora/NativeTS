@@ -970,6 +970,19 @@ void ToneGenerator::reset()
         impl_->delay->reset();
     }
 
+    // The generator is reseeded *here* and nowhere else, because power-on is the only place the
+    // module reseeds it: `engine_init_tasks_ports @180084c60` writes 0xEFA6/0x9C23, and it is
+    // reached only from `TG_initialize @1800888a0`. A GS Reset in the stream does not -- measured,
+    // not inferred, with `scdec resetstate`: the LFSR reads 0xE9E7/0xF13C going into a reset and
+    // 0xBA79/0xC4F1 after it, never returning to the seed. That is why the same note renders
+    // differently the second time through one instance, at about -51 dB, and why a batch of notes
+    // through one instance cannot reproduce one-note-per-instance renders.
+    //
+    // Without this the reset was neither of the module's two behaviours: it dropped the effect
+    // tails, which only power-on does, while keeping the draw position, which only an in-stream
+    // reset does. `stream_reset` is the other one and correctly leaves both alone.
+    impl_->notes->noise().reset();
+
     std::fill(impl_->drum_kit.begin(), impl_->drum_kit.end(), 0);
     for (DrumKeyOverrides& planes : impl_->drum_setup) {
         planes.reset();
