@@ -502,6 +502,28 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
     std::ifstream stream{index_path};
     REQUIRE(stream);
     const nlohmann::json document = nlohmann::json::parse(stream);
+
+    // A fixture generated with `--batch` is not a gate, and failing against one reports defects the
+    // engine did not cause.
+    //
+    // The generator renders the whole sweep in one process under that flag, where a GS reset does
+    // not isolate the cases: the LFO nodes are freed without being zeroed so their random registers
+    // carry over, and the generator is seeded once at engine init and never again. Measured against
+    // a non-batch run of the same sweep on the same DLL, 204 of 238 cases differ -- pitch by up to
+    // 62.7 cents and band level by up to 8.7 dB -- while `rmsDb` differs on none, so the damage
+    // does not announce itself. Two non-batch runs differ on zero cases.
+    //
+    // Skipped rather than failed. The fixture is wrong, not the engine, and a red gate here would
+    // send whoever generated it looking in the wrong place -- which is exactly what it cost the
+    // person who reported it.
+    if (document.value("batch", false)) {
+        SKIP("These oracle fixtures were generated with --batch and cannot be judged against.\n"
+             "  204 of 238 cases differ from an isolated render, by up to 62.7 cents.\n"
+             "  Re-generate without --batch (use --jobs for the speed back):\n"
+             "  python3 tools/dump_note_renders_oracle.py <SCCore.dll> "
+             "fixtures/note_renders_oracle.json --scdec <path to scdec>");
+    }
+
     REQUIRE(document.at("dllSha256").get<std::string>() == rom.manifest().dll().sha256);
 
     const int rate = document.at("sampleRate").get<int>();
