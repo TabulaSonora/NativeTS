@@ -422,6 +422,14 @@ void PartialVoice::volume_gains(int word, unsigned mask, std::span<double> gains
         volume_ramp_.retarget(ControlRamp::target_of(word), ControlRamp::volume_rate_word, mask);
     }
     volume_ramp_.fill(gains);
+
+    // The glide itself, for comparison against `scdec volramp`, which reads the module's copy of
+    // this gain out of DAT_181a1cbb0. Every earlier check of expression was module-against-module
+    // or law-against-arithmetic; nothing had put the two engines' ramps side by side.
+    static const bool probe_volramp = std::getenv("TS_VOLRAMP_PROBE") != nullptr;
+    if (probe_volramp && !gains.empty()) {
+        std::fprintf(stderr, "volramp: %lld,%.8f\n", static_cast<long long>(sample_), gains[0]);
+    }
 }
 
 void PartialVoice::render(std::span<float> destination,
