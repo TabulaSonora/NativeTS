@@ -221,8 +221,19 @@ constexpr std::array<KnownDeviation, 19> known_deviations{{
      "lead; CC1/CC2 routes assigned at neutral depth"},
     // 4.45 dB at 125 Hz since the chorus phase seed, from just inside 4.1. The same trade as
     // `roland_sc88_y03` above, and the same note applies: the seed is what the module does.
+    // **The corpus's test for the per-key drum sends**, and the only row that exercises the chorus
+    // one. Its drum channel selects bank LSB 1 -- the SC-55 map -- and opens CC#93 to 127 while
+    // leaving CC#94 at 0, so the part's chorus send is wide open over a kit whose per-key chorus
+    // depths are non-zero by default. SC-55 kits enable chorus where the SC-88 kits mostly set it
+    // to 0, which is why an SC-88 bank exercises the plane far more weakly even when a file opens
+    // the same send.
+    //
+    // So this row moves when the per-key chorus plane at kit+0x380 is wired and not otherwise, and
+    // it is the row to watch when that changes: wiring reverb alone broke it, and wiring all three
+    // fixed it. See `DrumKey::chorus`.
     {"ff5_1_16_harvest.mid", {1.0, 0.01, 4.5, 6.0},
-     "lead; CC1 route is driven but not in the deviating bands"},
+     "lead; CC1 route is driven but not in the deviating bands. Also the per-key chorus test -- "
+     "SC-55 drum map with CC#93 wide open"},
 
     // The corpus's worst stereo deviation by a clear margin -- 0.287 where the next is 0.190 -- and
     // it is not obviously the same lead as the three above. Worth noting that this is also the row

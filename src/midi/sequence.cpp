@@ -148,6 +148,21 @@ std::optional<int> DrumKeyOverrides::group(int note) const noexcept
     return read_plane(group_, note);
 }
 
+std::optional<int> DrumKeyOverrides::reverb(int note) const noexcept
+{
+    return read_plane(reverb_, note);
+}
+
+std::optional<int> DrumKeyOverrides::chorus(int note) const noexcept
+{
+    return read_plane(chorus_, note);
+}
+
+std::optional<int> DrumKeyOverrides::delay(int note) const noexcept
+{
+    return read_plane(delay_, note);
+}
+
 std::optional<bool> DrumKeyOverrides::rx_note_off(int note) const noexcept
 {
     const std::optional<int> entry = read_plane(rx_note_off_, note);

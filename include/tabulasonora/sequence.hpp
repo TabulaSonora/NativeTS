@@ -94,8 +94,9 @@ public:
 
     /// Records per-key send depths, from NRPN `1D`/`1E`/`1F` or drum-setup SysEx.
     ///
-    /// Latched but not yet consumed: the mixer runs one send bus per part, so scaling a single
-    /// key's contribution needs per-voice send gains it does not have yet.
+    /// All three depths are consumed: each scales the part's send for that key alone, over the
+    /// kit record's own per-key value. The measurement that pinned reverb has now been run for
+    /// assumption that they behave alike is the kind of guess this engine does not make.
     void set_reverb(int note, int entry) noexcept;
     void set_chorus(int note, int entry) noexcept;
     void set_delay(int note, int entry) noexcept;
@@ -126,6 +127,11 @@ public:
 
     /// The assign-group override for a key, or nothing when it follows the kit.
     [[nodiscard]] std::optional<int> group(int note) const noexcept;
+
+    /// The reverb-send override for a key, or nothing when it follows the kit record.
+    [[nodiscard]] std::optional<int> reverb(int note) const noexcept;
+    [[nodiscard]] std::optional<int> chorus(int note) const noexcept;
+    [[nodiscard]] std::optional<int> delay(int note) const noexcept;
 
     /// The receive-switch overrides for a key, or nothing when it follows the kit.
     [[nodiscard]] std::optional<bool> rx_note_off(int note) const noexcept;

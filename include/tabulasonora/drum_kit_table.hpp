@@ -23,6 +23,48 @@ struct DrumKey {
     int group = 0;
     /// Pan position, per key.
     int pan = 0;
+    /// Reverb send depth for this key, 0-127, scaling the part's own send rather than replacing it.
+    ///
+    /// This is per *key*, not per part, and the difference is audible: in `STANDARD 1` the kick
+    /// (36) reads 0 while the snare (38) and crash (49) read 127, so a kit with the part's send
+    /// wide open still has a dry kick. Applying the part's send uniformly puts a room on the one
+    /// drum the module deliberately keeps out of it.
+    ///
+    /// Measured against the module, which multiplies the two: driving key 36 with the send at
+    /// CC91 64 and 127 against per-key 64 and 127 gives reverb tails 0.0012, 0.0024, 0.0024 and
+    /// 0.0048 — doubling either input doubles the tail, and a zero on either side is silence.
+    int reverb = 0;
+    /// Chorus send depth for this key, on the same law as `reverb`.
+    ///
+    /// Measured the same way and it behaves the same: per-key against CC#93, the off-diagonal is
+    /// symmetric to the last digit (64x127 and 127x64 both 0.0441678 over the hit) and taking the
+    /// wet out by power subtraction gives 0.01603, 0.02947, 0.05575 -- doubling either input
+    /// doubles the wet amplitude. It has to be measured over the hit rather than after it: a
+    /// chorus is a twenty to thirty millisecond modulated delay and leaves no tail where reverb
+    /// and delay leave one.
+    ///
+    /// The plane locations are the ones specv2's FINDINGS records from the NRPN sweep — `0x1D`
+    /// reverb at `+0x300`, `0x1E` chorus at `+0x380`, `0x1F` delay at `+0x400`, found by diffing
+    /// the whole 0x50C record either side of every MSB rather than by looking where a plane was
+    /// expected.
+    ///
+    /// **Not modelled here, and recorded there:** `0x1E` and `0x1F` also write flag bit 3 at
+    /// `+0x480`, with opposite polarity — chorus sets it when the value is zero, delay when it is
+    /// non-zero, last writer wins. That reads as a module bug rather than a design, and this port
+    /// takes the depth planes without it.
+    ///
+    /// The corpus tests this through `ff5_1_16_harvest.mid`, and only through it. That file's drum
+    /// channel selects bank LSB 1 — the SC-55 map — and opens CC#93 to 127 with CC#94 at 0, so the
+    /// part's chorus send is wide open over a kit whose per-key depths are non-zero. The SC-55 kits
+    /// enable chorus by default where the SC-88 kits mostly set it to 0, so an SC-88 bank exercises
+    /// this plane far more weakly even when a file opens the same send. Wiring reverb alone broke
+    /// that row and wiring all three fixed it, which is the check to repeat if any of this changes.
+    int chorus = 0;
+    /// Delay send depth for this key, on the same law again.
+    ///
+    /// Per-key against CC#94, tail 0.5-1.5 s after the hit: 0.0023021, 0.0046040, 0.0046040,
+    /// 0.0091360 -- a product, silent whenever either side is zero.
+    int delay = 0;
     /// Whether this key responds to note-off at all — GS `Rx.Note Off`, per key.
     ///
     /// Almost none do. A drum is a struck sound whose envelope is its whole story, so releasing it
@@ -160,7 +202,9 @@ private:
     static constexpr int pitch_plane = 0x180;
     static constexpr int group_plane = 0x200;
     static constexpr int pan_plane = 0x280;
-    // 0x300 reverb depth, 0x380 chorus depth, 0x400 delay depth — per key, and not yet wired.
+    static constexpr int reverb_plane = 0x300;
+    static constexpr int chorus_plane = 0x380;
+    static constexpr int delay_plane = 0x400;
     /// Receive flags. Bit 0 is `Rx.Note Off`; the byte otherwise reads 0x10 across every kit.
     static constexpr int receive_plane = 0x480;
     /// Twelve ASCII bytes naming the kit.

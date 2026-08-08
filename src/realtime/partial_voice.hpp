@@ -55,6 +55,14 @@ struct VoiceSetup {
     /// are the sounds you have to be able to stop — the snare roll, applause, most of the SFX kit —
     /// and `DrumKitTable` reads which from the kit record rather than guessing.
     bool drum_receives_note_off = false;
+    /// Per-key reverb depth, 0-127, scaling the part's send for this voice alone.
+    ///
+    /// 127 is "no scaling" and is what a melodic voice uses, so the part's send reaches the bus
+    /// unchanged. A drum voice carries its kit record's value instead — see `DrumKey::reverb`.
+    int key_reverb = 127;
+    /// Per-key chorus and delay depths, on the same footing as `key_reverb`.
+    int key_chorus = 127;
+    int key_delay = 127;
 
     int pan = PanLaw::centre;
     bool pan_follows_part = false;
@@ -182,7 +190,17 @@ public:
     void slew_reverb_send(int level) noexcept;
 
     /// The reverb send in force, on the controller's own 0-127 scale but continuous.
+    ///
+    /// This is the *part's* send. A drum voice's contribution is this scaled by its key's own
+    /// depth, which `key_reverb_scale` supplies; the mixer multiplies the two.
     [[nodiscard]] double reverb_send() const noexcept { return reverb_send_; }
+
+    /// The per-key reverb depth as a 0-1 scale, 1.0 for a voice that has none.
+    [[nodiscard]] double key_reverb_scale() const noexcept { return key_reverb_ / 127.0; }
+
+    /// The per-key chorus and delay depths, likewise.
+    [[nodiscard]] double key_chorus_scale() const noexcept { return key_chorus_ / 127.0; }
+    [[nodiscard]] double key_delay_scale() const noexcept { return key_delay_ / 127.0; }
 
     /// Renders one block.
     ///
@@ -291,6 +309,9 @@ private:
 
     bool is_drum_ = false;
     bool drum_receives_note_off_ = false;
+    int key_reverb_ = 127;
+    int key_chorus_ = 127;
+    int key_delay_ = 127;
     double drum_base_ratio_ = 1.0;
     double base_pitch_ = 0.0;
     double native_pitch_ = 0.0;
