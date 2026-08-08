@@ -250,38 +250,30 @@ struct KnownDrumDeviation {
 ///
 /// `TS_STRICT_NOTES=1` holds every program to the defaults, which is how a row's current deviation
 /// is read off when it is due to be tightened. Not a test mode -- a ruler.
-constexpr std::array<KnownDeviation, 6> known_deviations{{
-    {11, {1.0, 0.06, 3.0, 6.0}, "Vibraphone; peak alone -- level, spectrum and envelope all pass"},
-    {24, {1.0, 0.01, 3.6, 6.0}, "Nylon Gt.; one band, 37 dB under the note's loudest"},
+constexpr std::array<KnownDeviation, 7> known_deviations{{
+    // **Every bound below was re-measured on 2026-08-07 and the previous ones discarded.** They had
+    // been fitted against a fixture generated with `--batch`, where the sweep runs in one process
+    // and a GS reset does not isolate the cases -- see #6 and #7. Against a correct fixture 204 of
+    // 238 cases differ from a batched one, so a bound fitted that way was never a measurement of
+    // this engine: some sat tighter than the engine could meet and some looser than it needed.
+    // Neither is a ratchet position. These are measured against a one-process-per-case fixture,
+    // each the worst deviation across every velocity and map of that program, plus headroom.
+    {24, {1.0, 0.01, 3.5, 6.0}, "Nylon Gt.; one band, 37 dB under the note's loudest (3.33)"},
+    {38, {1.15}, "Slow Strings; level alone, and only just (1.04)"},
+    {75, {1.0, 0.022}, "Pan Flute; peak alone (0.0196)"},
     // Not a tuning error. `Square Wave` is two partials 137 units of the pitch word apart -- ten
     // cents -- and both of ours match the module's to one unit. What differs is which of the pair
     // each estimator calls the fundamental, and picking the other one is worth exactly the detune.
     // The bound is that detune plus headroom, so a real move still fails it.
-    {80, {1.0, 0.01, 3.0, 6.0, 10.5}, "Square Wave; the estimator picks the other partial of the "
-                                      "pair, which is the ten cents between them"},
-    {87, {1.0, 0.02}, "Bass & Lead; peak alone -- the beat rate it missed is now the module's"},
-    // Unpitched. The estimator finds the loudest peak near the note in each render and there is no
-    // fundamental there to find, so what these two compare is one noise peak against another. The
-    // bound says "not checked" out loud rather than skipping them where nobody would notice.
-    //
-    // Their band bounds widened when the 63 Hz band was added, and only there -- 10 dB on
-    // `Synth Drum`, 12 on `Seashore`, on the two cases where the module puts real energy under
-    // 90 Hz. Two unpitched noise patches disagreeing in the bottom octave is the same finding as
-    // the rest of their rows, one octave lower than it could previously be seen.
-    //
-    // **`Seashore` closed and its row is now nearly the default.** It carried `block[0x13] = 0x42`,
-    // two tenths of key follow, and this engine was pivoting that follow on the partial's key centre
-    // where the module pivots on middle C -- worth `(64 - 60) * 100 * (10 - 2)` = 3200
-    // milli-semitones, three and a bit semitones, on every one of its five cases. With the pivot
-    // right all five agree to **0.12 dB in every band**, 0.1 dB of level and 0.0014 of peak. This
-    // was one of the four "patches with a noise component" the article listed as unexplained, and
-    // the pseudo-random source it was blamed on was never the cause.
-    //
-    // `Synth Drum` moved with it -- five tenths of follow, so half the error -- but has not closed:
-    // its worst above-floor band is 6.6 dB at 1 kHz on note 36 and 5.6 at 2 kHz on note 72. What is
-    // left there is its own defect, no longer this one.
-    {118, {1.0, 0.045, 7.0, 6.0, 110.0}, "Synth Drum; unpitched -- the pitch bound is not a check"},
-    {122, {1.0, 0.005, 1.0, 6.0, 41.0}, "Seashore; unpitched -- the pitch bound is not a check"},
+    {80, {1.0, 0.01, 3.35, 6.0, 10.5}, "Square Wave; the estimator picks the other partial of the "
+                                       "pair, which is the ten cents between them (band 3.19, "
+                                       "9.66 cents)"},
+    {87, {1.0, 0.016}, "Bass & Lead; peak alone -- the beat rate it missed is now the module's "
+                       "(0.0136)"},
+    {118, {1.0, 0.035, 3.0, 6.0, 110.0}, "Synth Drum; unpitched -- the pitch bound is not a check. "
+                                         "Peak 0.0306; the spectrum now sits inside the default"},
+    {122, {1.0, 0.005, 1.0, 6.0, 41.0}, "Seashore; unpitched -- the pitch bound is not a check. "
+                                        "Level, peak and spectrum all held tighter than default"},
 }};
 
 /// The kit keys that do not yet match, kept apart from the melodic table rather than folded in.
@@ -318,46 +310,25 @@ constexpr std::array<KnownDeviation, 6> known_deviations{{
 ///
 /// The remaining three rows are small and unattributed: a snare's peak, and two snares a hair over
 /// the band default.
-constexpr std::array<KnownDrumDeviation, 19> known_drum_deviations{{
-    // Crash cymbals. What is left here is level, and only level: the envelope markers of 945 that
-    // two of these carried are gone, because the cause was not the decay. See
-    // \ref the-drum-ring-was-invented.
-    {0, 49, {2.6}, "Crash Cym.1; 2.5 dB light, and see \\ref the-module-has-dc"},
-    {8, 49, {2.5}, "Crash Cym.1, Room kit"},
-    {16, 49, {2.5}, "Crash Cym.1, Power kit"},
-    {24, 49, {1.35, 0.045, 3.0, 7.5}, "GS Crash"},
-    {32, 49, {2.6}, "Crash Cym.1, Jazz kit"},
-    {40, 49, {2.6, 0.02}, "Brush Crash"},
-
-    // Closed hi-hats.
-    {0, 42, {1.0, 0.01, 8.5}, "Close HiHat2; 2.3 dB light in every band at a matching peak"},
-    {8, 42, {2.3, 0.01, 26.0}, "Room Chh; 5 dB light above 500 Hz, and no floor below it"},
-    {16, 42, {1.0, 0.01, 11.9}, "Close HiHat, Power kit"},
-    {25, 42, {1.0, 0.01, 101.5}, "TR-808 CHH; the module's floor against this engine's silence"},
-    {40, 42, {1.0, 0.01, 4.0}, "Close HiHat, Brush kit"},
-
-    // The Orchestra kit's timpani, on the three keys it is tuned across. The only three rows the
-    // note-off fix moved the wrong way, and only in the spectrum -- their level improved. It rings
-    // longer now, which is right, and what it rings is still wrong.
-    {48, 42, {1.6, 0.06, 7.7, 9.2}, "Timpani at key 42; quiet attack, long tail"},
-    {48, 45, {1.4, 0.16, 8.2, 11.6}, "Timpani at key 45"},
-    {48, 46, {1.35, 0.23, 9.0, 13.2}, "Timpani at key 46"},
-
-    // The SFX kit. `Pick Scrape` used to be here at 38 dB and is not any more: it is one of the 52
-    // keys in that kit which *do* answer a note-off, and it was being held for the ring instead.
-    {56, 49, {10.5, 0.08, 17.5, 11.0}, "Gt.CutNoise; 10 dB quiet, spectrum tilted the wrong way"},
-
-    // Surfaced when the gate began rendering with the module's own timing -- 128 samples of event
-    // staging and its output stage, which this engine otherwise does not carry. Aligning the two
-    // renders is what made this visible; it was under the line before only because the hit sat 130
-    // samples earlier in the window than the module's does. 3.2 dB loud at 125 Hz on a band 18.6 dB
-    // below the kick's own loudest, and unattributed beyond that.
-    {24, 36, {1.0, 0.01, 3.3}, "Elec. BD; 3.2 dB loud at 125 Hz, seen once the timing lined up"},
-
-    // Small, and so far unattributed.
-    {24, 38, {1.0, 0.015}, "Elec. Snare; peak alone"},
-    {25, 38, {1.0, 0.01, 3.5, 11.0}, "808 Snare 1"},
-    {32, 38, {1.0, 0.01, 3.5}, "Jazz Snare 1"},
+constexpr std::array<KnownDrumDeviation, 13> known_drum_deviations{{
+    // Re-measured 2026-08-07 with the melodic table above, and for the same reason: the previous
+    // bounds were fitted against a `--batch` fixture and were not measurements of this engine.
+    // Six rows are gone entirely -- every Crash Cym.1 row, GS Crash, Brush Crash, Elec. Snare and
+    // Jazz Snare 1 now sit inside the defaults, so holding them to a looser bound held them to
+    // nothing.
+    {0, 42, {1.0, 0.01, 7.7}, "Close HiHat2; one band 7.57 under, at a matching peak"},
+    {8, 42, {2.8, 0.01, 25.7}, "Room Chh; 5 dB light above 500 Hz, and no floor below it"},
+    {16, 42, {1.0, 0.01, 10.4}, "Close HiHat, Power kit"},
+    {25, 42, {1.0, 0.01, 100.7}, "TR-808 CHH; the module's floor against this engine's silence"},
+    {40, 42, {1.0, 0.01, 6.9}, "Close HiHat, Brush kit; 6.75, where the old bound said 4.0"},
+    {48, 42, {1.65, 0.05, 7.5, 8.7}, "Timpani at key 42; quiet attack, long tail"},
+    {48, 45, {1.45, 0.16, 7.9, 11.5}, "Timpani at key 45"},
+    {48, 46, {1.4, 0.23, 8.7, 12.6}, "Timpani at key 46"},
+    {56, 45, {1.0, 0.01, 4.3}, "Gt.CutNoise at key 45; one band 22 dB under the loudest (4.10)"},
+    {56, 49, {10.3, 0.08, 14.9, 10.3}, "Gt.CutNoise; 10 dB quiet, spectrum tilted the wrong way"},
+    {24, 36, {1.0, 0.01, 3.2}, "Elec. BD; 3.06 dB loud at 125 Hz, seen once the timing lined up"},
+    {25, 36, {1.15}, "TR-808 kick; level alone, and only just (1.01)"},
+    {25, 38, {1.0, 0.01, 3.0, 8.7}, "808 Snare 1; the envelope alone now (8.51)"},
 }};
 
 [[nodiscard]] Deviation deviation_for(const Case& which)
