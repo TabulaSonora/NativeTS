@@ -112,7 +112,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("dll", type=pathlib.Path)
     parser.add_argument("--scdec", type=pathlib.Path,
-                        default=pathlib.Path("../specv2/tools/decoder/bin/Release/net10.0/"
+                        default=pathlib.Path("../spec/tools/decoder/bin/Release/net10.0/"
                                              "win-x64/publish/scdec.exe"))
     parser.add_argument("--runner", default=None,
                         help="launcher for the harness, e.g. a CrossOver cxstart invocation")

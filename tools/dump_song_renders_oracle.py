@@ -38,6 +38,18 @@ import subprocess
 import sys
 import wave
 
+# The harness lives in the sibling spec checkout. Its directory has been called both `spec` and
+# `specv2`; try each rather than pinning one, so a checkout named either way works without the flag.
+SCDEC_SUFFIX = "tools/decoder/bin/Release/net10.0/win-x64/publish/scdec.exe"
+
+
+def default_scdec() -> pathlib.Path:
+    """First sibling harness that exists, else the `spec` spelling for the error message."""
+    candidates = [pathlib.Path("..") / name / SCDEC_SUFFIX for name in ("spec", "specv2")]
+    return next((c for c in candidates if c.exists()), candidates[0])
+
+
+
 # Every map for the two canyon variants -- the pair is what proves format 0 and format 1 parse the
 # same -- plus one pass over the rest of the corpus. The heavier files are here because they are
 # the ones that have historically caught things: drum-dense, effect-dense, and bend-dense.
@@ -226,8 +238,7 @@ def main():
     parser.add_argument("dll", type=pathlib.Path)
     parser.add_argument("output", type=pathlib.Path)
     parser.add_argument("--scdec", type=pathlib.Path,
-                        default=pathlib.Path("../specv2/tools/decoder/bin/Release/net10.0/"
-                                             "win-x64/publish/scdec.exe"))
+                        default=default_scdec())
     parser.add_argument("--audio-dir", type=pathlib.Path,
                         default=pathlib.Path("fixtures/oracle/songs"))
     parser.add_argument("--testdata", type=pathlib.Path, default=pathlib.Path("testdata"))

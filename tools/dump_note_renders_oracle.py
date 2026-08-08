@@ -48,6 +48,18 @@ import struct
 import subprocess
 import sys
 
+# The harness lives in the sibling spec checkout. Its directory has been called both `spec` and
+# `specv2`; try each rather than pinning one, so a checkout named either way works without the flag.
+SCDEC_SUFFIX = "tools/decoder/bin/Release/net10.0/win-x64/publish/scdec.exe"
+
+
+def default_scdec() -> pathlib.Path:
+    """First sibling harness that exists, else the `spec` spelling for the error message."""
+    candidates = [pathlib.Path("..") / name / SCDEC_SUFFIX for name in ("spec", "specv2")]
+    return next((c for c in candidates if c.exists()), candidates[0])
+
+
+
 # The sweep. Programs across the GM map so every family is represented, each on a few keys and
 # velocities, and every tone map -- the map is what selects the tone table, so a case that is right
 # on one can be wrong on another.
@@ -261,8 +273,7 @@ def main():
     parser.add_argument("dll", type=pathlib.Path, help="path to SCCore.dll")
     parser.add_argument("output", type=pathlib.Path, help="where to write the fixture")
     parser.add_argument("--scdec", type=pathlib.Path,
-                        default=pathlib.Path("../specv2/tools/decoder/bin/Release/net10.0/"
-                                             "win-x64/publish/scdec.exe"))
+                        default=default_scdec())
     parser.add_argument("--audio-dir", type=pathlib.Path,
                         default=pathlib.Path("fixtures/oracle/notes"))
     parser.add_argument("--tail", type=float, default=1.8,
