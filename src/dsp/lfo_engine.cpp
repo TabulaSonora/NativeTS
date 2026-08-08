@@ -125,6 +125,7 @@ std::pair<LfoConfig, LfoConfig> LfoEngine::configure(int tone_number,
     LfoConfig lfo1;
     lfo1.waveform = wave_map_[static_cast<std::size_t>(header[0x0E] & 0x1F)];
     lfo1.initial_phase = (header[0x0E] & 0xC0) << 8;
+    lfo1.shares_node = (header[0x0E] & 0x20) != 0;
     lfo1.increment = rate_table_[static_cast<std::size_t>(
         std::clamp(read_u16(header, 0x10) + rate_bias, 0, 0x7F))];
     lfo1.delay_rate =
@@ -142,6 +143,7 @@ std::pair<LfoConfig, LfoConfig> LfoEngine::configure(int tone_number,
     LfoConfig lfo2;
     lfo2.waveform = wave_map_[static_cast<std::size_t>(block[0x06] & 0x1F)];
     lfo2.initial_phase = (block[0x06] & 0xC0) << 8;
+    lfo2.shares_node = (block[0x06] & 0x20) != 0;
     lfo2.increment = read_u16(block, 0x08);
     lfo2.delay_rate = lfo2_delay > 0 ? lfo2_delay : 0xFFFF;
     lfo2.fade_rate = read_u16(block, 0x0C);

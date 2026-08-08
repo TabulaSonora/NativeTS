@@ -41,6 +41,21 @@ struct LfoConfig {
     /// Depth applied to amplitude.
     int tva_depth = 0;
 
+    /// Bit 5 of the waveform byte: whether this LFO's node may inherit from a standing one.
+    ///
+    /// `partial_alloc_node @ 1800029e0` keeps a descriptor per part with one slot for LFO1
+    /// (`+0x20`) and one per partial index for LFO2 (`+0x28 + i*8`). When the bit is set and the
+    /// slot already holds a node, the new node's `+0xa0` points at it, and `note_on_voice_setup
+    /// @ 18005f5c0` copies phase, out, held and slewed across instead of initialising them -- and
+    /// takes no `prng_lfsr` draw. Bit clear, or slot empty, and the node is parentless and draws.
+    ///
+    /// The slot outlives the voice. Measured with `scdec lfonodes`: three notes two seconds apart,
+    /// each released almost immediately, and notes 2 and 3 still inherit -- the held register stays
+    /// at 20373, the generator's first draw, and the phase runs 3146 -> 45668 -> 22654 rather than
+    /// restarting. Only `part_voice_desc_reset @ 1800010a0` empties it, and that is reached solely
+    /// from `part_program_change @ 180068fe0` and `drum_part_program_change @ 180068e60`.
+    bool shares_node = false;
+
     /// The depth for one destination.
     [[nodiscard]] constexpr int depth(LfoDestination destination) const noexcept
     {
@@ -296,6 +311,22 @@ public:
     /// channels do pay twice, seeding at draws 1 and 4, which is why this is a per-part rule rather
     /// than a per-chunk one.
     void copy_random_hold(const LfoRunner& other) noexcept { held_ = other.held_; }
+
+    /// Takes a standing node's running state, the way an inheriting node does.
+    ///
+    /// The `+0xa0 != 0` branch of `note_on_voice_setup` copies `+0x72` phase, `+0x70` out, `+0x7a`
+    /// held and `+0x78` slewed from the parent. The delay and fade accumulators are *not* copied:
+    /// that branch zeroes `+0x74`/`+0x76` exactly as the parentless one does, so a note re-runs its
+    /// own delay and fade over an already-running phase.
+    void adopt(const LfoRunner& parent) noexcept
+    {
+        phase_ = parent.phase_;
+        output_ = parent.output_;
+        held_ = parent.held_;
+        slewed_ = parent.slewed_;
+        delay_ = 0;
+        fade_ = 0;
+    }
 
     /// The pitch modulation with a mod-wheel depth folded in, in milli-semitones.
     ///

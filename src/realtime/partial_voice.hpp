@@ -41,7 +41,7 @@ struct VoiceSetup {
     std::shared_ptr<LfoRunner> lfo1;
     LfoConfig lfo1_depths;
 
-    std::optional<LfoRunner> lfo2;
+    std::shared_ptr<LfoRunner> lfo2;
 
     /// Absolute base pitch in milli-semitones, for a melodic voice.
     double base_pitch = 0.0;
@@ -259,7 +259,7 @@ private:
     /// This partial's own LFO1 depths, which the shared node stores per partial rather than once.
     LfoConfig lfo1_depths_;
 
-    std::optional<LfoRunner> lfo2_;
+    std::shared_ptr<LfoRunner> lfo2_;
     StateVariableFilter filter_;
 
     int channel_ = 0;

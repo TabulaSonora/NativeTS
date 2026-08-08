@@ -100,6 +100,7 @@ struct ToneGenerator::Impl {
         slots.resize(static_cast<std::size_t>(pool.capacity()));
 
         parts.resize(static_cast<std::size_t>(port_count * Sequence::channel_count));
+        standing_lfo.resize(parts.size());
         // One buffer per kit slot. `kit_slot` is `(port, map)` in GS and one per part in XG, so
         // sizing this like `parts` covers both without the index needing a second rule.
         drum_setup.resize(parts.size());
@@ -127,6 +128,27 @@ struct ToneGenerator::Impl {
 
     VoicePool pool;
     std::vector<Part> parts;
+
+    /// The LFO nodes that stand between program changes, one set per part.
+    ///
+    /// The module's pool keeps a per-part descriptor with a slot for LFO1 and one per partial index
+    /// for LFO2, and a node whose waveform byte has bit 5 set inherits whatever stands there rather
+    /// than initialising -- taking no generator draw with it. Measured with `scdec lfonodes`: the
+    /// slot survives the voice, so notes seconds apart still inherit, and only a program change
+    /// empties it. See `LfoConfig::shares_node`.
+    struct StandingLfoNodes {
+        std::shared_ptr<LfoRunner> lfo1;
+        std::array<std::shared_ptr<LfoRunner>, 2> lfo2{};
+
+        void clear() noexcept
+        {
+            lfo1.reset();
+            for (std::shared_ptr<LfoRunner>& node : lfo2) {
+                node.reset();
+            }
+        }
+    };
+    std::vector<StandingLfoNodes> standing_lfo;
 
     /// The drum-setup planes, **one buffer per kit slot rather than one per part**.
     ///
@@ -732,6 +754,12 @@ struct ToneGenerator::Impl {
 
     // Returns every part to power-on state without touching the clocks: what a GM System On, GS
     // reset or system-mode-set does mid-stream.
+    /// Lets a note's bit-5 LFO nodes inherit this part's standing ones. True if any did.
+    bool adopt_standing_nodes(PendingNote& note);
+
+    /// Installs a note's bit-5 LFO nodes as this part's standing ones.
+    void take_standing_nodes(PendingNote& note);
+
     void stream_reset();
     [[nodiscard]] bool any_voice_on(int channel) const;
     void stop_note(int channel, int note, int damper = 0);
@@ -952,6 +980,10 @@ void ToneGenerator::reset()
         Part& part = impl_->parts[static_cast<std::size_t>(i)];
         part.reset();
         part.rx_channel = i % Sequence::channel_count;
+    }
+    // A reset returns the parts to power-on, and the module's descriptor slots go with them.
+    for (Impl::StandingLfoNodes& nodes : impl_->standing_lfo) {
+        nodes.clear();
     }
     impl_->master_tune = 0x400;
     impl_->master_key_shift = 0x40;
@@ -1207,6 +1239,9 @@ void ToneGenerator::Impl::apply_channel(
 void ToneGenerator::Impl::program_change(int part_index, Part& part, int program)
 {
     part.program = program;
+    // `part_program_change` reaches `part_voice_desc_reset`, which empties this part's LFO node
+    // slots. The next note allocates parentless nodes and draws again, whatever bit 5 says.
+    standing_lfo[static_cast<std::size_t>(part_index)].clear();
     // The tone loader fills the per-program tone-modify slots and forces the ninth back to centre
     // on every program change. No shipped tone populates it, so in practice this is a reset: a
     // file that sets `40 4x 38` and then changes program loses it, where `40 1x 38` survives.
@@ -2553,6 +2588,9 @@ void ToneGenerator::Impl::stream_reset()
     chorus_type = options.chorus_type;
     delay_type = options.delay_type;
 
+    for (StandingLfoNodes& nodes : standing_lfo) {
+        nodes.clear();
+    }
     master_tune = 0x400;
     master_key_shift = 0x40;
     master_pan = 0x40;
@@ -3318,7 +3356,7 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             // it rather than drawing again.
             setup.lfo1 = shared_lfo1;
             setup.lfo1_depths = lfo1_config;
-            setup.lfo2 = std::move(lfo2);
+            setup.lfo2 = std::make_shared<LfoRunner>(std::move(lfo2));
             setup.envelope_hold_samples = notes->envelopes().hold_samples(
                 partial, velocity, part.envelope_delay + part.envelope_delay_tone);
             setup.half_damper = notes->directory().half_damper(tone_number);
@@ -3485,7 +3523,7 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.cutoff_base = built.cutoff_base;
         setup.lfo1 = shared_lfo1;
         setup.lfo1_depths = lfo1_config;
-        setup.lfo2 = std::move(lfo2);
+        setup.lfo2 = std::make_shared<LfoRunner>(std::move(lfo2));
         setup.envelope_hold_samples = notes->envelopes().hold_samples(
             partial, velocity, part.envelope_delay + part.envelope_delay_tone);
         setup.is_drum = true;
@@ -3566,6 +3604,15 @@ void ToneGenerator::Impl::seed_part_lfo_nodes(std::span<PendingNote> batch)
                     pending.setup.lfo2->seed_random();
                 }
             }
+            take_standing_nodes(note);
+            continue;
+        }
+
+        // A node with bit 5 set inherits from this part's standing node instead, and costs no
+        // draw. Checked before the batch rule, because it is the module's own rule and the batch
+        // one is this port's approximation of what a same-tick chord does.
+        if (adopt_standing_nodes(note)) {
+            take_standing_nodes(note);
             continue;
         }
 
@@ -3583,6 +3630,46 @@ void ToneGenerator::Impl::seed_part_lfo_nodes(std::span<PendingNote> batch)
                 note.voices[index].setup.lfo2->copy_random_hold(
                     *first->voices[index].setup.lfo2);
             }
+        }
+        take_standing_nodes(note);
+    }
+}
+
+bool ToneGenerator::Impl::adopt_standing_nodes(PendingNote& note)
+{
+    StandingLfoNodes& standing = standing_lfo[static_cast<std::size_t>(note.part)];
+    bool adopted = false;
+
+    const std::shared_ptr<LfoRunner>& shared = note.voices.front().setup.lfo1;
+    if (shared && shared->config().shares_node && standing.lfo1 && standing.lfo1 != shared) {
+        shared->adopt(*standing.lfo1);
+        adopted = true;
+    }
+    for (std::size_t index = 0; index < note.voices.size() && index < standing.lfo2.size();
+         ++index) {
+        const std::shared_ptr<LfoRunner>& lfo2 = note.voices[index].setup.lfo2;
+        const std::shared_ptr<LfoRunner>& stood = standing.lfo2[index];
+        if (lfo2 && lfo2->config().shares_node && stood && stood != lfo2) {
+            lfo2->adopt(*stood);
+            adopted = true;
+        }
+    }
+    return adopted;
+}
+
+void ToneGenerator::Impl::take_standing_nodes(PendingNote& note)
+{
+    StandingLfoNodes& standing = standing_lfo[static_cast<std::size_t>(note.part)];
+
+    const std::shared_ptr<LfoRunner>& shared = note.voices.front().setup.lfo1;
+    if (shared && shared->config().shares_node) {
+        standing.lfo1 = shared;
+    }
+    for (std::size_t index = 0; index < note.voices.size() && index < standing.lfo2.size();
+         ++index) {
+        const std::shared_ptr<LfoRunner>& lfo2 = note.voices[index].setup.lfo2;
+        if (lfo2 && lfo2->config().shares_node) {
+            standing.lfo2[index] = lfo2;
         }
     }
 }
