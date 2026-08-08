@@ -48,6 +48,9 @@ import struct
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import fixture_manifest
+
 # The harness lives in the sibling spec checkout. Its directory has been called both `spec` and
 # `specv2`; try each rather than pinning one, so a checkout named either way works without the flag.
 SCDEC_SUFFIX = "tools/decoder/bin/Release/net10.0/win-x64/publish/scdec.exe"
@@ -443,6 +446,14 @@ def main():
             "treating any difference here as an engine defect.")
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(document, indent=1))
+    # Say what moved before recording the new state, so the comparison is against the last
+    # committed run rather than against what this run just wrote.
+    fixture_manifest.report_drift([arguments.output], harness=arguments.scdec)
+    manifest = fixture_manifest.update([arguments.output],
+                                       harness=arguments.scdec,
+                                       generator="tools/dump_note_renders_oracle.py")
+    if manifest:
+        print(f"recorded fixture hashes in {manifest}")
 
     sounding = sum(1 for c in cases if c["peak"] > 0.0)
     drums = sum(1 for c in cases if c["channel"] == DRUM_CHANNEL)

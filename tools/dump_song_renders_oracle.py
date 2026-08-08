@@ -36,6 +36,9 @@ import shlex
 import struct
 import subprocess
 import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import fixture_manifest
 import wave
 
 # The harness lives in the sibling spec checkout. Its directory has been called both `spec` and
@@ -367,6 +370,17 @@ def main():
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(document, indent=1))
     print(f"wrote {len(cases)} songs to {arguments.output}")
+
+    # Last, and unconditionally: the gate refuses to judge fixtures it cannot match to a
+    # regeneration, because they are gitignored and go stale without any sign of it.
+    # Say what moved before recording the new state, so the comparison is against the last
+    # committed run rather than against what this run just wrote.
+    fixture_manifest.report_drift([arguments.output], harness=arguments.scdec)
+    manifest = fixture_manifest.update([arguments.output],
+                                       harness=arguments.scdec,
+                                       generator="tools/dump_song_renders_oracle.py")
+    if manifest:
+        print(f"recorded fixture hashes in {manifest}")
 
 
 if __name__ == "__main__":

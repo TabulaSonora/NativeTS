@@ -46,6 +46,22 @@ void require_effect_presets();
 /// The repository root, as baked in at configure time. Fixtures are resolved relative to it.
 [[nodiscard]] const std::filesystem::path& repository_root();
 
+/// Verifies a fixture against `fixtures/fixture_manifest.json`, and SKIPs the case if it cannot.
+///
+/// Fixtures are gitignored, so nothing in the tree says what state they are in. A harness change
+/// that moves the reference renders leaves every existing copy silently wrong: the gate still runs,
+/// still prints numbers, and measures them against something that no longer exists. That happened
+/// twice on 2026-08-08 -- once when `scdec` stopped truncating event times, and again when it began
+/// passing real `deltaFrames`, which moved the references by 0.32 peak at 0.16 correlation.
+///
+/// So the generators record a hash per fixture and this checks it. A missing manifest means the
+/// fixtures predate the check, which is indistinguishable from stale and is treated as stale.
+///
+/// This proves the file is the one the last regeneration wrote. It cannot prove that regenerating
+/// again would write the same bytes -- that needs the harness, which the gate does not have a path
+/// to. The manifest records the harness's own hash for whoever is reading it after a surprise.
+void require_current_fixture(const std::filesystem::path& fixture);
+
 /// The one `RomImage` for the whole process, opened on first use.
 ///
 /// Skips the current test if the DLL is absent, exactly as `require_sccore` does.

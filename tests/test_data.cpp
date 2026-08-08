@@ -1,6 +1,8 @@
 #include "test_data.hpp"
 
 #include "rom/sha256.hpp"
+
+#include <nlohmann/json.hpp>
 #include "tabulasonora/effect_presets.hpp"
 #include "tabulasonora/rom_image.hpp"
 
@@ -11,6 +13,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -219,6 +222,82 @@ void require_effect_presets()
     if (!EffectPresets::available()) {
         SKIP("Effect presets unavailable: no SCCore.dll to compute them from and nothing pinned "
              "through TABULASONORA_PRESETS.");
+    }
+}
+
+void require_current_fixture(const std::filesystem::path& fixture)
+{
+    namespace fs = std::filesystem;
+    const fs::path manifest_path = fixture.parent_path() / "fixture_manifest.json";
+    const std::string name = fixture.filename().string();
+
+    const std::string how = "Regenerate with:\n"
+                            "  python3 tools/dump_song_renders_oracle.py <SCCore.dll> "
+                            "fixtures/song_renders_oracle.json --scdec <path to scdec>\n"
+                            "  python3 tools/dump_note_renders_oracle.py <SCCore.dll> "
+                            "fixtures/note_renders_oracle.json --scdec <path to scdec>\n"
+                            "Each generator rewrites its own entry in fixture_manifest.json.";
+
+    if (!fs::exists(manifest_path)) {
+        SKIP("No fixture_manifest.json beside '" + name
+             + "'. Fixtures are gitignored, so one that predates this check cannot be told apart "
+               "from one left over from an older harness -- both are treated as needing "
+               "regeneration.\n"
+             + how);
+    }
+
+    std::ifstream stream{manifest_path};
+    if (!stream) {
+        SKIP("Cannot read '" + manifest_path.string() + "'.\n" + how);
+    }
+
+    nlohmann::json manifest;
+    try {
+        manifest = nlohmann::json::parse(stream);
+    } catch (const std::exception& error) {
+        SKIP("'" + manifest_path.string() + "' is not readable JSON (" + error.what() + ").\n"
+             + how);
+    }
+
+    // Keyed on the repository-relative path the generator recorded, so a manifest is portable
+    // between machines; the fixture's own name is the fallback for anything written differently.
+    const auto& fixtures = manifest.value("fixtures", nlohmann::json::object());
+    const std::string relative = "fixtures/" + name;
+    const nlohmann::json* entry = nullptr;
+    if (fixtures.contains(relative)) {
+        entry = &fixtures.at(relative);
+    } else if (fixtures.contains(name)) {
+        entry = &fixtures.at(name);
+    }
+    if (entry == nullptr) {
+        SKIP("'" + name + "' has no entry in fixture_manifest.json, so it was not written by the "
+             "last regeneration.\n" + how);
+    }
+
+    Sha256 hash;
+    std::ifstream source{fixture, std::ios::binary};
+    if (!source) {
+        SKIP("Cannot read '" + fixture.string() + "'.\n" + how);
+    }
+    std::vector<char> buffer(1u << 20);
+    while (source) {
+        source.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const auto moved = static_cast<std::size_t>(source.gcount());
+        if (moved == 0) {
+            break;
+        }
+        hash.update(reinterpret_cast<const std::uint8_t*>(buffer.data()), moved);
+    }
+
+    const std::string actual = hash.finish_hex();
+    const auto expected = entry->value("sha256", std::string{});
+    if (actual != expected) {
+        SKIP("'" + name + "' does not match the hash the last regeneration recorded.\n"
+             "  recorded " + expected + "\n"
+             "  on disk  " + actual + "\n"
+             "It has been modified, or it is left over from a different harness build. Judging a "
+             "port against a reference nobody can reproduce is worse than not judging it.\n"
+             + how);
     }
 }
 

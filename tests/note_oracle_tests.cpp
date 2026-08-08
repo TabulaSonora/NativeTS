@@ -470,6 +470,10 @@ TEST_CASE("a single note matches the reference DLL's own render", "[note][oracle
         RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
     NoteRenderer notes{rom};
 
+    // Before anything is read out of it: prove this file is what the last regeneration wrote.
+    // Fixtures are gitignored, so a stale one looks exactly like a current one.
+    testdata::require_current_fixture(index_path);
+
     std::ifstream stream{index_path};
     REQUIRE(stream);
     const nlohmann::json document = nlohmann::json::parse(stream);
