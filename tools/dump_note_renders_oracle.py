@@ -290,9 +290,44 @@ def main():
     parser.add_argument("--jobs", type=int, default=6,
                         help="how many cases to render at once, each its own process")
     parser.add_argument("--batch", action="store_true",
-                        help="render the whole sweep in one process: faster, and WRONG for any "
-                             "tone with a random LFO -- see the note above")
+                        help="render the whole sweep in one process: faster, and WRONG -- it "
+                             "corrupts most of the sweep. Refused unless "
+                             "--i-know-this-is-wrong is given too")
+    parser.add_argument("--i-know-this-is-wrong", action="store_true",
+                        dest="allow_batch",
+                        help="permit --batch anyway. The fixture is then marked as batched so a "
+                             "reader can tell, and must not be used as a gate")
     arguments = parser.parse_args()
+
+    # `--batch` fails silently, which is the whole problem: it reports "wrote N cases", exits 0, and
+    # produces JSON that looks entirely normal while most of it is wrong. Measured against a
+    # non-batch run of the same sweep on the same DLL, 204 of 238 cases differ -- pitch by up to
+    # 62.7 cents, band level by up to 8.7 dB -- while rmsDb differs on none of them, so nothing
+    # about the numbers invites suspicion. Two non-batch runs differ on zero cases, so this is batch
+    # mode alone and not the module being nondeterministic.
+    #
+    # The cause is that a GS reset does not return the module to where it started. The LFO nodes are
+    # freed without being zeroed and their random registers carry into the next case, and the
+    # generator itself is never reseeded -- `engine_init_tasks_ports @ 180084c60` sets 0xefa6/0x9c23
+    # once, at TG_initialize, and no reset path writes it again. Nothing in the module's API can
+    # undo either, which is why one process per case is the only isolation there is.
+    if arguments.batch and not arguments.allow_batch:
+        print("--batch renders the whole sweep in one process and CORRUPTS most of it.\n"
+              "\n"
+              "  A GS reset does not reset the module. LFO nodes are freed without being zeroed,\n"
+              "  so their random registers survive into the next case, and the pseudo-random\n"
+              "  generator is seeded once at engine init and never again. Measured against a\n"
+              "  non-batch run: 204 of 238 cases differ, pitch by up to 62.7 cents and band level\n"
+              "  by up to 8.7 dB. rmsDb differs on none of them, so the damage is invisible in the\n"
+              "  output -- the run still says \"wrote N cases\" and exits 0.\n"
+              "\n"
+              "  Drop --batch to render one case per process, which is reproducible: two such runs\n"
+              "  differ on zero cases. Use --jobs to get the speed back.\n"
+              "\n"
+              "  If you need a batched fixture anyway -- for a quick look, never as a gate -- pass\n"
+              "  --i-know-this-is-wrong as well. The fixture will be marked as batched.",
+              file=sys.stderr)
+        return 2
 
     if not arguments.scdec.exists():
         sys.exit(f"harness not found at {arguments.scdec}\n"
@@ -389,11 +424,23 @@ def main():
                   "pitchHz within tolerance. Cases on channel 9 are drum kits, and carry no "
                   "pitchHz: a drum key selects a kit entry rather than a transposition."),
         "generator": "tools/dump_note_renders_oracle.py",
+        "batch": arguments.batch,
         "dllSha256": hashlib.sha256(arguments.dll.read_bytes()).hexdigest(),
         "sampleRate": arguments.rate,
         "tailSeconds": arguments.tail,
         "cases": cases,
     }
+    if arguments.batch:
+        # Recorded rather than merely printed, because the fixture outlives the run that made it.
+        # A reader that finds this key set should treat every case as suspect and re-generate
+        # without --batch before believing any difference it reports.
+        document["_warning"] = (
+            "GENERATED WITH --batch AND IS NOT A GATE. The whole sweep was rendered in one "
+            "process, where a GS reset does not isolate the cases: LFO nodes are freed without "
+            "being zeroed and the pseudo-random generator is seeded only at engine init. Measured "
+            "against a non-batch run, 204 of 238 cases differ -- pitch by up to 62.7 cents, band "
+            "level by up to 8.7 dB, and rmsDb on none of them. Re-generate without --batch before "
+            "treating any difference here as an engine defect.")
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(document, indent=1))
 
@@ -406,4 +453,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # Propagated, not discarded: `main` returns non-zero when it refuses to render, and a caller
+    # that checks the exit status has to be able to see that.
+    sys.exit(main())
