@@ -2858,19 +2858,24 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // expression but not with pan -- matching the engine's mono send bus.
     // Read off the voice's slewed levels, not the part's targets: a send that has just been turned
     // down is still feeding the bus on its way there, and one just turned up is not yet at full.
-    // The per-key depth multiplies the part's send rather than replacing it, which is what the
-    // module does: hold key 36 at CC91 64 and 127 against per-key 64 and 127 and the reverb tail
-    // reads 0.0012, 0.0024, 0.0024, 0.0048 -- a product, and silence whenever either side is 0.
-    // For a melodic voice the scale is 1.0, so this is the part's send unchanged.
+    // The per-key depth multiplies the part's send rather than replacing it, on all three
+    // networks. Measured one process per cell, since a GS reset does not isolate them:
+    //   reverb, per-key x CC#91, tail   0.0006534 0.0013053 / 0.0013053 0.0025893
+    //   delay,  per-key x CC#94, tail   0.0023021 0.0046040 / 0.0046040 0.0091360
+    //   chorus, per-key x CC#93, hit    0.0365974 0.0441678 / 0.0441678 0.0647341
+    // Each is a product: symmetric off-diagonal, doubling either input doubling the wet, and
+    // silence whenever either side is 0. Chorus is read over the hit rather than after it, having
+    // no tail where the other two have one. For a melodic voice every scale is 1.0, so the part's
+    // send reaches the bus unchanged.
     const double reverb_level = voice.reverb_send() * voice.key_reverb_scale();
     const double to_reverb =
         !efx_part && reverb && reverb_level > 0.0 ? Reverb::send_gain(reverb_level) : 0.0;
-    const double to_chorus = !efx_part && chorus && part.chorus_send_level() > 0.0
-                                 ? Chorus::send_gain(part.chorus_send_level())
-                                 : 0.0;
-    const double to_delay = !efx_part && delay && part.delay_send_level() > 0.0
-                                ? SystemDelay::send_gain(part.delay_send_level())
-                                : 0.0;
+    const double chorus_level = part.chorus_send_level() * voice.key_chorus_scale();
+    const double to_chorus =
+        !efx_part && chorus && chorus_level > 0.0 ? Chorus::send_gain(chorus_level) : 0.0;
+    const double delay_level = part.delay_send_level() * voice.key_delay_scale();
+    const double to_delay =
+        !efx_part && delay && delay_level > 0.0 ? SystemDelay::send_gain(delay_level) : 0.0;
 
     // The voice gain stays a separate multiply from the pan and send levels: collapsing them would
     // be the cheaper kernel and a silently different render, since float multiplication is no more
@@ -3482,6 +3487,12 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     if (const std::optional<int> reverb = planes.reverb(note)) {
         kit_key.reverb = *reverb;
     }
+    if (const std::optional<int> chorus = planes.chorus(note)) {
+        kit_key.chorus = *chorus;
+    }
+    if (const std::optional<int> delay = planes.delay(note)) {
+        kit_key.delay = *delay;
+    }
     if (const std::optional<int> group = planes.group(note)) {
         kit_key.group = *group;
     }
@@ -3611,6 +3622,8 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
         setup.mute_group = key.group;
         setup.drum_receives_note_off = key.receives_note_off;
         setup.key_reverb = key.reverb;
+        setup.key_chorus = key.chorus;
+        setup.key_delay = key.delay;
 
         PendingVoice pending;
         pending.slot = allocate_slot(channel, note, velocity, group);

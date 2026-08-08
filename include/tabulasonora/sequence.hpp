@@ -94,9 +94,8 @@ public:
 
     /// Records per-key send depths, from NRPN `1D`/`1E`/`1F` or drum-setup SysEx.
     ///
-    /// The reverb depth *is* consumed: it scales the part's send for that key alone, over the
-    /// kit record's own per-key value. Chorus and delay are still latched only — the same
-    /// measurement that pinned reverb has not been done for them, and wiring them on the
+    /// All three depths are consumed: each scales the part's send for that key alone, over the
+    /// kit record's own per-key value. The measurement that pinned reverb has now been run for
     /// assumption that they behave alike is the kind of guess this engine does not make.
     void set_reverb(int note, int entry) noexcept;
     void set_chorus(int note, int entry) noexcept;
@@ -131,6 +130,8 @@ public:
 
     /// The reverb-send override for a key, or nothing when it follows the kit record.
     [[nodiscard]] std::optional<int> reverb(int note) const noexcept;
+    [[nodiscard]] std::optional<int> chorus(int note) const noexcept;
+    [[nodiscard]] std::optional<int> delay(int note) const noexcept;
 
     /// The receive-switch overrides for a key, or nothing when it follows the kit.
     [[nodiscard]] std::optional<bool> rx_note_off(int note) const noexcept;

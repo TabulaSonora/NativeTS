@@ -100,6 +100,8 @@ DrumKey DrumKitTable::key(int note, int kit) const
         .group = kits_[offset + group_plane + static_cast<std::size_t>(note)],
         .pan = kits_[offset + pan_plane + static_cast<std::size_t>(note)],
         .reverb = kits_[offset + reverb_plane + static_cast<std::size_t>(note)],
+        .chorus = kits_[offset + chorus_plane + static_cast<std::size_t>(note)],
+        .delay = kits_[offset + delay_plane + static_cast<std::size_t>(note)],
         .receives_note_off =
             (kits_[offset + receive_plane + static_cast<std::size_t>(note)] & 1U) != 0,
         .receives_note_on =

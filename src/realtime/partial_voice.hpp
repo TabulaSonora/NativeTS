@@ -60,6 +60,9 @@ struct VoiceSetup {
     /// 127 is "no scaling" and is what a melodic voice uses, so the part's send reaches the bus
     /// unchanged. A drum voice carries its kit record's value instead — see `DrumKey::reverb`.
     int key_reverb = 127;
+    /// Per-key chorus and delay depths, on the same footing as `key_reverb`.
+    int key_chorus = 127;
+    int key_delay = 127;
 
     int pan = PanLaw::centre;
     bool pan_follows_part = false;
@@ -195,6 +198,10 @@ public:
     /// The per-key reverb depth as a 0-1 scale, 1.0 for a voice that has none.
     [[nodiscard]] double key_reverb_scale() const noexcept { return key_reverb_ / 127.0; }
 
+    /// The per-key chorus and delay depths, likewise.
+    [[nodiscard]] double key_chorus_scale() const noexcept { return key_chorus_ / 127.0; }
+    [[nodiscard]] double key_delay_scale() const noexcept { return key_delay_ / 127.0; }
+
     /// Renders one block.
     ///
     /// A block never straddles a control tick: a voice starts on the render-block grid and the tick
@@ -303,6 +310,8 @@ private:
     bool is_drum_ = false;
     bool drum_receives_note_off_ = false;
     int key_reverb_ = 127;
+    int key_chorus_ = 127;
+    int key_delay_ = 127;
     double drum_base_ratio_ = 1.0;
     double base_pitch_ = 0.0;
     double native_pitch_ = 0.0;
