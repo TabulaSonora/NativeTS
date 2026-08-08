@@ -2644,6 +2644,21 @@ void ToneGenerator::render(std::span<float> left, std::span<float> right)
     while (written < left.size()) {
         if (impl_->block_offset >= block_size) {
             impl_->render_block();
+            // TS_VOICE_COUNT: sounding voices per block, to set beside the module's own count. A
+            // detuned unison losing one of its two partials is ~3 dB down, constant, with its
+            // envelope intact -- the signature NativeTS #8's channel 15 shows and which nothing
+            // measurable about the expression path explains.
+            static const bool probe_voices = std::getenv("TS_VOICE_COUNT") != nullptr;
+            if (probe_voices) {
+                int live = 0;
+                for (const auto& slot : impl_->slots) {
+                    if (slot && !slot->finished()) {
+                        ++live;
+                    }
+                }
+                std::fprintf(stderr, "voices: %lld,%d\n",
+                             static_cast<long long>(impl_->position), live);
+            }
             impl_->block_offset = 0;
         }
 
