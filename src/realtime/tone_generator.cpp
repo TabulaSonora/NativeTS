@@ -3318,6 +3318,32 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     // value that arrived on the wire.
     velocity = part.effective_velocity(velocity);
 
+    // GS part key shift (`40 1x 16`), and it moves the NOTE NUMBER rather than the pitch.
+    //
+    // The distinction is invisible on most tones and decisive on a few. Transposing the note ahead
+    // of the lookup lets it land in a different sample zone; adding the same interval to the pitch
+    // afterwards keeps the untransposed note's zone and stretches it. Where a tone's zones are
+    // uniformly tuned -- a finely multisampled piano -- the two agree exactly, which is why this
+    // stood for so long.
+    //
+    // Measured on program 77, whose low zone plays an octave up and whose zone above key 71 does
+    // not. Note 60, key shift swept, module against this engine before the change:
+    //
+    //     shift  +0   +2   +4   +6   +8  +10  | +12  +16  +24
+    //     module +12  +14  +16  +18  +20  +22 | +12  +16  +24     = pitch of note (60 + shift)
+    //     ours   +12  +14  +16  +18  +20  +22 | +24  +28  +36     = note 60's zone, then + shift
+    //
+    // Both columns agree while the shifted note stays inside the low zone and part company the
+    // moment it crosses out of it, which is the signature of a lookup-time transpose rather than a
+    // playback-time one. `shangai.mid` is the corpus's one file that shows it: its channel 1 sets
+    // shift +12 over this program and sounded an octave high for the whole song.
+    //
+    // The receive range above is deliberately tested against the arriving note, not this one: it
+    // filters what the part accepts, and a transpose is what the part does with what it accepted.
+    // Drums never reach here -- `start_drum` returns above -- and the module likewise ignores key
+    // shift on a rhythm part, measured the same way.
+    const int sounding_note = std::clamp(note + (part.key_shift - 0x40), 0, 0x7F);
+
     const std::vector<int> tones =
         notes->directory().program_tones(part.program, tone_map_for(part), lookup_bank_for(part));
     if (tones.empty()) {
@@ -3344,7 +3370,7 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             layers.emplace_back();
             continue;
         }
-        layers.push_back(notes->directory().resolve(tone_number, note, velocity));
+        layers.push_back(notes->directory().resolve(tone_number, sounding_note, velocity));
     }
     // A part panpot of zero is GS RND: the engine repositions the note outright rather than
     // offsetting the partial's own pan, and redraws for every note. Only the SysEx panpot can set
@@ -3399,7 +3425,7 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
                 continue;
             }
 
-            const int key = std::clamp(note, 0, 0x7F);
+            const int key = sounding_note;
             Envelopes built = envelopes(tone_number, partial, key, velocity, part.modifiers());
             auto [lfo1_config, lfo2_config] =
                 notes->lfo().configure(tone_number, partial, part.modifiers());
@@ -3413,7 +3439,8 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
             // voice can make. Scale tuning folds in after it rather than riding with the bend: it
             // is per-key, so it is latched at note-on like the rest of the note's pitch.
             const int base_pitch_raw =
-                notes->pitch().base_pitch_milli_semitones(partial, note, partial.key_center());
+                notes->pitch().base_pitch_milli_semitones(partial, sounding_note,
+                                                          partial.key_center());
 
             VoiceSetup setup;
             setup.channel = channel;

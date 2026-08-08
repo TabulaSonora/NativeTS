@@ -424,14 +424,16 @@ public:
         return PitchChain::bend_offset_milli_semitones(bend, bend_range);
     }
 
-    /// The part's static tune in milli-semitones: the net of RPN coarse and fine tune and the GS
-    /// part key shift.
+    /// The part's static tune in milli-semitones: the net of RPN coarse and fine tune.
     ///
-    /// One summed value, matching the engine, which folds all three into a single s16
-    /// milli-semitone offset (`part+0x3ba`) added to every voice's pitch.
+    /// **Key shift is deliberately not here.** It reads like a sibling of coarse tune and is not
+    /// one: the module applies it to the *note number*, ahead of the patch lookup, so it selects a
+    /// different sample zone rather than repitching the one the untransposed note would have
+    /// chosen. `ToneGenerator::Impl::start_note` applies it, and the difference is invisible until
+    /// a tone's zones are not uniformly tuned -- see the note there for the measurement.
     [[nodiscard]] double tune_milli_semitones() const noexcept
     {
-        return ((key_shift - 0x40) * 1000.0) + ((coarse_tune - 0x40) * 1000.0)
+        return ((coarse_tune - 0x40) * 1000.0)
                + ((fine_tune - 0x2000) * 1000.0 / 0x2000);
     }
 
