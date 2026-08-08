@@ -60,15 +60,20 @@ struct MidiEvent {
 /// A dependency-free Standard MIDI File reader.
 ///
 /// Handles formats 0, 1 and 2, running status, system-exclusive messages, and the tempo map. Track
-/// ticks are converted to seconds through that map and then to samples, and finally quantised to
-/// the render-block grid — the granularity at which the engine actually applies events. Quantising
-/// here is what lets an offline render line up sample-for-sample with the real engine's own output.
+/// ticks are converted to seconds through that map and then to samples, then rounded onto the 1 ms
+/// increment the engine recalculates event timing to. Quantising here is what lets an offline
+/// render line up with the real engine's own output.
 ///
 /// Meta events other than tempo are consumed here or dropped: port tags pick the port scheme,
 /// markers feed the loop scanners, and none of them reach the event list.
 namespace smf {
 
-/// Samples per render block — the grid events are applied on.
+/// Samples per 1 ms — the increment the engine recalculates event timing onto.
+///
+/// 32 samples is 1 ms at the engine's 32 kHz internal rate, and that is what this is. It was
+/// previously called the render-block grid, which it is not: the control block is 320. The value
+/// was right and the name was wrong, which is worse than both being wrong, because it invites
+/// "correcting" it to 320 -- measured, that collapses short notes badly.
 inline constexpr int block_grid = 32;
 
 /// Default tempo when a file sets none: 120 bpm, in microseconds per quarter note.

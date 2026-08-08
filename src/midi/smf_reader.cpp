@@ -118,10 +118,20 @@ read_variable_length(std::span<const std::uint8_t> data, std::size_t position, i
 
 std::int64_t quantise(double samples) noexcept
 {
-    // std::nearbyint under the default FE_TONEAREST is round-half-to-even, which is what .NET's
-    // Math.Round does. Measured, the choice does not actually reach the block here -- see the
-    // header -- but matching the original exactly costs nothing and does not depend on that
-    // argument continuing to hold.
+    // The engine recalculates event timing onto **1 ms increments**, which at its 32 kHz internal
+    // rate is exactly the 32 samples of `block_grid`. That is what this models -- not a render
+    // block, which is what the constant used to claim and which is 320.
+    //
+    // The distinction matters because the wrong name invites the wrong fix. Coarsening this to 320
+    // to "match the control block" was tried and measured: it collapses a note-on and its note-off
+    // onto one boundary and takes shangai's channel 1 to 0.40 peak and 0.47 rms against the module.
+    // Removing the grid entirely was also tried, and renders bit-identically on that file -- the
+    // positions are already quantised downstream -- so the grid is not what is costing us anything.
+    //
+    // `std::nearbyint` under FE_TONEAREST is round-half-to-even, matching .NET's `Math.Round`, so
+    // this and `scdec` land on the same integer for the same input. The engine's own rounding onto
+    // the 1 ms grid is NOT yet established; half-to-even here is the assumption, not a measurement,
+    // and is the first thing to check if event placement is ever suspected again.
     return static_cast<std::int64_t>(std::nearbyint(samples)) / block_grid * block_grid;
 }
 
@@ -141,6 +151,24 @@ std::vector<MidiEvent> read(const std::filesystem::path& path, int sample_rate)
     return load(path, sample_rate).events;
 }
 
+// TODO: this parser is more permissive than the module's, and that permissiveness hides bugs
+// rather than tolerating them.
+//
+// Found the way these things are always found. A generated probe in the 2026-08-08 key-shift work
+// left a dangling delta-time before end-of-track -- a delta with no event after it, so the next
+// byte read as a status was 0x00. `scdec` rejected the file outright ("Index was outside the
+// bounds of the array") and this parser rendered it anyway, which meant the two engines were
+// briefly being compared on inputs only one of them considered a MIDI file. The generator bug was
+// mine and took a round to spot precisely because this side stayed quiet.
+//
+// Being lenient is defensible for a player asked to open whatever a user has. It is not defensible
+// for the half of an oracle harness whose entire job is to be comparable to the other half: if the
+// module will not parse something, rendering it here produces a number that means nothing, and
+// silence is the worst possible way to report that. At minimum a trailing delta with no event, a
+// track whose events overrun its declared length, and a status byte of 0x00 with no running status
+// in force should be diagnosed rather than absorbed. Whether that is a hard error or a warning is
+// a real question -- the corpus has real files with real damage in them, and `Africa.mid` below is
+// one -- so the likely answer is strict by default with an opt-out, not strict everywhere.
 std::vector<MidiEvent> parse(std::span<const std::uint8_t> data, int sample_rate)
 {
     return load(data, sample_rate).events;
