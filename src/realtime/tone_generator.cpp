@@ -2970,7 +2970,34 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
             std::fprintf(stderr, "sendbus: chorus peak=%.9f rms=%.9f  delay peak=%.9f rms=%.9f\n",
                          cp, cr, dp, dr);
         }
+        // The chorus's own contribution, taken by differencing the wet buses across its call,
+        // because it accumulates into shared ones. Comparable to the module's two output taps at
+        // 0x181a19170 and 0x181a191f0 -- fx_chorus_stage_l writes param_3 and param_3+0x80, so it
+        // is mono in and stereo out.
+        std::array<float, block_size> wet_l_before{};
+        std::array<float, block_size> wet_r_before{};
+        if (probe_buses) {
+            std::copy(wet_left.begin(), wet_left.end(), wet_l_before.begin());
+            std::copy(wet_right.begin(), wet_right.end(), wet_r_before.begin());
+        }
         chorus->process(chorus_bus, wet_left, wet_right, chorus_mono);
+        if (probe_buses) {
+            double pl = 0.0;
+            double sl = 0.0;
+            double pr = 0.0;
+            double sr = 0.0;
+            for (int n = 0; n < block_size; ++n) {
+                const auto i = static_cast<std::size_t>(n);
+                const double dl = static_cast<double>(wet_left[i]) - wet_l_before[i];
+                const double dr = static_cast<double>(wet_right[i]) - wet_r_before[i];
+                pl = std::max(pl, std::abs(dl));
+                sl += dl * dl;
+                pr = std::max(pr, std::abs(dr));
+                sr += dr * dr;
+            }
+            std::fprintf(stderr, "chorusout: L peak=%.9f rms=%.9f  R peak=%.9f rms=%.9f\n",
+                         pl, std::sqrt(sl / block_size), pr, std::sqrt(sr / block_size));
+        }
         add(&chorus_level_ramp, chorus_level);
         scale_feed(chorus_to_reverb_ramp, chorus_to_reverb_level, chorus_mono, chorus_to_reverb);
         scale_feed(chorus_to_delay_ramp, chorus_to_delay_level, chorus_mono, chorus_to_delay);
