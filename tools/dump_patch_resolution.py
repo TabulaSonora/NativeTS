@@ -40,6 +40,21 @@ ALTERNATE_SPACE_START = 0x6000
 MELODIC_SPACE_END = 0x4000
 MAPS = {"Sc55": 1, "Sc88": 2, "Sc88Pro": 3, "Sc8820": 4}
 
+# The two lookup banks that redirect into ANOTHER map rather than resolving in the current one --
+# the SC-88 and SC-55 compatibility banks, which any map can reach. They are not the ordinary
+# "unassigned bank falls back to bank 0" case, and treating them as such is wrong: from Sc55 bank
+# 0x40 sounds the SC-88's tone, and from Sc88 bank 0x41 sounds the SC-55's.
+#
+# Taken from the module, not from the C++ implementation. `scdec <dll> map 0 <msb> 0` plays program
+# 0 at bank MSB 0, 0x40 and 0x41 and reports the wave the live engine selected:
+#
+#     bank 0    -> 8008:656065
+#     bank 0x40 -> 8004:877920
+#     bank 0x41 -> 8005:223392
+#
+# Three distinct waves. The bank-0 fallback would have made all three identical.
+INDIRECT_BANKS = {0x40: MAPS["Sc88"], 0x41: MAPS["Sc55"]}
+
 
 def read_tables(image, manifest):
     """Slice the tables this resolver needs straight out of the DLL."""
@@ -87,6 +102,13 @@ def lut3_raw(tables, program, map_index, bank):
 
 
 def lut3_resolved(tables, program, map_index, bank):
+    # A compatibility bank resolves in the map it names, at that map's bank 0, whatever map the
+    # part is currently on. This is checked before the ordinary lookup because the current map's
+    # own entry for bank 0x40/0x41 is not what sounds.
+    redirect = INDIRECT_BANKS.get(bank)
+    if redirect is not None:
+        return lut3_raw(tables, program, redirect, 0)
+
     raw = lut3_raw(tables, program, map_index, bank)
     if bank != 0 and (raw is None or raw == UNASSIGNED):
         raw = lut3_raw(tables, program, map_index, 0)
