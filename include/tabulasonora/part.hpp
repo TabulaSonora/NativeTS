@@ -224,14 +224,18 @@ public:
 
     /// Whether this part runs through the four-band EQ (`40 4x 20`), which is `part+0x450`.
     ///
-    /// **Off by default, which contradicts the SC-8820 manual.** The manual gives this parameter a
-    /// default of `01 ON`; in this engine the part reset writes the byte to zero and *nothing
-    /// anywhere sets it to one* except the SysEx handler, so a module that is never told to switch
-    /// the EQ on never switches it on. That is a difference without a sound until a file also sends
-    /// a non-flat `40 02`, since a flat EQ is exactly transparent either way — but on such a file
-    /// it decides whether the EQ is heard at all, so it is worth an oracle check before it is
-    /// trusted.
-    bool eq_enabled = false;
+    /// **On by default**, as the SC-8820 manual and Roland's GS documentation (`2-5`, `40 4x 20`
+    /// EQ ON/OFF, default `01`) both say. This was `false` until the module was asked directly,
+    /// on the strength of the part reset writing the byte to zero — but the reset is not the whole
+    /// story, and the render is the oracle.
+    ///
+    /// The check: `roland_sc88_y03.mid` sends `40 02 01 47` and `40 02 03 43`, a +7 dB shelf at
+    /// 200 Hz and +3 dB at 6 kHz, and never sends `40 4x 20`. Patching only those two gain bytes
+    /// to flat changes the *module's* own render (max sample delta 0.46), so the module had the EQ
+    /// switched on without being told to. With the EQ flattened on both sides the two engines agree
+    /// to within 0.1 dB on six of nine octaves, which also says the EQ was the whole of that file's
+    /// 4.58 dB deficit.
+    bool eq_enabled = true;
 
     /// Whether this part feeds the insertion EFX block (`40 4x 22`), which is `part+0x452`.
     ///

@@ -990,12 +990,16 @@ TEST_CASE("the four-band EQ engages only when a part opts in", "[stream][sccore]
         RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
     NoteRenderer notes{rom};
 
-    // Renders the same note, optionally switching the part's EQ on and cutting the low band hard.
+    // Renders the same note, setting the part's EQ switch explicitly either way and optionally
+    // cutting the low band hard.
+    //
+    // The switch is always written rather than left at its reset value. Parts now reset with the
+    // EQ **on**, so "not on the bus" has to be asked for -- and writing both states is the stronger
+    // test in any case, since a broken `40 4x 20 00` path is invisible to a test that only ever
+    // relies on the default.
     const auto render = [&](bool part_eq, bool cut_low) {
         ToneGenerator generator{notes};
-        if (part_eq) {
-            generator.send_sysex(dt1({0x40, 0x41, 0x20, 0x01}));
-        }
+        generator.send_sysex(dt1({0x40, 0x41, 0x20, part_eq ? 0x01 : 0x00}));
         if (cut_low) {
             generator.send_sysex(dt1({0x40, 0x02, 0x01, 0x34}));
         }
@@ -1026,6 +1030,46 @@ TEST_CASE("the four-band EQ engages only when a part opts in", "[stream][sccore]
 
     // Both together, and a low note loses energy.
     CHECK(render(true, true) < plain * 0.95);
+}
+
+TEST_CASE("a part hears the EQ without being told to switch it on", "[stream][sccore]")
+{
+    // The default `40 4x 20` is ON, which the SC-8820 manual and Roland's GS documentation both
+    // say and which this port had backwards. It is pinned separately from the test above because
+    // the two claims are different: that one is about routing, and holds whichever way the switch
+    // resets; this one is about the reset value, and is the whole of why `roland_sc88_y03.mid`
+    // rendered 4.58 dB light.
+    //
+    // Measured on the module rather than reasoned about. `y03` programs `40 02 01 47` and never
+    // sends `40 4x 20`; patching only that gain byte to flat changes the module's own render by up
+    // to 0.46 in a sample. A module that had reset the switch off could not have done that.
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    const auto energy = [&](bool cut_low) {
+        ToneGenerator generator{notes};
+        if (cut_low) {
+            generator.send_sysex(dt1({0x40, 0x02, 0x01, 0x34}));
+        }
+        generator.send_channel(0x90, 40, 100);
+        std::vector<float> left(32000);
+        std::vector<float> right(32000);
+        generator.render(left, right);
+        double total = 0.0;
+        for (const float sample : left) {
+            total += static_cast<double>(sample) * static_cast<double>(sample);
+        }
+        return total;
+    };
+
+    ToneGenerator fresh{notes};
+    CHECK(fresh.part(0).eq_enabled);
+
+    // The system EQ alone, with nothing routed by hand, has to be audible.
+    const double plain = energy(false);
+    REQUIRE(plain > 0.0);
+    CHECK(energy(true) < plain * 0.95);
 }
 
 TEST_CASE("a partial with no release time fades rather than cutting", "[stream][sccore]")

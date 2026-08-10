@@ -262,11 +262,21 @@ constexpr std::array<KnownDeviation, 19> known_deviations{{
     {"dreaming_i_was_dreaming.mid", {1.0, 0.02, 3.0, 6.0}, "lead; clicks on note boundaries"},
     {"onestop.mid", {1.0, 0.015, 3.0, 6.0}, "peak only, and only since drums ring their full length"},
 
-    // The balance row is new and is the cost of the chorus phase seed: 0.0638 against the 0.06
-    // default, where it used to pass. Three other songs' balance improved for the same change --
-    // panwet by 0.12, rainy and roland_sc55_demo03 by 0.007 each -- so the trade is heavily
-    // positive and this is the one that went the other way. Tighten when the bass arrives.
-    {"roland_sc88_y03.mid", {5.0, 0.33, 9.8, 7.0, 0.065}, "bass missing, same at every map"},
+    // **The bass arrived, and this row is tightened as the previous note asked.** Four of its five
+    // columns are back to the defaults, from 5.0/0.33/9.8/7.0: the song was never light in the bass
+    // at all, it was missing the +7 dB 200 Hz shelf it asks for in `40 02 01 47`, because parts
+    // reset with their EQ switch off. See `Part::eq_enabled`. Measured after the fix, against the
+    // module: rms 0.23 dB, peak 3.05e-05, worst envelope window 2.18 dB.
+    //
+    // Balance is the one column that had to move the other way, 0.0638 to 0.0896, and the reason is
+    // known rather than guessed. The module takes a part's **reverb send after the EQ**: with
+    // `40 4x 20` on, a +12 dB low shelf lifts the pure reverb tail by 4.89 dB, and with the switch
+    // off the same shelf moves the tail by 0.00 dB. This engine filters only the dry bus and takes
+    // its sends ahead of the filter, so its wet signal is unshaped and sits differently across the
+    // image. That is a separate defect from the default, it is not fixed here, and this bound is
+    // `TS_STRICT_SONGS=1` plus 2% like every other. Tighten it when the sends move behind the EQ.
+    {"roland_sc88_y03.mid", {1.0, 0.01, 3.0, 6.0, 0.092},
+     "sends are taken ahead of the EQ; the module takes them behind it"},
     {"roland_suplex.mid", {1.5, 0.24, 8.2, 14.5, 0.146}, "one passage plays differently"},
     {"roland_sc88_y05.mid", {1.2, 0.2, 3.0, 6.0, 0.064}, "lead"},
     {"roland_sc55_demo13.mid", {1.0, 0.06, 5.5, 6.0, 0.109}, "lead"},

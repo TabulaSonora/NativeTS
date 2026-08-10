@@ -40,7 +40,7 @@ void Part::reset()
     rhythm = -1;
     key_low = 0;
     key_high = 0x7F;
-    eq_enabled = false;
+    eq_enabled = true;
     efx_enabled = false;
     envelope_delay = 0x40;
     envelope_delay_tone = 0x40;
