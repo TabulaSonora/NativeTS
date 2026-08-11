@@ -34,6 +34,7 @@ INPUT                  = docs/index.md \
                          docs/spec/signal-flow.md \
                          docs/spec/dll-layout.md \
                          docs/spec/glossary.md \
+                         docs/spec/tone-names.md \
                          include/tabulasonora
 INPUT_ENCODING         = UTF-8
 FILE_PATTERNS          = *.hpp *.md

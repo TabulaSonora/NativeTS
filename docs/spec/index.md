@@ -5,7 +5,7 @@ recovered from `SCCore.dll` itself, maintained in the
 [TabulaSonora/spec](https://github.com/TabulaSonora/spec) repository, which both this
 implementation and the archived C# one were written against.
 
-The three pages here are the part of that specification a reader of *this* codebase needs — the
+The pages here are the part of that specification a reader of *this* codebase needs — the
 normative structure, the vocabulary, and the file layout:
 
 | | |
@@ -13,6 +13,7 @@ normative structure, the vocabulary, and the file layout:
 | \subpage signal-flow | How a MIDI event becomes sound inside the DLL, stage by stage, with the map from its symbols to these classes |
 | \subpage dll-layout | Where the wave ROM, the tables and the patch directory sit in the file, and how VAs become file offsets |
 | \subpage glossary | The domain vocabulary — partial, multisample, tone, TVA, TVF, key-follow — for a reader who does not already have it |
+| \subpage tone-names | What Roland's tone name suffixes mean — `.o`, `w`, `:L`, `d`, `v` — and which byte of the tone record each one is |
 
 ## Confidence tags
 
