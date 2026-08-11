@@ -58,6 +58,10 @@ public:
         state_right_ = 0.0;
         previous_left_ = 0.0;
         previous_right_ = 0.0;
+        current_left_ = 0.0;
+        current_right_ = 0.0;
+        mid_left_ = 0.0;
+        mid_right_ = 0.0;
         phase_ = 0.0;
     }
 
@@ -69,56 +73,95 @@ public:
 
     [[nodiscard]] double ratio() const noexcept { return ratio_; }
 
-    /// Passes one stereo sample through, returning the pair the host receives.
+    /// Takes one input frame: runs the allpass over it and keeps it as the pair the interpolation
+    /// sits between.
     ///
-    /// One in, one out: at the engine's own rate the ratio is one, which is the only case this
-    /// engine runs in — it renders at 32 kHz and leaves any real conversion to whatever consumes
-    /// it. A ratio other than one makes the output count differ from the input's, and the render
-    /// path would have to carry that difference before this could serve it.
-    [[nodiscard]] std::pair<float, float> process(float left, float right) noexcept
+    /// Separate from producing output so that a ratio other than one can be served — see
+    /// `advance`. `process` below is these three steps in the order that gives one out per in.
+    void push(float left, float right) noexcept
     {
-        const double in_left = static_cast<double>(left);
-        const double in_right = static_cast<double>(right);
+        previous_left_ = current_left_;
+        previous_right_ = current_right_;
+
+        current_left_ = static_cast<double>(left);
+        current_right_ = static_cast<double>(right);
 
         // The allpass, per channel: the state takes the input less the fed-back state, and the
         // output leads with the coefficient. Half a sample of delay, which is the midpoint the
-        // interpolation below is taken against.
+        // interpolation is taken against.
         const double held_left = state_left_;
         const double held_right = state_right_;
-        state_left_ = in_left - (allpass_coefficient * held_left);
-        state_right_ = in_right - (allpass_coefficient * held_right);
-        const double mid_left = (state_left_ * allpass_coefficient) + held_left;
-        const double mid_right = (state_right_ * allpass_coefficient) + held_right;
+        state_left_ = current_left_ - (allpass_coefficient * held_left);
+        state_right_ = current_right_ - (allpass_coefficient * held_right);
+        mid_left_ = (state_left_ * allpass_coefficient) + held_left;
+        mid_right_ = (state_right_ * allpass_coefficient) + held_right;
+    }
 
+    /// The output frame at the phase the filter currently stands at.
+    ///
+    /// The interpolation runs on the 2x grid the allpass supplies: below the half-way point it
+    /// runs from the previous input to the midpoint, above it from the midpoint to this one.
+    [[nodiscard]] std::pair<float, float> at() const noexcept
+    {
         double out_left = 0.0;
         double out_right = 0.0;
         if (phase_ >= 0.5) {
             const double t = (phase_ + phase_) - 1.0;
-            out_left = ((in_left - mid_left) * t) + mid_left;
-            out_right = ((in_right - mid_right) * t) + mid_right;
+            out_left = ((current_left_ - mid_left_) * t) + mid_left_;
+            out_right = ((current_right_ - mid_right_) * t) + mid_right_;
         } else {
             const double t = phase_ + phase_;
-            out_left = ((mid_left - previous_left_) * t) + previous_left_;
-            out_right = ((mid_right - previous_right_) * t) + previous_right_;
+            out_left = ((mid_left_ - previous_left_) * t) + previous_left_;
+            out_right = ((mid_right_ - previous_right_) * t) + previous_right_;
         }
+        return {static_cast<float>(out_left), static_cast<float>(out_right)};
+    }
 
-        previous_left_ = in_left;
-        previous_right_ = in_right;
-
+    /// Steps the phase on by one output frame, and says how many input frames that needs.
+    ///
+    /// At the engine's own rate the ratio is one and the answer is always one, which is the
+    /// one-in-one-out case `process` is written for. Below one -- every host rate above 32 kHz --
+    /// it is one or nothing, and the phase carries the fraction between output frames.
+    [[nodiscard]] int advance() noexcept
+    {
         phase_ += ratio_;
+        int wanted = 0;
         while (phase_ >= 1.0) {
             phase_ -= 1.0;
+            ++wanted;
         }
+        return wanted;
+    }
 
-        return {static_cast<float>(out_left), static_cast<float>(out_right)};
+    /// Passes one stereo sample through, returning the pair the host receives.
+    ///
+    /// One in, one out, which is the engine's own rate: it renders at 32 kHz and the ratio is one,
+    /// so `advance` always asks for exactly the frame the next call brings. For a host running at
+    /// any other rate the counts differ and the caller drives `push`, `at` and `advance` itself.
+    [[nodiscard]] std::pair<float, float> process(float left, float right) noexcept
+    {
+        push(left, right);
+        const auto out = at();
+        static_cast<void>(advance());
+        return out;
     }
 
 private:
     double ratio_ = 1.0;
+
+    /// The allpass state, one per channel.
     double state_left_ = 0.0;
     double state_right_ = 0.0;
+
+    /// The two input frames the interpolation runs between, and the half-way point the allpass
+    /// puts between them.
     double previous_left_ = 0.0;
     double previous_right_ = 0.0;
+    double current_left_ = 0.0;
+    double current_right_ = 0.0;
+    double mid_left_ = 0.0;
+    double mid_right_ = 0.0;
+
     double phase_ = 0.0;
 };
 
