@@ -1680,6 +1680,60 @@ Stated plainly, because they are not covered by the numbers above:
   modelled: assign mode (`40 1x 14`, one voice-allocation policy here) and per-key Rx note-on/off
   in the drum setup (`40 2x 07`/`08`), whose law is not recovered.
 
+## Simultaneous voices of one tone drift apart; one voice does not {#simultaneous-voices}
+
+`robyn_show_me_love.mid` at map 4 is the row that carries this, and the trail to it is worth keeping
+because almost every step ruled something out.
+
+The module's peak for that song is a single instant, 55.494 s, where this engine rendered 0.845 of
+it. Rendering the song a second time with every part's reverb, chorus and delay send zeroed and
+differencing the two passes puts the deficit **entirely in the dry path** -- dry and mix both read
+0.845 there, and the module's wet at that sample is 0.041 against a mix of 0.501. So it is not an
+effect.
+
+Isolating each channel into its own file, with the file's SysEx preserved and the sends zeroed,
+gives a whole-song RMS ratio of **1.006 to 1.009 on every one of the eight melodic parts**. No part
+is at the wrong level. Band-splitting the dry mix at the peak agrees: every octave is within 0.2 dB
+except 250-1000 Hz, which is 1.0 dB down on the left and **3.8 dB down on the right**.
+
+That points at channel 6 of the file -- part 6, program 62, panned 89, holding notes 64, 71 and 76
+struck together at 54.783 s. Taken one at a time those voices are right:
+
+| | correlation | RMS ratio | residual |
+|---|---|---|---|
+| note 64 alone | 0.9240 | 1.0073 | −8.1 dB |
+| note 71 alone | 0.8579 | 1.0101 | −5.4 dB |
+| note 76 alone | 0.8603 | 1.0073 | −5.5 dB |
+| 64 + 71 | 0.7425 | 0.9881 | −2.9 dB |
+| 64 + 76 | 0.6581 | 0.9242 | −2.0 dB |
+| 71 + 76 | 0.5751 | 0.9920 | −0.7 dB |
+| 64 + 71 + 76 | 0.4311 | 1.0272 | **+0.7 dB** |
+
+**Every additional simultaneous voice of the same tone costs correlation, and the level never
+moves.** At three voices the error is larger than the signal it is an error in, while the RMS ratio
+is still 1.03. A gain error cannot do that, and neither can a per-voice defect: measured on note 64
+alone, the vibrato rate agrees to **0.00%**, the mean pitch to **0.01 cents**, the depth to 0.3
+cents, and the vibrato phase of all three notes agrees within 4.5 degrees when each is rendered by
+itself. What is wrong is how simultaneous voices of one tone combine.
+
+That is the LFO node pool. The module hands a tone with bit 5 of header `0x0E` a *shared* node --
+one phase and one random register across the voices, with per-partial depths -- and this engine does
+model that (`LfoConfig::shares_node`, `adopt_standing_nodes`, `take_standing_nodes`). Note that the
+premise of the older "the port ignores the node-sharing flag" note is therefore out of date; the
+flag is read. What has not been shown is that the *pool* behaves like the module's, and this ladder
+is the measurement to hold any change to it against.
+
+**What this row is not.** It is not the attack-transient family, which was the first guess: the
+deficit is not at an onset, it is 0.7 s into a held chord. Do not re-chase it as one.
+
+### The wet is half, on a second file {#robyn-wet}
+
+The same dry differencing gives, over the whole song: dry RMS ratio **0.9951**, wet RMS ratio
+**0.5342**. `panwet.mid` already recorded a chorus return short by a constant factor with the reverb
+correct; this is a second, independent file with the same shape, measured the same way. It does not
+show up in that song's gate rows because the wet is a small part of its level -- mix 0.9510 -- which
+is exactly why it needs differencing to see at all.
+
 ## Methodology worth borrowing
 
 Three habits earned their place during development:
