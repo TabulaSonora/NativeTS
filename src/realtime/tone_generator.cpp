@@ -197,7 +197,28 @@ struct ToneGenerator::Impl {
 
     struct PendingNote {
         int part = 0;
+        int note = 0;
         bool random_pan = false;
+
+        /// Set when the note-off arrives before the setup pass has reached this note.
+        ///
+        /// A zero-length note -- note-on and note-off at the same tick -- is not a curiosity, it is
+        /// ordinary sequencer output: `shangai.mid` has four on channel 1 alone. The module handles
+        /// it because `note_assign_poly` hangs the group off the part at dispatch, so the note-off
+        /// finds it there whether or not its parameters have been read yet. This split, which only
+        /// exists so the random draws land in the module's order, put the voice somewhere a
+        /// note-off could not see: `stop_note` scans `slots`, and the slot is still empty.
+        ///
+        /// The consequence was not a clipped note but a stuck one -- the voice started a tick later
+        /// with nothing left to release it and sounded until the song ended. Measured against the
+        /// module on program 77: it starts the note and releases it at once, down from 0.0033 to
+        /// the 1e-4 floor within 60 ms, while this port held it at full sustain for the remaining
+        /// 1.5 seconds of the probe.
+        bool released = false;
+        /// All Sound Off cuts rather than releasing, and reaches these the same way.
+        bool choke = false;
+        int release_damper = 0;
+
         std::vector<PendingVoice> voices;
     };
 
@@ -3228,6 +3249,22 @@ void ToneGenerator::Impl::read_pending_note(PendingNote& note)
 
             install(pending.slot, std::move(pending.setup));
         }
+
+        // Released before it ever sounded. The release runs on the voice rather than skipping it,
+        // because that is what the module's output shows: the note is audible for its first block
+        // and then decays, rather than being silent. Held to the end of the note's setup so every
+        // partial of a group is released together, and so the release sees a fully started voice.
+        if (note.released) {
+            for (const PendingVoice& pending : note.voices) {
+                if (auto& slot = slots[static_cast<std::size_t>(pending.slot)]) {
+                    if (note.choke) {
+                        slot->choke();
+                    } else {
+                        slot->note_off(note.release_damper);
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -3251,11 +3288,35 @@ bool ToneGenerator::Impl::any_voice_on(int channel) const
 
 void ToneGenerator::Impl::stop_note(int channel, int note, int damper)
 {
+    bool sounding = false;
     for (auto& slot : slots) {
         if (slot && slot->channel() == channel && slot->note() == note && !slot->released()) {
             slot->note_off(damper);
+            sounding = true;
         }
     }
+
+    // Only then the notes allocated earlier in this chunk, whose slots are still empty.
+    // `any_voice_on` already counts these as sounding, for the same reason: between allocation and
+    // the setup pass the note exists on the part in the module, so anything that asks about the
+    // part has to see it. A note-off is one of those things. See `PendingNote::released`.
+    //
+    // **Older instance first, and the order is the whole of it.** A sequencer writing a repeated
+    // key routinely emits the new note-on before the old note's note-off -- `shangai.mid` does it
+    // four bars running -- so at the moment the off arrives there are two instances of the same
+    // key on the part, one sounding and one queued. The off belongs to the older one. Releasing
+    // both took `robyn_show_me_love.mid` from passing its peak row to 0.048 under it, because
+    // twenty-nine notes there are that pattern and not one of them is really zero-length. The
+    // queued note is reached only when nothing is sounding to take the release instead.
+    if (!sounding) {
+        for (PendingNote& queued : pending_notes) {
+            if (queued.part == channel && queued.note == note && !queued.released) {
+                queued.released = true;
+                queued.release_damper = damper;
+            }
+        }
+    }
+
     pool.release(channel, note);
 }
 
@@ -3382,6 +3443,7 @@ void ToneGenerator::Impl::start_note(int channel, int note, int velocity)
     // the pan. Drawing it up front placed it one or two values early on every randomly-panned note.
     PendingNote queued;
     queued.part = channel;
+    queued.note = note;
     queued.random_pan = part.pan == 0;
 
     // Portamento. CC#84 names the source key outright, is consumed by this one note, and glides
@@ -3576,6 +3638,7 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     // being zero sends it to the same draw -- one draw, not one for each.
     PendingNote queued;
     queued.part = channel;
+    queued.note = note;
     queued.random_pan = part.pan == 0 || key.pan == 0;
 
     const int group = pool.begin_note_group();
@@ -4099,6 +4162,18 @@ void ToneGenerator::Impl::control_change(int channel, Part& part, int controller
                 } else {
                     slot->note_off();
                 }
+            }
+        }
+        // Notes allocated earlier in this chunk have no slot to reach yet; both messages have to
+        // catch them there instead, for the reason `PendingNote::released` gives. Untested against
+        // the module -- no corpus file sends either message inside a note's own chunk -- but doing
+        // nothing is the one answer that is certainly wrong, since it leaves the note sounding
+        // after a message whose whole purpose is to stop it.
+        for (PendingNote& queued : pending_notes) {
+            if (queued.part == channel) {
+                queued.released = true;
+                queued.choke = controller == 120;
+                queued.release_damper = 0;
             }
         }
         part.sustained.clear();
