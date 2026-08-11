@@ -21,6 +21,10 @@ tables/
 testdata/predictors.json
 fixtures/
 
+# The patch map: every assigned (map, bank, program) slot, the drum kits, and the tone names.
+#   python3 tools/dump_patch_map.py <SCCore.dll> patch-map.json
+patch-map.json
+
 # Test MIDI supplied by the user; not ours to redistribute either.
 testdata/
 
