@@ -10,8 +10,8 @@ The melodic tone table is 2363 records of stride `0x100` at file offset `0x18f18
 spaces — which is why suffixes are sometimes crowded (`Tubularbellw`, `Bari.Sax  :L`) and why the
 last character of the field is where you look.
 
-Confidence tags follow \ref spec: `[confirmed]` the data plainly says this, `[likely]` strong
-inference, `[guess]` plausible but thin.
+Confidence tags follow \ref spec "the specification" — `[confirmed]` the data plainly says this,
+`[likely]` strong inference, `[guess]` plausible but thin.
 
 ## The suffixes
 
