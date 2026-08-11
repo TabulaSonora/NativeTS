@@ -3290,9 +3290,14 @@ void ToneGenerator::Impl::stop_note(int channel, int note, int damper)
 {
     bool sounding = false;
     for (auto& slot : slots) {
-        if (slot && slot->channel() == channel && slot->note() == note && !slot->released()) {
+        if (!slot || slot->channel() != channel || slot->note() != note || slot->finished()) {
+            continue;
+        }
+        // Still ringing counts, even if it is already in release: a voice the re-strike above took
+        // is exactly what a stray note-off for that key is *for*. See below.
+        sounding = true;
+        if (!slot->released()) {
             slot->note_off(damper);
-            sounding = true;
         }
     }
 
@@ -3302,12 +3307,21 @@ void ToneGenerator::Impl::stop_note(int channel, int note, int damper)
     // part has to see it. A note-off is one of those things. See `PendingNote::released`.
     //
     // **Older instance first, and the order is the whole of it.** A sequencer writing a repeated
-    // key routinely emits the new note-on before the old note's note-off -- `shangai.mid` does it
-    // four bars running -- so at the moment the off arrives there are two instances of the same
-    // key on the part, one sounding and one queued. The off belongs to the older one. Releasing
-    // both took `robyn_show_me_love.mid` from passing its peak row to 0.048 under it, because
-    // twenty-nine notes there are that pattern and not one of them is really zero-length. The
-    // queued note is reached only when nothing is sounding to take the release instead.
+    // key routinely emits the new note-on before the old note's note-off, so at the moment the off
+    // arrives there are two instances of the same key on the part, one ringing and one queued, and
+    // the off belongs to the older. The queued note is reached only when nothing is left ringing to
+    // take the release instead.
+    //
+    // **Which is why the loop above counts a released voice.** The note-on handler re-strikes by
+    // calling this function first, so by the time the paired note-off arrives the older voice has
+    // already been released and would look like nothing at all -- and then the off falls through
+    // to the note that was struck a moment ago and kills it. `robyn_show_me_love.mid` does exactly
+    // this on note 40: struck at 39.130 s, re-struck at 39.616 s with the older note's off
+    // immediately behind it, and the new note is meant to ring until 40.085 s. Not counting the
+    // ringing voice cut the level to a third for the rest of the phrase, twice in the song.
+    //
+    // A voice that has finished does not count, which is what keeps this from swallowing a real
+    // zero-length note on a key played earlier in the song.
     if (!sounding) {
         for (PendingNote& queued : pending_notes) {
             if (queued.part == channel && queued.note == note && !queued.released) {
