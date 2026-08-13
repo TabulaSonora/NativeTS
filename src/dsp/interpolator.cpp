@@ -138,7 +138,7 @@ float SincInterpolator::sample(std::span<const float> buffer,
             continue;
         }
         const std::int64_t at = std::clamp(base + m, std::int64_t{0}, last);
-        sum += buffer[static_cast<std::size_t>(at)] * w;
+        sum += static_cast<double>(buffer[static_cast<std::size_t>(at)]) * w;
         density += w;
     }
     // Normalised by the weights actually summed, so every fractional position has unity DC gain
@@ -161,7 +161,7 @@ float SincInterpolator::sample_ring(std::span<const float> ring,
         if (w == 0.0) {
             continue;
         }
-        sum += ring[static_cast<std::size_t>((index + m) & mask)] * w;
+        sum += static_cast<double>(ring[static_cast<std::size_t>((index + m) & mask)]) * w;
         density += w;
     }
     return density > 0.0 ? static_cast<float>(sum / density) : 0.0F;

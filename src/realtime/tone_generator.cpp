@@ -2888,15 +2888,20 @@ void ToneGenerator::Impl::mix_voice(PartialVoice& voice,
     // silence whenever either side is 0. Chorus is read over the hit rather than after it, having
     // no tail where the other two have one. For a melodic voice every scale is 1.0, so the part's
     // send reaches the bus unchanged.
-    const double reverb_level = voice.reverb_send() * voice.key_reverb_scale();
-    const double to_reverb =
-        !efx_part && reverb && reverb_level > 0.0 ? Reverb::send_gain(reverb_level) : 0.0;
-    const double chorus_level = part.chorus_send_level() * voice.key_chorus_scale();
-    const double to_chorus =
-        !efx_part && chorus && chorus_level > 0.0 ? Chorus::send_gain(chorus_level) : 0.0;
-    const double delay_level = part.delay_send_level() * voice.key_delay_scale();
-    const double to_delay =
-        !efx_part && delay && delay_level > 0.0 ? SystemDelay::send_gain(delay_level) : 0.0;
+    // Named "effective" rather than "level" to keep them clear of `reverb_level` and its two
+    // siblings, which are the system units' own master levels and a different quantity entirely.
+    const double effective_reverb_send = voice.reverb_send() * voice.key_reverb_scale();
+    const double to_reverb = !efx_part && reverb && effective_reverb_send > 0.0
+                                 ? Reverb::send_gain(effective_reverb_send)
+                                 : 0.0;
+    const double effective_chorus_send = part.chorus_send_level() * voice.key_chorus_scale();
+    const double to_chorus = !efx_part && chorus && effective_chorus_send > 0.0
+                                 ? Chorus::send_gain(effective_chorus_send)
+                                 : 0.0;
+    const double effective_delay_send = part.delay_send_level() * voice.key_delay_scale();
+    const double to_delay = !efx_part && delay && effective_delay_send > 0.0
+                                ? SystemDelay::send_gain(effective_delay_send)
+                                : 0.0;
 
     // The voice gain stays a separate multiply from the pan and send levels: collapsing them would
     // be the cheaper kernel and a silently different render, since float multiplication is no more
@@ -3033,8 +3038,10 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
             double sr = 0.0;
             for (int n = 0; n < block_size; ++n) {
                 const auto i = static_cast<std::size_t>(n);
-                const double dl = static_cast<double>(wet_left[i]) - wet_l_before[i];
-                const double dr = static_cast<double>(wet_right[i]) - wet_r_before[i];
+                const double dl =
+                    static_cast<double>(wet_left[i]) - static_cast<double>(wet_l_before[i]);
+                const double dr =
+                    static_cast<double>(wet_right[i]) - static_cast<double>(wet_r_before[i]);
                 pl = std::max(pl, std::abs(dl));
                 sl += dl * dl;
                 pr = std::max(pr, std::abs(dr));
@@ -3587,14 +3594,15 @@ void ToneGenerator::Impl::start_drum(int channel, int note, int velocity)
     if (const std::optional<int> level = planes.level(note)) {
         kit_key.level = *level;
     }
-    if (const std::optional<int> reverb = planes.reverb(note)) {
-        kit_key.reverb = *reverb;
+    // `kit_` prefixes because the bare names are the effect units themselves, one scope out.
+    if (const std::optional<int> kit_reverb = planes.reverb(note)) {
+        kit_key.reverb = *kit_reverb;
     }
-    if (const std::optional<int> chorus = planes.chorus(note)) {
-        kit_key.chorus = *chorus;
+    if (const std::optional<int> kit_chorus = planes.chorus(note)) {
+        kit_key.chorus = *kit_chorus;
     }
-    if (const std::optional<int> delay = planes.delay(note)) {
-        kit_key.delay = *delay;
+    if (const std::optional<int> kit_delay = planes.delay(note)) {
+        kit_key.delay = *kit_delay;
     }
     if (const std::optional<int> group = planes.group(note)) {
         kit_key.group = *group;

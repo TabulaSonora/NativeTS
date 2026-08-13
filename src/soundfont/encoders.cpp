@@ -14,15 +14,6 @@
 #endif
 
 namespace ts::sf2 {
-namespace {
-
-[[nodiscard]] std::int16_t to_pcm16(float value) noexcept
-{
-    return static_cast<std::int16_t>(
-        std::lround(std::clamp(value * 32767.0F, -32768.0F, 32767.0F)));
-}
-
-} // namespace
 
 bool codec_available(Codec codec) noexcept
 {
@@ -48,6 +39,14 @@ bool codec_available(Codec codec) noexcept
 #ifdef TS_HAVE_FLAC
 
 namespace {
+
+// Lives inside the FLAC branch because the FLAC encoder is its only caller: at namespace scope it
+// would be an unused static whenever the build is configured without libFLAC.
+[[nodiscard]] std::int16_t to_pcm16(float value) noexcept
+{
+    return static_cast<std::int16_t>(
+        std::lround(std::clamp(value * 32767.0F, -32768.0F, 32767.0F)));
+}
 
 FLAC__StreamEncoderWriteStatus flac_write(const FLAC__StreamEncoder*,
                                           const FLAC__byte buffer[],
