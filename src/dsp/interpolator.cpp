@@ -55,11 +55,16 @@ SincInterpolator::SincInterpolator()
     // Tabulated rather than evaluated: the inner loop asks for up to 64 weights per output sample,
     // and a sine and a pair of cosines apiece would dominate the render. One entry per 1/1024 of a
     // source sample, read with linear interpolation, puts the table error far below the fit error.
-    const auto count = static_cast<std::size_t>((2 * radius * resolution) + 1);
+    //
+    // Only `|d|` is stored, because both factors are even in `d` -- the sinc is odd over odd,
+    // and the window's cosines are invariant under the `t -> 1-t` that `d -> -d` induces. The
+    // last entry holds `kernel(radius) = 0` and exists so `weight` may still read `i + 1` from
+    // the final real entry.
+    const auto count = static_cast<std::size_t>((radius * resolution) + 1);
     table_.resize(count);
     for (std::size_t i = 0; i < count; ++i) {
-        const double d = (static_cast<double>(i) / resolution) - radius;
-        if (std::abs(d) >= radius) {
+        const double d = static_cast<double>(i) / resolution;
+        if (d >= radius) {
             table_[i] = 0.0;
             continue;
         }
@@ -81,8 +86,8 @@ const SincInterpolator& SincInterpolator::shared() noexcept
 
 double SincInterpolator::weight(double d) const noexcept
 {
-    const double at = (d + radius) * resolution;
-    if (at <= 0.0 || at >= static_cast<double>(table_.size() - 1)) {
+    const double at = std::abs(d) * resolution;
+    if (at >= static_cast<double>(table_.size() - 1)) {
         return 0.0;
     }
     const auto i = static_cast<std::size_t>(at);

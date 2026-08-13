@@ -101,7 +101,8 @@ public:
     /// Entries per source sample in the kernel table.
     static constexpr int resolution = 1024;
 
-    /// The shared kernel table, built once. `kernel(d)` for `d` in `[-radius, radius]`.
+    /// The shared kernel table, built once. `kernel(|d|)` for `|d|` in `[0, radius]` -- the
+    /// kernel is even, so one half is stored and `weight` folds the sign away.
     [[nodiscard]] static const SincInterpolator& shared() noexcept;
 
     /// Reads one sample at a fractional position, band-limited for `ratio`.
@@ -120,7 +121,21 @@ public:
 private:
     SincInterpolator();
 
-    /// `kernel(d)`, linearly interpolated between table entries.
+    /// `kernel(|d|)`, linearly interpolated between table entries.
+    ///
+    /// Folding the sign rather than storing both halves is what the inner loop wants: it may
+    /// read 64 weights per output sample, striding the table rather than walking it, and one
+    /// half is 32K where both were 64K -- the difference between fitting a typical L1 and
+    /// missing to L2 on most of those reads. On `bigben.mid`, whose 4.80x Kalimba read is the
+    /// file this kernel exists for, the same load count now takes 0.93G L1 misses where it took
+    /// 2.00G, and the render is 2.5% faster. The C port, which carries the same kernel, gains
+    /// more because less of its time goes elsewhere: 77x fewer misses and 8% faster.
+    ///
+    /// Folding also drops an absorption the two-sided form had. Indexing on `(d + radius) *
+    /// resolution` cost a small `|d|` up to ten bits of itself to the addition before the scale
+    /// could recover them; `|d| * resolution` keeps them. The mirrored halves likewise agreed
+    /// only to about 1.5 ulp, their windows having evaluated `cos` at `t` and at `1-t` rather
+    /// than at one argument, and now there is one value where there were two.
     [[nodiscard]] double weight(double d) const noexcept;
 
     std::vector<double> table_;
