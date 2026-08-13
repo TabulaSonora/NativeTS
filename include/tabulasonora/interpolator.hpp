@@ -123,19 +123,42 @@ private:
 
     /// `kernel(|d|)`, linearly interpolated between table entries.
     ///
-    /// Folding the sign rather than storing both halves is what the inner loop wants: it may
-    /// read 64 weights per output sample, striding the table rather than walking it, and one
-    /// half is 32K where both were 64K -- the difference between fitting a typical L1 and
-    /// missing to L2 on most of those reads. On `bigben.mid`, whose 4.80x Kalimba read is the
-    /// file this kernel exists for, the same load count now takes 0.93G L1 misses where it took
-    /// 2.00G, and the render is 2.5% faster. The C port, which carries the same kernel, gains
-    /// more because less of its time goes elsewhere: 77x fewer misses and 8% faster.
+    /// Folding the sign does two separable things -- it halves the table, and it makes the index
+    /// cheaper -- and which of them pays depends entirely on the L1 it runs on. They were priced
+    /// apart by sweeping `resolution` on the folded build, which moves the footprint while leaving
+    /// the fold, the tap count and the loop identical, so a 64K one-sided table can be compared
+    /// against the old 64K two-sided one with the arithmetic as the only difference.
     ///
-    /// Folding also drops an absorption the two-sided form had. Indexing on `(d + radius) *
-    /// resolution` cost a small `|d|` up to ten bits of itself to the addition before the scale
-    /// could recover them; `|d| * resolution` keeps them. The mirrored halves likewise agreed
-    /// only to about 1.5 ulp, their windows having evaluated `cos` at `t` and at `1-t` rather
-    /// than at one argument, and now there is one value where there were two.
+    /// **The halving** is worth whatever the old table overflowed. The inner loop may read 64
+    /// weights per output sample, striding the table rather than walking it, and one half is 32K
+    /// where both were 64K. On a core whose L1 falls between those two figures that is the
+    /// difference between fitting and missing to L2: on `bigben.mid`, whose 4.80x Kalimba read is
+    /// the file this kernel exists for, the same load count went from 2.00G L1 misses to 0.93G and
+    /// the render 2.5% faster. Those are d876b71's figures, from the machine it was written on;
+    /// they have not been reproduced since, and no machine here has an L1 narrow enough to. The
+    /// same commit recorded 77x fewer misses and 8% for the C port, which is not in this tree and
+    /// so is not checkable from it -- and since that port's 4-tap kernel is identical to this
+    /// engine's, a whole-render figure from it need not be isolating the sinc at all. Treat both as
+    /// provenance rather than as measurements this repository can stand behind.
+    ///
+    /// On a core that already fit the old table it is worth nothing. An M4 Pro P-core has 128K of
+    /// L1d, and there a 64K table costs a 32K one +0.3% at 4.80x and +0.1% at 8.00x -- no effect
+    /// that survives the noise. Its E-core has 64K, which the old table overflows by eight bytes
+    /// and the folded one fits with room to spare, and even there the halving is only -2.9% at
+    /// 4.80x. Footprint does not genuinely bite until 256K, which costs 21% at 4.80x on a P-core
+    /// and 31% on an E-core. Treat the halving as insurance against a narrow L1, not as a speedup
+    /// to expect everywhere.
+    ///
+    /// **The index** is what pays on every core measured, and it is much the larger half of this
+    /// change. `(d + radius) * resolution` cost a small `|d|` up to ten bits of itself to the
+    /// addition before the scale could recover them; `|d| * resolution` keeps them, and drops the
+    /// add. Held at the old 64K footprint so that only the arithmetic differs, the fold alone is
+    /// -8.2% at 4.80x on an M4 Pro P-core and -12.1% on an E-core -- which is the whole of the
+    /// -7.9% and -14.7% the two changes together deliver there. `bigben.mid` renders 6.6% faster.
+    ///
+    /// The mirrored halves likewise agreed only to about 1.5 ulp, their windows having evaluated
+    /// `cos` at `t` and at `1-t` rather than at one argument, and now there is one value where
+    /// there were two.
     [[nodiscard]] double weight(double d) const noexcept;
 
     std::vector<double> table_;
