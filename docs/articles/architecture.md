@@ -227,9 +227,10 @@ once and summed into the dry pair — the same result as filtering each part sep
 being linear and every part sharing one coefficient set. Both gains flat is exactly unity, so the
 stage is skipped rather than approximated.
 
-The part switch defaults **off**, which is what the binary does and not what the SC-8820 manual
-says. \ref verification sets out the disagreement, since it is the one claim there resting on
-absence of evidence rather than on measurement.
+The part switch defaults **on**, as the SC-8820 manual says and as the module measures — every part
+is on the EQ bus until a stream says otherwise. Files rarely send `40 4x 20` at all, so in practice
+what decides whether the EQ is heard is the `40 02` block, which resets flat. \ref verification has
+the measurement, and the reading of the binary that had this backwards for months.
 
 ## One way to drive it
 

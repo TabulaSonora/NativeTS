@@ -2760,9 +2760,11 @@ void ToneGenerator::Impl::render_block()
     }
 
     // The EQ'd parts are filtered as one block and folded back into the dry mix. Summing rather
-    // than having written straight through costs nothing when no part has the EQ on: the buffers
-    // are cleared to +0 and adding +0 to a float leaves it exactly as it was, so a stream that
-    // never touches `40 4x 20` renders identically to one compiled without any of this.
+    // than having written straight through costs nothing when the bus is idle: the buffers are
+    // cleared to +0 and adding +0 to a float leaves it exactly as it was. Parts reset with the
+    // switch **on**, so the bus is normally busy and it is `Equalizer::is_flat` that keeps this
+    // free -- a stream that never programs `40 02` renders identically to one compiled without any
+    // of this, because the reset block is exactly unity.
     equalizer.process(eq_left, eq_right);
     for (int n = 0; n < block_size; ++n) {
         left[static_cast<std::size_t>(n)] += eq_left[static_cast<std::size_t>(n)];

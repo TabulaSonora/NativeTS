@@ -266,22 +266,34 @@ that touch a mid-block wave as superseded. The stream gate has no unaffected cas
 and what it feeds is a **regression baseline**: it catches a change nobody meant to make, and it
 cannot catch a mistake both sides share. The gate that has an outside opinion is the oracle one.
 
-## Where the reference departs from its own manual
+## The manual was right, and the reading of the binary was wrong
 
-**Part EQ defaults off, and the SC-8820 manual says on.** The manual's parameter table gives
-`40 4x 20` (EQ ON/OFF) a default of `01 ON`. In the reference engine the part reset writes
-`part+0x450` to zero, and **nothing anywhere in the binary ever writes one to it** — the only path
-that sets it is the SysEx handler itself. A module that is never told to switch the EQ on therefore
-never does.
+**Part EQ defaults on.** `40 4x 20` (EQ ON/OFF) resets to `01`, as the SC-8820 manual and Roland's
+GS documentation both say, and as ts::Part::eq_enabled now does. This page said the opposite for
+months, on the strength of an exhaustive search of the binary that turned up a part reset writing
+`part+0x450` to zero and nothing anywhere writing one to it.
 
-This engine follows the binary, in ts::Part::eq_enabled. The disagreement is silent until a stream
-also sends a non-flat `40 02`: a flat EQ is exactly transparent, so with the block at its defaults
-both readings sound identical. On a stream that sets an EQ curve without ever addressing
-`40 4x 20`, they differ completely — one hears the EQ on every part, the other on none.
+Both halves of that search were wrong, and in the same way. The reset's loop cursor is biased
+`+0x12` from the part base, so the write that read as `part+0x450` is `part+0x462` — a different
+field entirely, and the reset never touches the switch. Whatever does set it is reached through a
+stored pointer rather than by name, which is exactly what a grep for writers cannot see.
 
-\warning This has not been checked against the DLL as an oracle, only read out of it. It is the
-one claim on this page resting on absence of evidence rather than measurement, and a file that sets
-`40 02` and no part EQ would settle it in a single render.
+The measurement that settles it does not depend on reading the binary at all. Asked directly, the
+module reports `part+0x450` as **1 on all sixteen blocks** after a GS reset, and `40 41 20 00`
+clears exactly one of them, which is what says the offset is the right one. The same probe reads
+the system block `40 02` at its documented flat default of `00 40 00 40`, and both are restored by
+the next GS reset, so neither leaks between songs rendered in one instance.
+
+The audible half agrees. `roland_sc88_y03.mid` programs a +7 dB shelf at 200 Hz and never sends
+`40 4x 20`; flattening only that gain byte moves the module's own render by up to 0.46 in a sample,
+which a module that had reset the switch off could not do. Correcting the default took that song
+from −4.58 dB to −0.23 dB against the oracle, and `canyon`, which never programs `40 02`, renders
+bit-identical either way.
+
+\note The lesson generalises past this one byte. A decompile can prove a write happens; it cannot
+prove one does not, because a pointer stored anywhere defeats the search. Claims of the second kind
+belong under Known limits with a warning on them until something measures them — which is what
+this one had, and why it was found.
 
 ## The module's limits are load-bearing
 
