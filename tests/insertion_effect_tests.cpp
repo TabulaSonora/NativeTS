@@ -451,6 +451,40 @@ TEST_CASE("the Hexa Chorus reads one delay line six times", "[efx][sccore]")
     CHECK(difference > 0.0);
 }
 
+TEST_CASE("Space D reads both halves of the line", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x01, 0x43);
+    CHECK(efx.current().name == "Space D");
+    CHECK(efx.implemented());
+
+    // Verified against the module as the other two were: the coefficient file and tap program match
+    // `scdec efxdump 01 43`, and the impulse response is **bit-identical** to `scdec efxir 01 43`
+    // over 1024 frames on both channels.
+    //
+    // Getting there needed `phase_fold` rather than `phase_wrap`. This algorithm has the fold
+    // inlined, so its constants already carry the 1e-08 that `dsp_phase_wrap` would have added --
+    // 1.48828e-08 against the Hexa Chorus's 4.8828e-09, and so on -- and nudging again put the
+    // output about 1e-08 out. Nothing but a sample comparison would have shown it.
+    std::vector<float> impulse(4096, 0.0F);
+    impulse[0] = 1.0F;
+    std::vector<float> left(impulse.size());
+    std::vector<float> right(impulse.size());
+    efx.process(impulse, impulse, left, right);
+
+    // A modulated line, not a gain: the impulse comes back and keeps moving.
+    CHECK(rms(std::span<const float>{left}.subspan(512)) > 0.0);
+
+    // Two voices reading different halves of the buffer do not put the same signal on both
+    // channels; the two output chains have their own weights.
+    double difference = 0.0;
+    for (std::size_t n = 512; n < left.size(); ++n) {
+        difference += std::abs(static_cast<double>(left[n]) - static_cast<double>(right[n]));
+    }
+    CHECK(difference > 0.0);
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();

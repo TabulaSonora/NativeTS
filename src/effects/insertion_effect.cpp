@@ -850,6 +850,25 @@ void od_od2_sample(float in_left,
     out_left = c[0x176] * left + 1e-08F;
 }
 
+/// The ±2 fold into [-1, 1) with **no** nudge, for the algorithms that inline it.
+///
+/// `dsp_phase_wrap` adds 1e-08 before folding, and an algorithm that calls it therefore gets the
+/// nudge for free. One that has the fold inlined instead carries the nudge in its own constants --
+/// Space D asks for 1.48828e-08 where the Hexa Chorus asks for 4.8828e-09, 5.0099998e-06 where it
+/// asks for 5e-06, and 1.001e-05 where it asks for 1e-05, each of which is the other plus exactly
+/// 1e-08. Using the nudging version there adds it twice, which is worth about 1e-08 of output and
+/// is exactly what an impulse comparison catches.
+[[nodiscard]] inline float phase_fold(float x) noexcept
+{
+    while (x < -1.0F) {
+        x += 2.0F;
+    }
+    while (x >= 1.0F) {
+        x -= 2.0F;
+    }
+    return x;
+}
+
 /// `dsp_phase_wrap` @ 0x180005C20: fold a float into [-1, 1) by repeated ±2, after the same
 /// 1e-08 nudge every node in this engine applies.
 [[nodiscard]] inline float phase_wrap(float x) noexcept
@@ -1338,6 +1357,118 @@ void hexa_chorus_sample(float in_left,
     out_left = c[0x176] * left + 1e-08F;
 }
 
+/// `fx_algo_space_d` @ 0x18003A840 — dispatch 14, Space D.
+///
+/// Two chorus voices, one per half of the delay line, feeding two output chains. The voices share
+/// the Hexa Chorus's shape and its **0x27** coefficient stride — the first advancing the phase
+/// accumulator, the second offsetting from it — with its own constants: 1.48828e-08 against
+/// 4.8828e-09, 5.0099998e-06 against 5e-06, and a second wrap that adds 1.001e-05 rather than
+/// 1e-05. Those are transcribed as printed rather than rounded together.
+///
+/// The two output chains are one shape at a stride of **0x18**, but the decompiler prints their
+/// tails differently — `held * 1e-05 + held * c[k]` on one and `(c[k] + 1e-05) * held` on the
+/// other. Those are equal in algebra and not in float, so each is written as printed instead of
+/// being folded into a shared body.
+void space_d_sample(float in_left,
+                    float in_right,
+                    float& out_left,
+                    float& out_right,
+                    Tape& a,
+                    Tape& b,
+                    const float* c) noexcept
+{
+    a.at(0x1F8) = in_right;
+    float f6 = c[0] * a.at(0x1E0) + 1e-08F;
+    float f9 = c[1] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f6;
+    a.at(0x1D4) = f9;
+    f6 = f6 * c[3] + 1e-08F;
+    a.at(0x1D4) = f6;
+    a.at(0x1F8) = f9 * c[4] + 1e-08F;
+    out_right = c[6] * f6 + 1e-08F;
+
+    // One feed per half of the line, each through its own one-pole.
+    f9 = c[0x0A] * a.at(0x1FC) + 1e-08F;
+    float f10 = c[0x0B] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f9;
+    a.at(0x1D4) = f10;
+    const float f11 = (c[0x0E] + 1e-05F) * f9 + c[0x0C] * a.at(0x18) + 1e-08F;
+    f10 = (c[0x11] + 1e-05F) * f10 + c[0x0F] * a.at(0x28) + 1e-08F;
+    b.tap(0) = f11;
+    const float held18 = a.at(0x18);
+    a.at(0x1D4) = f11;
+    a.at(0x1D4) = f10;
+    b.tap(0x4000) = f10;
+    a.at(0x24) = (c[0x17] + 1e-05F) * f10 + c[0x19] * a.at(0x28) + 1e-08F;
+    a.at(0x14) = (c[0x14] + 1e-05F) * f11 + c[0x15] * held18 + 1e-08F;
+
+    // The accumulator, then the voice that offsets from it. Same body, 0x27 apart.
+    a.at(0x54) = phase_fold(a.at(0x58) * c[0x1D] + 1.48828e-08F + c[0x1F] * 0.00048828F);
+
+    const auto voice = [&a, &b, c](int base, float phase) noexcept {
+        float depth = c[base + 0x05] * phase;
+        if (depth <= 0.0F) {
+            depth = -depth;
+        }
+        a.at(0x1D4) = depth + 1e-08F;
+        const TableTap tap = wavetable_tap(
+            phase_fold((c[base + 0x09] + 1e-05F) * (depth + 1e-08F)
+                       + (c[base + 0x07] + c[base + 0x0C]) * 0.5F + 1.001e-05F),
+            b);
+        a.at(0x1EC) = tap.next;
+        a.at(0x1E8) = tap.sample;
+        return (tap.sample * c[base + 0x22] + tap.fraction * tap.next)
+               - tap.sample * tap.fraction + 1e-08F;
+    };
+
+    a.at(0x40) = voice(0x1D, a.at(0x54));
+
+    const float phase2 = phase_fold(c[0x44] * a.at(0x54) + 5.0099998e-06F + c[0x46] * 0.5F);
+    a.at(0x1D4) = phase2;
+    const float wet2 = voice(0x44, phase2);
+    a.at(0x44) = wet2;
+
+    // The right chain. Its tail reads the held value as two products, which is how the engine
+    // spells it.
+    float f8 = a.at(0x40) * c[0x6B] + wet2 * c[0x6C] + 1e-08F;
+    a.at(0x1D4) = f8;
+    float g = c[0x6F] * f8 + 1e-08F;
+    a.at(0x1D4) = g;
+    a.at(0x180) = c[0x72] * g + c[0x71] * a.at(0x1FC) + 1e-08F;
+    float held = a.at(0x188);
+    f8 = (c[0x76] + 1e-05F) * a.at(0x180) + (c[0x74] + 1e-05F) * a.at(0x184) + held * 1e-05F
+         + held * c[0x78] + 1e-08F;
+    a.at(0x184) = f8;
+    float tail = c[0x7A] * held + held * 1e-05F + (c[0x7C] + 1e-05F) * f8
+                 + (c[0x7E] + 1e-05F) * a.at(0x18C) + 1e-08F;
+    a.at(0x188) = tail;
+    a.at(0x1E4) = tail;
+
+    // The left chain, 0x18 along, and its tail folds the same term into one product instead.
+    f8 = a.at(0x40) * c[0x83] + wet2 * c[0x84] + 1e-08F;
+    a.at(0x1D4) = f8;
+    g = c[0x87] * f8 + 1e-08F;
+    a.at(0x1D4) = g;
+    a.at(0x190) = c[0x8A] * g + c[0x89] * a.at(0x1F8) + 1e-08F;
+    f8 = (c[0x8E] + 1e-05F) * a.at(0x190) + (c[0x8C] + 1e-05F) * a.at(0x194)
+         + (c[0x90] + 1e-05F) * a.at(0x198) + 1e-08F;
+    a.at(0x194) = f8;
+    tail = (c[0x94] + 1e-05F) * f8 + (c[0x92] + 1e-05F) * a.at(0x198)
+           + (c[0x96] + 1e-05F) * a.at(0x19C) + 1e-08F;
+    a.at(0x198) = tail;
+    a.at(0x1DC) = tail;
+
+    a.at(0x1F8) = in_left;
+    float left = c[0x170] * a.at(0x1E4) + 1e-08F;
+    const float left_in = c[0x171] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1D4) = left_in;
+    left = c[0x173] * left + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1F8) = c[0x174] * left_in + 1e-08F;
+    out_left = c[0x176] * left + 1e-08F;
+}
+
 /// Which transcription serves a dispatch index.
 enum class Processor {
     thru, ///< dispatch 0, and dispatch 1's cleared "no effect" state
@@ -1347,6 +1478,7 @@ enum class Processor {
     stereo_eq, ///< dispatch 2 — the four-band stereo EQ
     enhancer, ///< dispatch 7 — the Enhancer
     hexa_chorus, ///< dispatch 12 — six chorus voices off one delay line
+    space_d, ///< dispatch 14 — two voices, one per half of the line
     efx_reverb, ///< dispatch 0x19, with the inverted output routing
     passthrough, ///< not transcribed yet: signal passes unchanged
 };
@@ -1372,6 +1504,8 @@ enum class Processor {
         return Processor::enhancer;
     case 12:
         return Processor::hexa_chorus;
+    case 14:
+        return Processor::space_d;
     default:
         return Processor::passthrough;
     }
@@ -1775,6 +1909,7 @@ void InsertionEffect::Impl::apply(bool on_select)
     case Processor::stereo_eq:
         apply_stereo_eq();
         break;
+    case Processor::space_d:
     case Processor::hexa_chorus:
         // Only the level, and that is measured rather than assumed: with the preset fill in place
         // the whole 384-register file matches the module except registers 0x80 and 0x1F0, which
@@ -2589,6 +2724,14 @@ void InsertionEffect::process(std::span<const float> in_left,
                                impl.tape_a,
                                impl.tape_b,
                                coef);
+        } else if (impl.processor == Processor::space_d) {
+            space_d_sample(in_left[n] + in_left[n],
+                           in_right[n] + in_right[n],
+                           left,
+                           right,
+                           impl.tape_a,
+                           impl.tape_b,
+                           coef);
         } else if (impl.processor == Processor::rotary) {
             rotary_sample(in_left[n] + in_left[n],
                           in_right[n] + in_right[n],

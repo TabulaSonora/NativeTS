@@ -1685,16 +1685,16 @@ Stated plainly, because they are not covered by the numbers above:
   replaced without touching any DSP. The test that covers it says so in as many words.
 - **The LFO has no hardware trace.** It is verified against the reference, which the spec project
   separately reports as bit-exact against the live engine. That is one link removed from the DLL.
-- **Insertion EFX exists as a block, and nine of its sixty-five algorithms do.** ts::InsertionEffect
+- **Insertion EFX exists as a block, and ten of its sixty-five algorithms do.** ts::InsertionEffect
   transcribes the block machinery in full — the register file, the per-type preset fill, the two
   decrementing delay lines, the `40 03` selection and parameter SysEx, and the `40 4x 22` part
   routing — and decodes the directory, presets, defaults and parameter curves from the user's own
   DLL, `tools/dump_efx_table.py` being where that reading was worked out. The transcribed types are
   **Thru** (`00 00`), **Equalizer** (`01 00`), **Enhancer** (`01 02`), **Overdrive** (`01 10`),
-  **Distortion** (`01 11`), **Rotary** (`01 22`), **Hexa Chorus** (`01 40`), **Reverb** (`01 55`)
-  and **OD / OD2** (`11 03`); Overdrive and Distortion
+  **Distortion** (`01 11`), **Rotary** (`01 22`), **Hexa Chorus** (`01 40`), **Space D**
+  (`01 43`), **Reverb** (`01 55`) and **OD / OD2** (`11 03`); Overdrive and Distortion
   are one dataflow that differs only in its presets, which is how the decompiled functions differ.
-  The other **56 pass the signal through** unchanged, with routing and send levels still honoured,
+  The other **55 pass the signal through** unchanged, with routing and send levels still honoured,
   and report it via ts::InsertionEffect::implemented — so a host can say which effect it is *not*
   rendering rather than rendering it wrong. That flag is derived from the processor the type
   resolves to rather than kept as a list, so `tools/scan_midi_efx.py` re-groups the corpus by itself

@@ -47,7 +47,7 @@ struct EfxRecord {
 ///
 /// The per-algorithm processors are transcribed individually, and nine of the 65 exist: Thru,
 /// Equalizer, Enhancer, Overdrive, Distortion (one dataflow with Overdrive — the decompiled
-/// functions differ only in presets), Rotary, Hexa Chorus, Reverb and OD / OD2. A type whose processor has not been transcribed
+/// functions differ only in presets), Rotary, Hexa Chorus, Space D, Reverb and OD / OD2. A type whose processor has not been transcribed
 /// yet passes the signal through unchanged and reports itself via `implemented()`, so a host can
 /// say which effect it is not rendering rather than rendering it wrong. Ask `implemented()` rather
 /// than counting on this list: it is derived from the processor the type resolves to, so it is
