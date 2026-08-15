@@ -769,3 +769,197 @@ TEST_CASE("Africa.mid runs its full length", "[smf][sccore]")
     });
     CHECK(note_ons == 20234);
 }
+
+namespace {
+
+/// A one-track file built from raw event bytes, for the loop and EMIDI scanners.
+[[nodiscard]] std::vector<std::uint8_t> smf_file(
+    const std::vector<std::vector<std::uint8_t>>& tracks)
+{
+    std::vector<std::uint8_t> file{'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 1, 0, 0, 0x01, 0xE0};
+    file[10] = static_cast<std::uint8_t>(tracks.size() >> 8);
+    file[11] = static_cast<std::uint8_t>(tracks.size());
+    for (const std::vector<std::uint8_t>& body : tracks) {
+        std::vector<std::uint8_t> data = body;
+        data.insert(data.end(), {0x00, 0xFF, 0x2F, 0x00});
+        const auto length = static_cast<std::uint32_t>(data.size());
+        file.insert(file.end(), {'M', 'T', 'r', 'k'});
+        file.insert(file.end(), {static_cast<std::uint8_t>(length >> 24),
+                                 static_cast<std::uint8_t>(length >> 16),
+                                 static_cast<std::uint8_t>(length >> 8),
+                                 static_cast<std::uint8_t>(length)});
+        file.insert(file.end(), data.begin(), data.end());
+    }
+    return file;
+}
+
+/// A controller at a tick, with the tick as a one-byte delta from the previous event.
+[[nodiscard]] std::vector<std::uint8_t> cc(int delta, int controller, int value)
+{
+    return {static_cast<std::uint8_t>(delta), 0xB0, static_cast<std::uint8_t>(controller),
+            static_cast<std::uint8_t>(value)};
+}
+
+[[nodiscard]] std::vector<std::uint8_t> note(int delta, int key)
+{
+    return {static_cast<std::uint8_t>(delta), 0x90, static_cast<std::uint8_t>(key), 100};
+}
+
+void append(std::vector<std::uint8_t>& into, const std::vector<std::uint8_t>& what)
+{
+    into.insert(into.end(), what.begin(), what.end());
+}
+
+} // namespace
+
+TEST_CASE("CC 110 is a LeapFrog loop begin inside the song and a designation at its head", "[smf]")
+{
+    // Three conventions write CC 110 and CC 111 and they collide. Position is what separates the
+    // two that survive a file with no CC 112-119: a track designation declares what a track *is*,
+    // so it sits at the head before any content, while a LeapFrog loop begins inside the song.
+    // Upstream measured the split as total -- 32 EMIDI files with every designation at tick 0 or 1,
+    // four LeapFrog files whose lone CC 110 sits at tick 189 or later.
+    SECTION("a CC 110 inside the song opens a loop that CC 111 closes")
+    {
+        std::vector<std::uint8_t> track;
+        append(track, note(0, 60));
+        append(track, cc(100, 110, 0)); // LeapFrog begin, well inside the song
+        append(track, note(10, 62));
+        append(track, cc(100, 111, 64)); // end, and its value is not zero
+        const smf::Song song = smf::load(smf_file({track}), 32000, "leapfrog.mid");
+        REQUIRE(song.loop);
+        CHECK(song.loop->start > 0);
+        CHECK(song.loop->end > song.loop->start);
+        // An explicit end marker makes the loop soft, as the XMI and Touhou ends do.
+        CHECK(song.loop->soft);
+    }
+
+    SECTION("a CC 110 at the head of the track is a designation and opens nothing")
+    {
+        // And it suppresses the RPG Maker reading of CC 111 as well: the file has claimed the pair
+        // for a different convention, so a CC 111 in it is not a loop start.
+        std::vector<std::uint8_t> track;
+        append(track, cc(0, 110, 0)); // designation, tick 0
+        append(track, note(0, 60));
+        append(track, cc(100, 111, 0)); // would be an RPG Maker start on its own
+        const smf::Song song = smf::load(smf_file({track}), 32000, "emidi.mid");
+        CHECK_FALSE(song.loop);
+    }
+
+    SECTION("with no CC 110 at all, CC 111 value zero is an RPG Maker loop start")
+    {
+        std::vector<std::uint8_t> track;
+        append(track, note(0, 60));
+        append(track, cc(100, 111, 0));
+        append(track, note(100, 62));
+        const smf::Song song = smf::load(smf_file({track}), 32000, "rpgmaker.mid");
+        REQUIRE(song.loop);
+        CHECK(song.loop->start > 0);
+        // No end marker, so the loop runs to the last voice event and stays hard.
+        CHECK_FALSE(song.loop->soft);
+    }
+
+    SECTION("a CC 112-119 anywhere settles the file as EMIDI and voids both readings")
+    {
+        // Nothing but EMIDI touches 112-119, which is what makes it the test -- and why CC 110 and
+        // CC 111 must not be allowed to mark a file as EMIDI themselves.
+        std::vector<std::uint8_t> track;
+        append(track, note(0, 60));
+        append(track, cc(50, 116, 0)); // an EMIDI/XMI loop start, which is a real loop signal
+        append(track, cc(50, 110, 0)); // inside the song, but this file is EMIDI
+        append(track, cc(50, 111, 0));
+        const smf::Song song = smf::load(smf_file({track}), 32000, "emidi-cc116.mid");
+        REQUIRE(song.loop);
+        // The XMI start, not the CC 110 that follows it.
+        CHECK(song.loop->start < song.loop->end);
+    }
+}
+
+TEST_CASE("EMIDI keeps the copy authored for this engine", "[smf]")
+{
+    // A song built for several cards duplicates its content, one copy per card, each marked with
+    // CC 110 designations. Playing every copy doubles the voices. AudioLib numbers 0 General MIDI,
+    // 1 Roland Sound Canvas, 127 every card.
+    const auto designated = [](int device, int key) {
+        std::vector<std::uint8_t> track;
+        append(track, cc(0, 110, device));
+        append(track, note(0, key));
+        return track;
+    };
+
+    SECTION("the Sound Canvas copy wins when the file offers one, because that is what this is")
+    {
+        const smf::Song song =
+            smf::load(smf_file({designated(0, 60), designated(1, 62)}), 32000, "both.mid");
+        std::vector<int> keys;
+        for (const MidiEvent& event : song.events) {
+            if (event.message_type() == 0x90) {
+                keys.push_back(event.data1);
+            }
+        }
+        CHECK(keys == std::vector<int>{62});
+    }
+
+    SECTION("a file that only ever addresses General MIDI is not silenced")
+    {
+        // The hazard of picking a card and holding to it: every designated track would be dropped
+        // and the file would play as nothing.
+        const smf::Song song =
+            smf::load(smf_file({designated(0, 60), designated(0, 62)}), 32000, "gm-only.mid");
+        int notes = 0;
+        for (const MidiEvent& event : song.events) {
+            notes += event.message_type() == 0x90 ? 1 : 0;
+        }
+        CHECK(notes == 2);
+    }
+
+    SECTION("the wildcard and an undesignated track always play")
+    {
+        std::vector<std::uint8_t> plain;
+        append(plain, note(0, 64));
+        const smf::Song song = smf::load(
+            smf_file({designated(1, 60), designated(127, 62), plain}), 32000, "wildcard.mid");
+        int notes = 0;
+        for (const MidiEvent& event : song.events) {
+            notes += event.message_type() == 0x90 ? 1 : 0;
+        }
+        CHECK(notes == 3);
+    }
+
+    SECTION("one matching designation carries the track, however many others it lists")
+    {
+        // AudioLib latches its include flag on the first match and never clears it, so a track
+        // naming several cards including ours sounds. Requiring all of them drops parts.
+        std::vector<std::uint8_t> track;
+        append(track, cc(0, 110, 4)); // Sound Blaster
+        append(track, cc(0, 110, 1)); // and the Sound Canvas
+        append(track, note(0, 60));
+        const smf::Song song = smf::load(smf_file({track}), 32000, "multi.mid");
+        int notes = 0;
+        for (const MidiEvent& event : song.events) {
+            notes += event.message_type() == 0x90 ? 1 : 0;
+        }
+        CHECK(notes == 1);
+    }
+}
+
+TEST_CASE("the first note is found across tracks, not in the first track that has one", "[smf]")
+{
+    // A file whose first track rests until the second section would otherwise report that entry as
+    // the song's start, which for a looping arrangement means skipping the whole introduction.
+    std::vector<std::uint8_t> late;
+    append(late, note(200, 72));
+    std::vector<std::uint8_t> early;
+    append(early, note(20, 60));
+
+    const smf::Song song = smf::load(smf_file({late, early}), 32000, "two-tracks.mid");
+    REQUIRE(song.first_note > 0);
+
+    const smf::Song alone = smf::load(smf_file({early}), 32000, "one-track.mid");
+    CHECK(song.first_note == alone.first_note);
+
+    // A song that starts on a note has no lead-in to skip.
+    std::vector<std::uint8_t> immediate;
+    append(immediate, note(0, 60));
+    CHECK(smf::load(smf_file({immediate}), 32000, "immediate.mid").first_note == 0);
+}

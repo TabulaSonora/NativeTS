@@ -80,6 +80,12 @@ struct RenderOptions {
     /// itself cannot be made to do this.
     bool flush_before_sysex = false;
 
+    /// Start at the song's first note rather than at its silent lead-in.
+    ///
+    /// Off, unlike the players, because a render is data: its length and alignment are what a
+    /// comparison against a reference render rests on. `--skip-lead-in` turns it on.
+    bool skip_lead_in = false;
+
     /// MIDI channel routed to the drum path.
     int drum_channel = 9;
 

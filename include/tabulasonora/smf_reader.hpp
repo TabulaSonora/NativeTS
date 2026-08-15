@@ -81,12 +81,20 @@ inline constexpr int default_tempo = 500'000;
 
 /// Loop points a file declared, in samples on the render-block grid.
 ///
-/// Four marker dialects are scanned, ported from spessasynth_core_c (itself from
+/// Five marker dialects are scanned, ported from spessasynth_core_c (itself from
 /// midi_processing's `scan_for_loops`): Touhou's CC 2/CC 4 pair in format-0 files, RPG Maker's
-/// CC 111 (ignored when the file carries EMIDI track designations, which give CC 111 another
-/// meaning), the XMI/EMIDI CC 116–119 set, and `loopStart`/`loopEnd` marker meta events. The
-/// outermost surviving start and end win. A start with no end runs to the last voice event; a
-/// degenerate loop — empty, or starting on the song's final tick — is dropped entirely.
+/// CC 111 with a value of zero, LeapFrog's CC 110 begin and CC 111 end, the XMI/EMIDI CC 116–119
+/// set, and `loopStart`/`loopEnd` marker meta events. The outermost surviving start and end win. A
+/// start with no end runs to the last voice event; a degenerate loop — empty, or starting on the
+/// song's final tick — is dropped entirely.
+///
+/// **Three conventions write CC 110 and CC 111 and they collide**, so which one a file is using has
+/// to be settled before either can be read. A CC 112–119 anywhere settles it as EMIDI, since
+/// nothing else touches that part of the block — which is why CC 110 and CC 111 must not mark a
+/// file as EMIDI themselves. Failing that, the two readings of CC 110 are told apart by *where it
+/// sits*: a track designation declares what a track is and is written at its head, while a LeapFrog
+/// loop begins inside the song. RPG Maker's reading applies only when no CC 110 has claimed the
+/// pair either way.
 struct SongLoop {
     /// First sample of the loop body.
     std::int64_t start = 0;
@@ -105,15 +113,32 @@ struct Song {
     std::vector<MidiEvent> events;
     /// Loop points, when the file declares any.
     std::optional<SongLoop> loop;
+
+    /// Where the song first sounds, in samples, when that is not the beginning.
+    ///
+    /// A file often opens with a bar of setup — bank selects, a reset, controllers — and a player
+    /// that starts at sample zero plays that silence. This is the **earliest note-on across every
+    /// track**, not the first one a track-ordered walk reaches: a file whose first track rests
+    /// until the second section would otherwise start there, which for a looping arrangement means
+    /// skipping the whole introduction and landing on the loop.
+    ///
+    /// Zero when the song starts on a note or has none. The events themselves are untouched —
+    /// skipping is a playback decision, and `SequencePlayer` is where it is made, so a caller that
+    /// wants the lead-in can still have it.
+    std::int64_t first_note = 0;
 };
 
 /// Reads a music file, with its loop points.
 ///
 /// Not only Standard MIDI Files: the formats `formats::to_smf` recognises — RMID, MIDS, MUS,
 /// XMI, GMF, HMP, HMI, XMF, and (by file name) LDS — are converted first, so every caller
-/// understands them. Files carrying EMIDI track designations (CC 110) are filtered for a
-/// General MIDI receiver: tracks authored exclusively for some other synthesizer are dropped,
-/// as playing them doubles every voice.
+/// understands them.
+///
+/// Files carrying EMIDI track designations (CC 110) are filtered down to one card's copy, since a
+/// song authored for several duplicates its content and playing every copy doubles the voices.
+/// **The card is chosen from what the file offers**: the Roland Sound Canvas when the file
+/// addresses one, since that is what this engine is, and General MIDI otherwise — holding to one
+/// card unconditionally would silence every file authored only for the other.
 [[nodiscard]] Song load(const std::filesystem::path& path, int sample_rate = 32000);
 
 /// Parses a music file held in memory, with its loop points.

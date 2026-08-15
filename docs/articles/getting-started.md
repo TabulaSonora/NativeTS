@@ -97,6 +97,7 @@ tabula-sonora render song.mid out.wav --map 4
 | `--polyphony N` | voice limit outright; `0` grows the pool on demand, and is the default |
 | `--ports 1\|2\|4` | 16, 32 or 64 parts; two is the hardware |
 | `--module-resampler` | the module's own 4-tap resampler and its 4× pitch increment ceiling, instead of the wide band-limiting one. What a render being compared against `SCCore.dll` needs; it also restores the module's held portamento |
+| `--skip-lead-in` | start at the song's first note instead of its silent lead-in. The setup before the note is still replayed into the engine, so only the silence goes. Off here because a render is data; the players do it by default |
 | `--flush-per-sysex` | let every SysEx message start a fresh input-queue window, so a bulk dump larger than one control tick is delivered whole instead of being silently truncated. The module drops the remainder and cannot be flushed out of doing so, so this plays a file as written rather than as the hardware receives it |
 
 Every render goes through the block loop — there is no second renderer to choose between, and
@@ -114,12 +115,20 @@ both HMI containers, Mobile XMF and the LDS tracker — into an in-memory SMF be
 sees it, so every front end gained them at once and nothing downstream knows the difference. A file
 that is already an SMF is passed through untouched.
 
-Loop points come out of the same parse: ts::smf::load scans the four marker dialects the corpus
-uses — Touhou's CC 2/4 pair, RPG Maker's CC 111, the XMI/EMIDI CC 116–119 set, and
-`loopStart`/`loopEnd` markers — and reports the surviving points in samples on ts::smf::Song. They
-sit unused until `--loops` asks for them. Tracks carrying an EMIDI designation (CC 110) for some
-other synthesizer are dropped whole during the parse, so a multi-synth score does not double its
-voices here.
+Loop points come out of the same parse: ts::smf::load scans the five marker dialects the corpus
+uses — Touhou's CC 2/4 pair, RPG Maker's CC 111, LeapFrog's CC 110/111 pair, the XMI/EMIDI
+CC 116–119 set, and `loopStart`/`loopEnd` markers — and reports the surviving points in samples on
+ts::smf::Song. They sit unused until `--loops` asks for them.
+
+Three of those conventions write CC 110 and CC 111 and mean different things by them, so the reader
+settles which one a file uses before reading either: a CC 112–119 anywhere makes it EMIDI, and
+otherwise a CC 110 at the head of a track is a designation while one inside the song is a LeapFrog
+loop begin. Tracks designated for a card this engine is not are dropped whole during the parse, so
+a multi-synth score does not double its voices — and the card is the Sound Canvas when the file
+addresses one, General MIDI when it does not.
+
+ts::smf::Song also reports where the song first sounds, so a player can skip a silent lead-in;
+ts::SequencePlayer::skip_lead_in is how, and the players call it.
 
 Two more subcommands exist for analysis: `render-note` writes a single note as raw interleaved
 float32, `dump-effect` writes a send effect's impulse response, and `bench` times the render path

@@ -508,6 +508,9 @@ int render_command(int chorus_phase,
         generator.set_drum_map_row(options.drum_map_row);
 
         ts::SequencePlayer player = ts::SequencePlayer::from_file(generator, midi);
+        if (options.skip_lead_in) {
+            player.skip_lead_in();
+        }
         if (loops >= 2 && player.loop()) {
             player.set_loop_count(loops);
             player.set_fade_seconds(fade_seconds);
@@ -1098,6 +1101,7 @@ int main(int argc, char** argv)
     bool no_delay = false;
     bool no_efx = false;
     bool flush_per_sysex = false;
+    bool skip_lead_in = false;
     bool module_resampler = false;
     bool stream = false;
     int polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
@@ -1129,6 +1133,10 @@ int main(int argc, char** argv)
                      "Render with the module's own 4-tap resampler and its 4x pitch increment "
                      "ceiling, instead of the wide band-limiting one. What a render being compared "
                      "against SCCore.dll needs; it also restores the module's held portamento");
+    render->add_flag("--skip-lead-in", skip_lead_in,
+                     "Start at the song's first note instead of at its silent lead-in. The setup "
+                     "before the note is still replayed into the engine, so only the silence goes. "
+                     "Off here because a render is data -- the players do this by default");
     render->add_flag("--flush-per-sysex", flush_per_sysex,
                      "Let every SysEx message start a fresh input-queue window, so a bulk dump "
                      "larger than one control tick is delivered whole. The module drops what will "
@@ -1258,6 +1266,7 @@ int main(int argc, char** argv)
             render_options.efx = !no_efx;
             render_options.extended_interpolation = !module_resampler;
             render_options.flush_before_sysex = flush_per_sysex;
+            render_options.skip_lead_in = skip_lead_in;
 
             ts::ChannelMask mask;
             apply_channels(mask, muted, /*mute=*/true);

@@ -35,6 +35,13 @@ StreamingSource::StreamingSource(NoteRenderer& notes,
                                  double tail_seconds)
     : generator_(notes, options), player_(SequencePlayer::from_file(generator_, midi))
 {
+    // Start where the music does. A file that opens with a bar of bank selects and controllers
+    // plays as silence until its first note, and a listener waiting through it has no way to tell
+    // that from a broken file. The seek replays all of that setup into the engine, so nothing is
+    // lost -- see `SequencePlayer::skip_lead_in`. Offline `render` does not do this, because its
+    // output is data that gets compared against reference renders.
+    player_.skip_lead_in();
+
     length_ = player_.last_event_position()
               + static_cast<std::int64_t>(tail_seconds * ToneGenerator::sample_rate);
     channels_ = options.channels;

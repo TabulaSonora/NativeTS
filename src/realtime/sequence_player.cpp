@@ -21,6 +21,23 @@ SequencePlayer::SequencePlayer(ToneGenerator& generator, smf::Song song)
     : SequencePlayer(generator, std::move(song.events))
 {
     loop_ = song.loop;
+    first_note_ = song.first_note;
+}
+
+void SequencePlayer::skip_lead_in()
+{
+    // A file that opens with a bar of setup plays as silence until its first note, and a player
+    // that starts at sample zero renders that silence. Seeking to it leaves the engine exactly as
+    // playing through would: `seek` replays every controller, bank select and SysEx on the way,
+    // and only the notes are skipped -- of which there are none before the first one by
+    // definition.
+    //
+    // One sample before the note rather than onto it, matching upstream, so the note is dispatched
+    // by the render that follows rather than having already been consumed by the seek.
+    if (first_note_ <= 0) {
+        return;
+    }
+    seek(first_note_ - 1);
 }
 
 SequencePlayer SequencePlayer::from_file(ToneGenerator& generator,

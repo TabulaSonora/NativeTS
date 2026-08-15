@@ -52,6 +52,14 @@ struct LoopSignal {
         xmi_end,
         marker_start,
         marker_end,
+        /// A CC 110, whatever it means. Three conventions write it and they are told apart by
+        /// where it sits and by what else the file uses, which cannot be decided until the whole
+        /// file has been read -- so the reader records the position and the scanners judge it.
+        cc110,
+        /// A CC 111, whatever its value. LeapFrog's loop end is the last one at or after its
+        /// begin regardless of value, so the value-zero test the RPG Maker reading applies cannot
+        /// be the filter here.
+        cc111,
     } kind = Kind::marker_start;
     std::int64_t tick = 0;
 };
@@ -255,6 +263,26 @@ Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view 
     bool any_emidi = false;
     std::int64_t last_voice_event_tick = 0;
 
+    /// The earliest note-on in the file, in ticks, or -1 when it has none.
+    std::int64_t first_note_tick = -1;
+
+    /// What one track contributed, held until the file has been read. Everything EMIDI decides is
+    /// a property of the file rather than of a track, so no track can be judged on its own.
+    struct ScannedTrack {
+        std::size_t begin = 0;
+        std::size_t end = 0;
+        std::vector<LoopSignal> signals;
+        std::vector<int> designations;
+        bool emidi_indication = false;
+        std::int64_t last_voice_tick = 0;
+        std::int64_t first_note_tick = -1;
+        std::uint16_t channels_used = 0;
+        std::vector<int> device_names_used;
+        std::vector<int> instrument_names_used;
+    };
+    std::vector<ScannedTrack> scanned;
+    scanned.reserve(track_count);
+
     int order = 0;
 
     for (int track = 0; track < track_count; ++track) {
@@ -288,17 +316,16 @@ Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view 
         std::vector<int> device_names_used;
         std::vector<int> instrument_names_used;
 
-        // The track's own loop signals and EMIDI verdict, also held back until the track ends: a
-        // track designated for a non-GM synthesizer is dropped whole, and nothing it declared --
-        // events or loop points -- may leak into the result. CC 110 is the EMIDI Track
-        // Designation: values 0, 1 and 127 mean the track plays on a General MIDI receiver, any
-        // other value targets a specific device (MT-32, SCC-1, ...). A song authored for several
-        // synthesizers duplicates its content across tracks, so playing all of them as GM doubles
-        // every voice.
+        // The track's own loop signals and EMIDI designations, held back until the whole file has
+        // been read. **Nothing about EMIDI can be decided a track at a time**: which card this
+        // engine answers to depends on what the file offers, and the reading of CC 110 depends on
+        // whether any track anywhere reaches the unambiguous part of the EMIDI block. So the track
+        // records what it saw and the passes after the loop judge it.
         std::vector<LoopSignal> track_signals;
-        bool track_emidi_any = false;
-        bool track_emidi_other = false;
+        std::vector<int> track_designations;
+        bool track_emidi_indication = false;
         std::int64_t track_last_voice_tick = 0;
+        std::int64_t track_first_note_tick = -1;
         const std::size_t merged_before = merged.size();
 
         while (position < end) {
@@ -447,6 +474,15 @@ Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view 
                 track_last_voice_tick = std::max(track_last_voice_tick, tick);
 
                 const int type = message & 0xF0;
+
+                // Where the song starts sounding, for the lead-in skip. **The status byte alone,
+                // velocity not checked**: a note-on of velocity zero is a note-off, and counting it
+                // anyway is what upstream does. It matters only for a file that opens with one,
+                // where testing the velocity would push the start later than the reference puts it.
+                if (type == 0x90 && track_first_note_tick < 0) {
+                    track_first_note_tick = tick;
+                }
+
                 if (type == 0xC0 || type == 0xD0) {
                     merged.push_back(RawEvent{tick,
                                               order++,
@@ -477,26 +513,40 @@ Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view 
                                            : LoopSignal::Kind::touhou_error,
                                 tick});
                             break;
-                        case 110: // EMIDI Track Designation
-                            track_emidi_any = true;
-                            if (value != 0 && value != 1 && value != 127) {
-                                track_emidi_other = true;
-                            }
+                        case 110:
+                            // Three conventions write this and they collide, so nothing is decided
+                            // here: the value is kept for the EMIDI classifier and the tick for the
+                            // loop scanners, which tell a track designation from a LeapFrog loop
+                            // begin by where it sits. See the pre-pass below.
+                            track_designations.push_back(value);
+                            track_signals.push_back(LoopSignal{LoopSignal::Kind::cc110, tick});
                             break;
-                        case 111: // RPG Maker loop start
+                        case 111:
+                            // Recorded twice, because the two readings filter differently: RPG
+                            // Maker's loop start is a value of zero, LeapFrog's loop end is any
+                            // value.
                             if (value == 0) {
                                 track_signals.push_back(
                                     LoopSignal{LoopSignal::Kind::rpg_start, tick});
                             }
+                            track_signals.push_back(LoopSignal{LoopSignal::Kind::cc111, tick});
                             break;
                         case 116: // XMI / EMIDI loop starts and ends
                         case 118:
+                            track_emidi_indication = true;
                             track_signals.push_back(
                                 LoopSignal{LoopSignal::Kind::xmi_start, tick});
                             break;
                         case 117:
                         case 119:
+                            track_emidi_indication = true;
                             track_signals.push_back(LoopSignal{LoopSignal::Kind::xmi_end, tick});
+                            break;
+                        case 112: // The rest of the EMIDI block: nothing else claims 112-119, so
+                        case 113: // reaching any of it is what marks a file as EMIDI.
+                        case 114:
+                        case 115:
+                            track_emidi_indication = true;
                             break;
                         default:
                             break;
@@ -518,28 +568,92 @@ Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view 
             }
         }
 
-        if (track_emidi_other) {
-            // The whole track was authored for some other synthesizer: drop everything it pushed,
-            // and none of its votes or loop points count.
-            merged.resize(merged_before);
-        } else {
-            any_emidi = any_emidi || track_emidi_any;
-            last_voice_event_tick = std::max(last_voice_event_tick, track_last_voice_tick);
-            loop_signals.insert(loop_signals.end(), track_signals.begin(), track_signals.end());
+        scanned.push_back(ScannedTrack{merged_before, merged.size(), std::move(track_signals),
+                                       std::move(track_designations), track_emidi_indication,
+                                       track_last_voice_tick, track_first_note_tick, channels_used,
+                                       std::move(device_names_used),
+                                       std::move(instrument_names_used)});
+
+        position = end;
+    }
+
+    // ── EMIDI, decided across the whole file ──────────────────────────────────────────────────
+    //
+    // A song authored for several sound cards duplicates its content, one copy per card, and marks
+    // each copy with CC 110 track designations naming the cards it belongs to. Playing every copy
+    // doubles or triples the voices, so the copies that are not ours are dropped.
+    //
+    // **Which card is ours is not obvious for this engine, and getting it wrong either doubles the
+    // voices or silences the file.** Apogee's AudioLib numbers 0 General MIDI, 1 Roland Sound
+    // Canvas, and 127 every card. A General MIDI player answers to 0 and 127 and must refuse 1,
+    // because keeping both halves of a Sound-Canvas/General-MIDI pair is exactly the doubling the
+    // filter exists to prevent. This engine *is* the Sound Canvas, so 1 is ours -- but a file that
+    // only ever designates 0 would then have every designated track dropped and play as silence.
+    //
+    // So the card is chosen from what the file offers: **the Sound Canvas when the file addresses
+    // one, General MIDI otherwise.** Both readings accept the 127 wildcard, and a track with no
+    // designation at all belongs to every card and always plays.
+    //
+    // A track plays if *any one* of its designations names our card. AudioLib latches its include
+    // flag on the first match and never clears it, so a track listing several cards including ours
+    // sounds; requiring all of them drops parts that should play.
+    constexpr int emidi_all_cards = 127;
+    constexpr int emidi_general_midi = 0;
+    constexpr int emidi_sound_canvas = 1;
+
+    bool addresses_sound_canvas = false;
+    for (const ScannedTrack& track : scanned) {
+        for (const int device : track.designations) {
+            addresses_sound_canvas = addresses_sound_canvas || device == emidi_sound_canvas;
+        }
+    }
+    const int our_card = addresses_sound_canvas ? emidi_sound_canvas : emidi_general_midi;
+
+    std::vector<bool> dropped(scanned.size(), false);
+    for (std::size_t index = 0; index < scanned.size(); ++index) {
+        const std::vector<int>& designations = scanned[index].designations;
+        if (designations.empty()) {
+            continue;
+        }
+        dropped[index] = std::none_of(designations.begin(), designations.end(), [&](int device) {
+            return device == our_card || device == emidi_all_cards;
+        });
+    }
+
+    // **The loop scanners see every track, dropped or not**, which is what upstream does and is
+    // right: the copies are the same song, so a loop point in the MT-32 rendition describes this
+    // one too. Only the *events* of a dropped track go, along with its port votes -- a track that
+    // never sounds cannot claim a channel for a device name.
+    {
+        std::vector<RawEvent> kept;
+        kept.reserve(merged.size());
+        for (std::size_t index = 0; index < scanned.size(); ++index) {
+            const ScannedTrack& track = scanned[index];
+            loop_signals.insert(loop_signals.end(), track.signals.begin(), track.signals.end());
+            any_emidi = any_emidi || track.emidi_indication;
+            if (dropped[index]) {
+                continue;
+            }
+            last_voice_event_tick = std::max(last_voice_event_tick, track.last_voice_tick);
+            if (track.first_note_tick >= 0
+                && (first_note_tick < 0 || track.first_note_tick < first_note_tick)) {
+                first_note_tick = track.first_note_tick;
+            }
+            kept.insert(kept.end(), merged.begin() + static_cast<std::ptrdiff_t>(track.begin),
+                        merged.begin() + static_cast<std::ptrdiff_t>(track.end));
 
             // The track's vote: only a single-channel track can claim its channel for a name. Two
             // names from one such track still collide -- a prefix switch mid-track is a device
             // switch on that channel, and it needs the ports just as much as two tracks do.
-            if (std::has_single_bit(channels_used)) {
-                const int channel = std::countr_zero(channels_used);
+            if (std::has_single_bit(track.channels_used)) {
+                const int channel = std::countr_zero(track.channels_used);
                 claim_channel(device_name_on_channel, device_names_collide, channel,
-                              device_names_used);
+                              track.device_names_used);
                 claim_channel(instrument_name_on_channel, instrument_names_collide, channel,
-                              instrument_names_used);
+                              track.instrument_names_used);
             }
         }
-
-        position = end;
+        merged = std::move(kept);
     }
 
     // Merge the tracks by tick, then walk the tempo map to assign absolute time. The order field
@@ -648,14 +762,75 @@ Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view 
         }
     }
 
-    // Scan 2 -- RPG Maker: CC 111 is a loop start. Disabled when EMIDI is present anywhere,
-    // because EMIDI gives CC 111 another meaning.
+    // Which of the three conventions that write CC 110 and CC 111 this file uses, because they
+    // collide:
+    //
+    //   EMIDI     CC 110 designates a track for a sound card, CC 111 excludes it from one.
+    //             Neither is a loop marker.
+    //   LeapFrog  CC 110 begins a loop, CC 111 ends it.
+    //   RPG Maker CC 111 with value 0 starts a loop. No CC 110 at all.
+    //
+    // A CC 112-119 anywhere settles it as EMIDI, since no other convention touches that part of
+    // the block -- which is why `any_emidi` is *not* set by CC 110, however tempting that is.
+    // Failing that, the two readings of CC 110 are told apart by **where it sits**: a designation
+    // declares what a track is, so it is written at the head of the track before any of its
+    // content, while a LeapFrog loop begins somewhere inside the song.
+    //
+    // Upstream measured the split as total across the 36 EMIDI-ish files it had: every one of the
+    // 32 EMIDI files puts all its designations at tick 0 or 1, and the four LeapFrog files
+    // (Shattered Steel's MISS5, MISSA, MISSB and SPACE) put their lone CC 110 at tick 189 or
+    // later. midi_processing and libmidi stop looking for a LeapFrog loop only at a CC 112-119,
+    // so they read the tick-0 designations in Duke Nukem 3D's BRIEFING.MID and Xenophage's
+    // APOGEE.MID as a loop that begins and ends before the first note.
+    bool any_designation = false;
+    std::int64_t leapfrog_start = unset;
     if (!any_emidi) {
+        for (const LoopSignal& signal : loop_signals) {
+            if (signal.kind != LoopSignal::Kind::cc110) {
+                continue;
+            }
+            if (signal.tick <= 1) {
+                any_designation = true;
+            } else if (leapfrog_start == unset || signal.tick < leapfrog_start) {
+                leapfrog_start = signal.tick;
+            }
+        }
+    }
+    const bool leapfrog = leapfrog_start != unset;
+
+    // Scan 2 -- RPG Maker: CC 111 with value 0 is a loop start. Only when no CC 110 has claimed
+    // the pair for one of the other two conventions, in either of its readings.
+    if (!any_emidi && !any_designation && !leapfrog) {
         for (const LoopSignal& signal : loop_signals) {
             if (signal.kind == LoopSignal::Kind::rpg_start
                 && (loop_start == unset || signal.tick < loop_start)) {
                 loop_start = signal.tick;
             }
+        }
+    }
+
+    // Scan 2b -- LeapFrog: CC 110 begins the loop and CC 111 ends it. The begin came from the
+    // pre-pass; the end is the last CC 111 at or after it, **whatever its value** -- the
+    // value-zero test belongs to the RPG Maker reading and would miss LeapFrog's marker. An end
+    // marker makes the loop soft, as the equivalent XMI and Touhou markers do.
+    if (leapfrog) {
+        if (loop_start == unset || leapfrog_start < loop_start) {
+            loop_start = leapfrog_start;
+        }
+        std::int64_t leapfrog_end = unset;
+        for (const LoopSignal& signal : loop_signals) {
+            if (signal.kind != LoopSignal::Kind::cc111 || signal.tick < leapfrog_start) {
+                continue;
+            }
+            if (leapfrog_end == unset || signal.tick > leapfrog_end) {
+                leapfrog_end = signal.tick;
+            }
+        }
+        if (leapfrog_end != unset) {
+            if (loop_end == unset || leapfrog_end > loop_end) {
+                loop_end = leapfrog_end;
+            }
+            soft = true;
         }
     }
 
@@ -702,9 +877,9 @@ Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view 
     Song song;
     song.events = std::move(events);
 
-    if (loop_end != unset && loop_end > loop_start) {
+    {
         // Ticks to samples through the tempo map the merge already ordered, so the loop points
-        // land on the same grid as the events they sit between.
+        // and the first note land on the same grid as the events they sit between.
         std::vector<std::pair<std::int64_t, int>> tempo_changes;
         for (const RawEvent& entry : merged) {
             if (entry.kind == RawEvent::Kind::tempo) {
@@ -728,12 +903,18 @@ Song load(std::span<const std::uint8_t> data, int sample_rate, std::string_view 
             return quantise(elapsed * sample_rate);
         };
 
-        SongLoop loop;
-        loop.start = tick_to_samples(loop_start);
-        loop.end = tick_to_samples(loop_end);
-        loop.soft = soft;
-        if (loop.end > loop.start) {
-            song.loop = loop;
+        if (first_note_tick > 0) {
+            song.first_note = tick_to_samples(first_note_tick);
+        }
+
+        if (loop_end != unset && loop_end > loop_start) {
+            SongLoop loop;
+            loop.start = tick_to_samples(loop_start);
+            loop.end = tick_to_samples(loop_end);
+            loop.soft = soft;
+            if (loop.end > loop.start) {
+                song.loop = loop;
+            }
         }
     }
 

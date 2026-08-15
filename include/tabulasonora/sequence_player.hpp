@@ -110,6 +110,22 @@ public:
     /// A manual seek also cancels any post-loop fade and restarts the loop counter.
     void seek(std::int64_t sample);
 
+    /// Skips the silent lead-in, landing one sample before the song's first note.
+    ///
+    /// Opt-in rather than automatic, because it is a playback decision and not every caller wants
+    /// it: a gate comparing against a reference render must start where the reference started, and
+    /// an offline render whose output is spliced elsewhere may want the file's own timing. The
+    /// players call it; the oracle gates do not.
+    ///
+    /// Nothing is lost by skipping. It goes through `seek`, so every controller, bank select and
+    /// SysEx in the lead-in is still replayed into the engine — the only events dropped are notes,
+    /// and before the first note there are none. A no-op for a song that starts on a note or has
+    /// none at all.
+    void skip_lead_in();
+
+    /// Where the song's first note falls, in samples, or zero when it starts on one.
+    [[nodiscard]] std::int64_t first_note() const noexcept { return first_note_; }
+
 private:
     /// The seek body: replays state up to `sample` without touching the loop bookkeeping.
     void replay_to(std::int64_t sample);
@@ -134,6 +150,7 @@ private:
     std::size_t cursor_ = 0;
 
     std::optional<smf::SongLoop> loop_;
+    std::int64_t first_note_ = 0;
     int loop_count_ = 1;
     int loops_played_ = 0;
     double fade_seconds_ = 7.0;
