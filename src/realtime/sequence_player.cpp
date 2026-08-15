@@ -293,6 +293,12 @@ void SequencePlayer::replay_to(std::int64_t sample)
     cursor_ = 0;
     position_ = 0;
 
+    // Everything below is handed over at once, with no rendering in between, so without this it
+    // would all land in one control tick and the input queue would drop whatever ran past its
+    // 2,048 packets. That bound is what the module does to a stream; this is a reconstruction of
+    // state the module would have received over minutes.
+    const ToneGenerator::StateReplay replaying{*generator_};
+
     while (cursor_ < events_.size() && events_[cursor_].position < target) {
         const MidiEvent& event = events_[cursor_];
         ++cursor_;

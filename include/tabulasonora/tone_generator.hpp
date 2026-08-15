@@ -408,6 +408,29 @@ public:
     /// Applies one MIDI event on a port. Anything past `ports()` folds onto the ports that exist.
     void send(int port, const MidiEvent& message);
 
+    /// Suspends the input queue's per-tick capacity while state is being reconstructed.
+    ///
+    /// The queue bound is fidelity when a *file* crams messages into one control tick: the module
+    /// drops what will not fit and this engine drops it too. It is an artifact when a caller is
+    /// rebuilding state that the module would have received spread over minutes — a seek, or a hard
+    /// loop's jump. `SequencePlayer::replay_to` hands over every setup message at once, so a file
+    /// with a large opening burst would lose everything past 2,048 packets and arrive at the seek
+    /// point half-programmed.
+    ///
+    /// Measured on `YS2_118P.MID`, which opens with 980 setup events — about 3,985 packets — before
+    /// its first note: skipping the lead-in without this left the parts on the wrong instruments,
+    /// because the replay's own tail was discarded.
+    class StateReplay {
+    public:
+        explicit StateReplay(ToneGenerator& generator) noexcept;
+        ~StateReplay();
+        StateReplay(const StateReplay&) = delete;
+        StateReplay& operator=(const StateReplay&) = delete;
+
+    private:
+        ToneGenerator* generator_;
+    };
+
     /// Applies one MIDI event at a position inside the buffer about to be rendered.
     ///
     /// The form a sequencer wants: it knows where each event falls, and handing that over lets the

@@ -347,6 +347,10 @@ struct ToneGenerator::Impl {
     std::int64_t flush_block = -1;
     int flush_packets = 0;
 
+    /// Set while a caller rebuilds state through `SequencePlayer::replay_to`. The queue's bound
+    /// models what the module drops from a *stream*; a reconstruction is not one.
+    bool replaying_state = false;
+
     /// Whether an event of `packets` fits in the flush that will carry it.
     ///
     /// Keyed on the control tick the event's own offset falls in, not on the block being
@@ -372,6 +376,9 @@ struct ToneGenerator::Impl {
     /// anything.
     [[nodiscard]] bool accepts(int sample_offset, int packets, bool starts_window = false) noexcept
     {
+        if (replaying_state) {
+            return true;
+        }
         const std::int64_t slot =
             (block_index * ToneGenerator::block_size + sample_offset) / control_tick_samples;
         if (flush_block != slot || starts_window) {
@@ -4388,6 +4395,16 @@ void ToneGenerator::Impl::commit_data_entry_lsb(Part& part, int value)
     if (part.rpn_msb == 0 && part.rpn_lsb == 1) {
         part.fine_tune = (part.fine_tune & 0x3F80) | (value & 0x7F);
     }
+}
+
+ToneGenerator::StateReplay::StateReplay(ToneGenerator& generator) noexcept : generator_(&generator)
+{
+    generator_->impl_->replaying_state = true;
+}
+
+ToneGenerator::StateReplay::~StateReplay()
+{
+    generator_->impl_->replaying_state = false;
 }
 
 } // namespace ts

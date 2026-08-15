@@ -2116,6 +2116,48 @@ TEST_CASE("the input queue drops a flush past its capacity", "[tone_generator]")
     CHECK(std::ranges::any_of(left, [](float sample) { return std::abs(sample) > 1e-4F; }));
 }
 
+TEST_CASE("a seek replays a setup burst the queue would have dropped", "[tone_generator][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+    ToneGenerator generator{notes};
+    ToneGenerator reference{notes};
+
+    // A file's whole opening is handed to `replay_to` at once, with no rendering in between, so
+    // every message of it falls in one control tick. Left to the input queue's 2,048-packet bound
+    // that is a *stream* rule applied to a *reconstruction*, and everything past the bound is
+    // dropped -- which on `YS2_118P.MID`, whose lead-in is 980 events and about 3,985 packets, left
+    // fifteen of sixteen parts on program 0 instead of the instruments the file had chosen.
+    std::vector<MidiEvent> events;
+    const auto at = [&](std::int64_t position, int status, int d1, int d2 = 0) {
+        MidiEvent event;
+        event.position = position;
+        event.kind = MidiEventKind::channel;
+        event.status = status;
+        event.data1 = d1;
+        event.data2 = d2;
+        events.push_back(event);
+    };
+    for (int i = 0; i < 2100; ++i) {
+        at(0, 0xB0, 7, 100); // padding, well past the bound
+    }
+    at(0, 0xC0, 48);         // the instrument, past it
+    at(64000, 0x90, 60, 100);
+
+    SequencePlayer player{generator, smf::Song{events, std::nullopt, 64000}};
+    player.skip_lead_in();
+    CHECK(generator.part(0).program == 48);
+
+    // And the bound still applies to a stream, which is the behaviour this must not have cost:
+    // the same traffic sent live still loses the program change.
+    for (int i = 0; i < 2100; ++i) {
+        reference.send_channel(0xB0, 7, 100);
+    }
+    reference.send_channel(0xC0, 48, 0);
+    CHECK(reference.part(0).program != 48);
+}
+
 TEST_CASE("an out-of-range bank select LSB lands on SC-8820", "[tone_generator][sccore]")
 {
     const RomImage rom =
