@@ -485,6 +485,61 @@ TEST_CASE("Space D reads both halves of the line", "[efx][sccore]")
     CHECK(difference > 0.0);
 }
 
+TEST_CASE("every transcribed type's level reaches its registers", "[efx][sccore]")
+{
+    // **The check the per-type diffs could not make.** A register comparison taken at a type's
+    // defaults cannot tell a handler that computes the right answer from one that returns a
+    // constant, and the Enhancer sat on the untranscribed fallback's hard-coded `0x7F` for two
+    // commits because its own default level is `0x7F` and `level_curve[127]` is 127. It agreed at
+    // the default and nowhere else: at level `0x40` the module programs 53/128 where this wrote
+    // 127/128.
+    //
+    // So this sweeps the level rather than reading it once, over every type that claims a
+    // processor, which is what makes it catch the next one added without its level write.
+    //
+    // Swept against the module with `scdec efxdump <type> 16 40`: **Thru holds its level** -- its
+    // handler writes the two registers on the select commit only -- and every other transcribed
+    // type lands on the same 0.4140625, because they share one curve. Ten of ten agree.
+    const RomImage rom = open_rom();
+    InsertionEffect probe{rom};
+
+    const auto level_of = [&rom](int msb, int lsb, int byte) {
+        InsertionEffect efx{rom};
+        efx.select_type(msb, lsb);
+        efx.set_parameter(0x16, byte); // the twenty parameters fold to 0 upward; level is the last
+        return efx.coefficients()[0];
+    };
+
+    int transcribed = 0;
+    for (const EfxRecord& record : probe.directory()) {
+        if (record.type_key == 0xFFFF) {
+            continue;
+        }
+        InsertionEffect efx{rom};
+        efx.select_type(record.type_key >> 8, record.type_key & 0xFF);
+        if (!efx.implemented()) {
+            continue;
+        }
+        ++transcribed;
+
+        INFO(record.name << " (" << std::hex << record.type_key << ")");
+        const float quiet = level_of(record.type_key >> 8, record.type_key & 0xFF, 0x40);
+        const float loud = level_of(record.type_key >> 8, record.type_key & 0xFF, 0x7F);
+
+        if (record.type_key == 0x0000) {
+            // Thru, and it is the exception rather than an oversight.
+            CHECK(quiet == loud);
+            continue;
+        }
+        CHECK(quiet < loud);
+        CHECK(quiet == Catch::Approx(0.4140625).epsilon(1e-6));
+    }
+
+    // A guard on the guard: if the tranche grows and this loop stops seeing the types, the
+    // assertions above pass by never running.
+    CHECK(transcribed >= 10);
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();

@@ -1909,12 +1909,19 @@ void InsertionEffect::Impl::apply(bool on_select)
     case Processor::stereo_eq:
         apply_stereo_eq();
         break;
+    case Processor::enhancer:
     case Processor::space_d:
     case Processor::hexa_chorus:
         // Only the level, and that is measured rather than assumed: with the preset fill in place
         // the whole 384-register file matches the module except registers 0x80 and 0x1F0, which
         // the type's own handler writes from its level byte through the shared curve. Hexa Chorus
         // defaults to `0x70`, and `level_curve[112]` is 107 — exactly what the live block reads.
+        //
+        // **The Enhancer was left out of this and the register diff could not see it**, because its
+        // default level is `0x7F` and `level_curve[127]` is 127 — the same value the untranscribed
+        // fallback hard-codes. It agreed at the default and nowhere else: at level `0x40` the module
+        // programs 53/128 where this wrote 127/128. A comparison taken only at a type's defaults
+        // cannot tell a handler that computes the right answer from one that is a constant.
         //
         // The other twenty GS parameters are **not** mapped: this type's `40 03 03`–`16` writes do
         // not reach its registers, so its rate, depth, pre-delay and balance stay at the preset.
