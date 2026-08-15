@@ -151,116 +151,78 @@ struct KnownDeviation {
 /// same amount at every tone map, so it is not patch resolution -- some bass is not arriving.
 /// `roland_suplex` has one envelope window 14 dB out while its spectrum stays close, which is the
 /// signature of a passage that plays differently rather than a timbre that is wrong.
-/// **Three of these rows were widened once, and the reason has to be recorded or the ratchet means
-/// nothing.** Teaching drums the kit's own `Rx.Note Off` bit, in place of the fixed ring timer this
-/// port had invented, let long percussion ring for as long as the module rings it -- a crash cymbal
-/// whose envelope the module runs for 4.7 seconds had been cut off at 1.8. That is a correction,
-/// and it is verified against the module's own voice memory rather than inferred: see
-/// \ref the-drum-ring-was-invented.
+/// **Every bound in this table was re-measured on 2026-08-14, against a re-harvested oracle, and
+/// the previous ones discarded.** They have to be read as one event rather than as twenty
+/// regressions and corrections, because one thing changed and it was not this engine.
 ///
-/// What it cost here is peaks. More drum voices overlap now, so `onestop`, `macross2` and `bigben`
-/// each gained a little, and the rows below say how much. What it bought is level: **the RMS
-/// deviation improved on eight of the nine songs it moved at all**, and `roland_allstars`'s band
-/// error closed completely. Every row that improved was tightened in the same commit, so the table
-/// is net tighter, not looser.
+/// The harvest they had been fitted against was taken on 2026-08-07. The day after, the spec
+/// project fixed how `scdec` hands events to the DLL: real `deltaFrames` with a flush before
+/// enqueueing, and event times **rounded rather than truncated**. Re-harvesting on the current
+/// harness changed **34 of the 36 song renders**, by up to 0.150 of peak, 0.29 dB of RMS and 4.4 dB
+/// in one band of `macross2` -- comfortably past the tolerances below. The two it did not change say
+/// why: `panwet.mid` is a one-note probe and `pchoral3.mid` renders as silence, and a single event
+/// has nowhere to be misplaced to. The same re-harvest left all 239 note-oracle renders byte for
+/// byte identical, which is worth knowing on its own: **a note gate cannot detect harness drift**,
+/// so `fixture_manifest.json` and not this file is what carries that check.
 ///
-/// **The balance column was calibrated across the whole corpus once the fixture was made whole**
-/// (2026-08-06). It had only ever been measured on the two songs whose rows carried it; every other
-/// row inherited the 0.06 default it had never been checked against, and when the song fixture was
-/// regenerated from 13 cases back to its full 31 the eleven rows below turned out to sit past it.
-/// That is a column that was never calibrated rather than eleven regressions -- the fixture the
-/// other four columns were measured against did not contain most of these songs.
+/// **The corrected harness moved the reference toward this engine, not away.** Comparing each
+/// song's peak against both harvests -- this engine's own render is the same in both comparisons,
+/// so the difference isolates the harness -- **18 of 26 measurable cases moved closer, 6 moved
+/// away, 2 did not move.** The worst offenders improved most: `macross2` from 0.0945 to 0.0147,
+/// `roland_allstars` 0.0469 to 0.0086, `roland_deadend` 0.0490 to 0.0102. That is the evidence for
+/// treating the new harvest as the better reference rather than merely the newer one.
+///
+/// So the table is **much** tighter. `roland_suplex`'s peak goes 0.24 to 0.021, `roland_sc88_y05`'s
+/// 0.2 to 0.025, `roland_deadend`'s 0.1 to 0.011; `shangai`'s band column drops from 20.5 to the
+/// default and `macross2`'s from 11.0. Four songs -- `bad_apple`, `test_poly_bend`,
+/// `ff5_1_16_harvest` and `dreaming_i_was_dreaming` -- now sit inside every default and have no row
+/// at all. Six songs that had none now need one, and three of those are the leads below.
+///
+/// **Two notes from removed rows, kept because the rows were carrying them.**
+/// `ff5_1_16_harvest` is the corpus's only real test of the **per-key drum chorus plane**: its drum
+/// channel selects bank LSB 1, the SC-55 map, and opens CC#93 to 127 while leaving CC#94 at 0, over
+/// a kit whose per-key chorus depths are non-zero by default. Wiring reverb alone broke that row and
+/// wiring all three fixed it, so it is the case to watch when `DrumKey::chorus` changes, row or no
+/// row. And `dreaming_i_was_dreaming` **clicks on note boundaries where the module does not** --
+/// heard, not measured. It is inside every bound here and still audibly wrong, which makes it a gap
+/// in the gate as much as a lead for the engine: a click is a step discontinuity, broadband and over
+/// in a sample or two, and none of these five measures can see one. The octave bands average over a
+/// window, the RMS envelope is 64 windows across a whole song, and a peak is a single sample.
 ///
 /// Every bound here is `TS_STRICT_SONGS=1` plus 2%, which is the tightest the ratchet can be while
-/// still being deterministic. **The column is net tighter, not looser**: `panwet` measured 0.185
-/// against the 0.36 it was allowed and is halved here, and twenty of the corpus's thirty-one cases
-/// need no row at all and are left on the default. Only `bad_apple` genuinely moved, 0.15 to 0.190.
-///
-/// Read the spread before reading any single row. Three songs sit together near 0.17-0.19 --
-/// `panwet`, `bad_apple` and `test_poly_bend` -- and all three carry a reverb return and differ in
-/// everything else, `test_poly_bend` reaching that figure on the GS default send alone with no
-/// controllers and no chorus. Three songs at one figure by one shared route is one defect, not
-/// three, and the row below says which route. `bigben` at 0.287 is alone at the top and is the
-/// outlier to explain first; the seven Roland and control-matrix rows trail off from 0.146 to
-/// 0.062 with no obvious join, and may be nothing more than the same lead at lower wet levels.
-/// None of this is a diagnosis -- see the header: a row is a debt, not a dispensation.
-constexpr std::array<KnownDeviation, 19> known_deviations{{
-    // The two rows the stereo balance measure opened, and they are one lead rather than two. Both
-    // sit where the send returns dominate and nowhere else: `panwet.mid` -- a one-note probe named
-    // for exactly this -- agrees with the module **exactly** on its attack window, 0.7380 against
-    // 0.7380, and only parts company through the body and tail, where this port pulls toward centre
-    // while the module holds the voice's side. `bad_apple`'s worst two windows are its last two, at
-    // -32 and -36 dB, which is its reverb tail and nothing else. The dry pan is not in question in
-    // either; where the wet comes back is.
-    // Seeding the chorus LFO where the reference's stood at the downbeat took this from 0.2616 to
-    // **0.1416** -- the largest single movement any balance figure here has made, on the file that
-    // exists to measure exactly this. What is left is no longer the phase.
-    {"panwet.mid", {1.0, 0.01, 3.0, 6.0, 0.15}, "wet return placement, past the chorus phase"},
-    {"bad_apple_feat_nomico_s__msgs.mid", {1.0, 0.01, 3.0, 6.0, 0.190},
-     "wet return placement in the closing tail"},
+/// still being deterministic. None of it is a diagnosis -- see the header: a row is a debt, not a
+/// dispensation.
+constexpr std::array<KnownDeviation, 21> known_deviations{{
+    // **The chorus return, in decibels.** This is a one-note wet probe, and it is one of the two
+    // renders the re-harvest did not touch, so both figures here are current and neither is a
+    // harness artifact. It reads 9.25 dB light at 63 Hz and 4.49 dB at 125 Hz -- the two bands a
+    // wet probe's return dominates -- and a chorus return short by 2.95x is 20*log10(1/2.95) =
+    // **9.4 dB**. The band row and the chorus deficit are the same defect, agreeing to a fifth of a
+    // decibel. Its balance is the same story seen sideways: this port pulls toward centre through
+    // the body and tail while the module holds the voice's side, though it agrees with the module
+    // **exactly** on the attack window, 0.7380 against 0.7380. Both close when the return does.
+    {"panwet.mid", {1.0, 0.01, 9.44, 6.0, 0.155}, "the chorus return deficit, in dB and in balance"},
 
-    // The third song at very nearly the same figure, and it narrows the two above rather than
-    // contradicting them. `test_poly_bend` sends no controllers at all -- one program change, two
-    // SysEx, and bend -- so it runs at the GS defaults, which is reverb send 40 and chorus send 0.
-    // A reverb return and no chorus return, deviating by 0.169 where `panwet` deviates by 0.185.
-    // So the lead is the *reverb* return's placement specifically; chorus is not needed to produce
-    // it. Nothing else about this file deviates at all, which is what makes it the cleanest of the
-    // three to measure against.
-    {"test_poly_bend.mid", {1.0, 0.01, 3.0, 6.0, 0.173}, "lead; reverb return placement"},
+    // **XG, and one of the six the corrected harness moved *away* from this engine** -- 0.025 to
+    // 0.036 of peak. The other is `th07_19_user_gm` below, at 0.047 to 0.103, and they are the
+    // corpus's only two XG files. Eighteen GS songs moved closer on the same change. A more
+    // accurate reference making both XG files worse and almost every GS file better is not a
+    // tolerance question; it says the XG path places its events differently, and that is the row to
+    // read alongside `th07` rather than either alone.
+    {"MAKORO.MID", {1.0, 0.037, 3.0, 6.0}, "XG; moved away when the harness got more accurate"},
 
-    // XG, and inside every default but the peak: measured against the module at -0.28 dB RMS,
-    // 0.95 dB on the worst octave band and 1.20 dB on the worst envelope window, which is
-    // better than most of this corpus. The peak is 0.051 out, in line with canyon at map 4
-    // (0.054) and better than transcendental (0.106) -- see the note on the field for why a
-    // whole song's peak is the loosest of the four. Nothing else here is owed.
-    {"MAKORO.MID", {1.0, 0.06, 3.0, 6.0}, "XG; peak only, and a peak is a single sample"},
+    {"shangai.mid", {1.0, 0.01, 3.0, 6.0, 0.128},
+     "balance alone now; the CC1/CC2 routes it assigns are inert"},
+    {"macross2.mid", {1.0, 0.015, 3.0, 6.0, 0.070},
+     "was the corpus's worst band row at 11.0 dB; the harness held that error, not this engine"},
 
-    {"shangai.mid", {1.6, 0.04, 20.5, 8.5, 0.151},
-     "lead; CC1/CC2 pointed at a CC the file never sends"},
-    {"macross2.mid", {2.3, 0.065, 11.0, 7.3, 0.085},
-     "lead; CC1/CC2 routes assigned at neutral depth"},
-    // 4.45 dB at 125 Hz since the chorus phase seed, from just inside 4.1. The same trade as
-    // `roland_sc88_y03` above, and the same note applies: the seed is what the module does.
-    // **The corpus's test for the per-key drum sends**, and the only row that exercises the chorus
-    // one. Its drum channel selects bank LSB 1 -- the SC-55 map -- and opens CC#93 to 127 while
-    // leaving CC#94 at 0, so the part's chorus send is wide open over a kit whose per-key chorus
-    // depths are non-zero by default. SC-55 kits enable chorus where the SC-88 kits mostly set it
-    // to 0, which is why an SC-88 bank exercises the plane far more weakly even when a file opens
-    // the same send.
-    //
-    // So this row moves when the per-key chorus plane at kit+0x380 is wired and not otherwise, and
-    // it is the row to watch when that changes: wiring reverb alone broke it, and wiring all three
-    // fixed it. See `DrumKey::chorus`.
-    {"ff5_1_16_harvest.mid", {1.0, 0.01, 4.5, 6.0},
-     "lead; CC1 route is driven but not in the deviating bands. Also the per-key chorus test -- "
-     "SC-55 drum map with CC#93 wide open"},
-
-    // The corpus's worst stereo deviation by a clear margin -- 0.287 where the next is 0.190 -- and
-    // it is not obviously the same lead as the three above. Worth noting that this is also the row
-    // carrying the worst 63 Hz band: a song can be light in the low end and misplaced across the
+    // Still the corpus's worst stereo deviation, and still carrying a 63 Hz band, but less than
+    // half what it was: 0.294 to 0.127. A song can be light in the low end and misplaced across the
     // image for one reason or for two, and nothing measured here yet says which.
-    {"bigben.mid", {1.6, 0.03, 8.7, 6.0, 0.294},
-     "lead; worst 63 Hz band, worst stereo balance, and clicks on note boundaries"},
-    {"it_must_have_been_love.mid", {1.7, 0.025, 3.0, 6.0}, "lead"},
-    {"rainy.mid", {1.3, 0.03, 3.3, 6.0, 0.080}, "lead"},
-
-    // **Both of these click on note boundaries, and the module does not.** Heard rather than
-    // measured, and that is the point worth recording: `dreaming_i_was_dreaming` is inside every
-    // bound on this table and still audibly wrong, so its row is a debt the numbers here cannot
-    // see. A click is a step discontinuity -- broadband, and over in a sample or two. None of the
-    // five measures can catch that. The octave bands average across a window a quarter of the way
-    // in, the RMS envelope is 64 windows over a whole song, and peak is a single sample that a
-    // click can raise without anything else moving. `bigben` is the one where it shows at all: its
-    // peak reads 0.791 against the module's 0.716, which is what a transient the module does not
-    // have looks like from the outside.
-    //
-    // So this is a lead for the *engine* and a gap in the *gate* at once, and neither should wait
-    // on the other. Somewhere a level or a phase is stepping where the module ramps -- a voice
-    // starting without its envelope's first ramp applied, or a steal cutting one without release.
-    // Whatever finds it will need a measure that sees sample-to-sample discontinuity, since by
-    // construction nothing here will.
-    {"dreaming_i_was_dreaming.mid", {1.0, 0.02, 3.0, 6.0}, "lead; clicks on note boundaries"},
-    {"onestop.mid", {1.0, 0.015, 3.0, 6.0}, "peak only, and only since drums ring their full length"},
+    {"bigben.mid", {1.28, 0.01, 3.0, 6.0, 0.130}, "lead; worst stereo balance, and clicks"},
+    {"it_must_have_been_love.mid", {1.0, 0.040, 3.0, 6.0}, "lead; peak alone"},
+    {"rainy.mid", {1.43, 0.023, 3.0, 6.0, 0.091}, "lead"},
+    {"onestop.mid", {1.0, 0.019, 3.0, 6.0}, "peak only, and only since drums ring their full length"},
 
     // **The bass arrived, and this row is tightened as the previous note asked.** Four of its five
     // columns are back to the defaults, from 5.0/0.33/9.8/7.0: the song was never light in the bass
@@ -277,17 +239,43 @@ constexpr std::array<KnownDeviation, 19> known_deviations{{
     // `TS_STRICT_SONGS=1` plus 2% like every other. Tighten it when the sends move behind the EQ.
     {"roland_sc88_y03.mid", {1.0, 0.01, 3.0, 6.0, 0.092},
      "sends are taken ahead of the EQ; the module takes them behind it"},
-    {"roland_suplex.mid", {1.5, 0.24, 8.2, 14.5, 0.146}, "one passage plays differently"},
-    {"roland_sc88_y05.mid", {1.2, 0.2, 3.0, 6.0, 0.064}, "lead"},
-    {"roland_sc55_demo13.mid", {1.0, 0.06, 5.5, 6.0, 0.109}, "lead"},
-    {"roland_sc55_demo03.mid", {1.4, 0.03, 3.0, 6.0, 0.087}, "lead"},
-    // The band row reopened at 3.046 dB in the 2 kHz octave when the LFO nodes started taking their
-    // seed from the generator instead of a discard. Held at 3.1 rather than the default 3.0 because
-    // the change is measured correct against the module and this is the only row it moved the wrong
-    // way -- by a twentieth of a dB, while `rainy`'s balance improved and two other songs' balance
-    // rows closed outright. Tighten it back to the default when the 2 kHz gap is understood.
-    {"roland_allstars.mid", {1.0, 0.02, 3.1, 6.0}, "peak, and 2 kHz by 0.05 dB since the LFO seed"},
-    {"roland_deadend.mid", {1.0, 0.1, 3.0, 6.0}, "lead"},
+    // Its envelope column was 14.5 dB and its peak 0.24 -- the loosest two figures this table has
+    // ever carried, and both were the harness. The envelope window is back to the default and the
+    // peak is an eleventh of what it was. "One passage plays differently" was a reading of a
+    // reference that placed that passage's events differently.
+    {"roland_suplex.mid", {1.0, 0.021, 3.0, 6.0, 0.072}, "balance, and a much reduced peak"},
+    {"roland_sc88_y05.mid", {1.0, 0.025, 3.0, 6.0}, "lead; peak alone, from 0.2"},
+    {"roland_sc55_demo13.mid", {1.0, 0.019, 3.0, 6.0}, "lead; peak alone"},
+    {"roland_sc55_demo03.mid", {1.35, 0.070, 3.0, 6.0, 0.089},
+     "lead; one of the six that moved away, 0.040 to 0.068 of peak"},
+    // The band row opened at 3.046 dB in the 2 kHz octave when the LFO nodes started taking their
+    // seed from the generator instead of a discard, and the re-harvest widened it further to 3.56.
+    // Still the only row where a change measured correct against the module moved this table the
+    // wrong way. Tighten it back to the default when the 2 kHz gap is understood.
+    {"roland_allstars.mid", {1.0, 0.01, 3.64, 6.0}, "2 kHz band; peak closed on the re-harvest"},
+    {"roland_deadend.mid", {1.0, 0.011, 3.0, 6.0}, "lead; peak alone, from 0.1"},
+
+    // **Six songs that needed no row before the re-harvest and need one now.** Their renders did not
+    // change; the reference did, and on these six it moved away rather than toward. They are new
+    // debts, not new excuses, and three of them are worth reading rather than counting.
+    //
+    // `canyon` is the sharpest. It is the file the bit-exact stream gate replays, which is a
+    // *self*-baseline -- it reports that the render moved, never whether it should have -- so this
+    // engine has been running 4.28 dB hot at 125 Hz and 5.09 dB at 8 kHz under the most-exercised
+    // file in the suite, where by construction that gate could not see it. Both variants carry it
+    // identically, which is expected: format 0 and format 1 of the same music.
+    {"canyon.mid", {1.0, 0.046, 5.20, 6.0}, "hot at 125 Hz and 8 kHz; invisible to the stream gate"},
+    {"canyon-format1.mid", {1.0, 0.046, 5.20, 6.0}, "the same music as `canyon.mid`, format 1"},
+
+    // The corpus's second XG file, and the largest single deviation in this table. Its peak
+    // **doubled away** from the module when the harness stopped truncating event times -- 0.047 to
+    // 0.103 -- while eighteen GS songs improved. Read it with `MAKORO.MID` above.
+    {"th07_19_user_gm.mid", {1.0, 0.105, 3.0, 6.0}, "XG; the largest deviation here, and it grew"},
+
+    {"MIDI-Corona-Baby Baby.mid", {1.24, 0.022, 3.0, 6.0},
+     "the portamento-ceiling file; rms and peak"},
+    {"darkness3.mid", {1.0, 0.019, 3.0, 6.0}, "the bulk-dump file; peak alone"},
+    {"rockarn12.mid", {1.0, 0.011, 3.0, 6.0}, "peak alone, and only just"},
 }};
 
 [[nodiscard]] Deviation deviation_for(const std::string& song)
