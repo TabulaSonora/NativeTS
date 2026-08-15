@@ -1225,6 +1225,119 @@ void enhancer_sample(float in_left,
     out_left = c[0x176] * left + 1e-08F;
 }
 
+/// `fx_algo_hexa_chorus` @ 0x180022B80 — dispatch 12, the six-voice chorus.
+///
+/// One delay line and one LFO, read six times at six phase offsets, then mixed twice with
+/// different weights to make the stereo pair. The voices are literally one body at a coefficient
+/// stride of **0x27** and an output slot four bytes apart, and the two output mixes are one body at
+/// a stride of **0x22** — both checked across every coefficient each repetition reads rather than
+/// extrapolated from the first.
+///
+/// The first voice is the odd one and not by much: its phase step *is* the shared accumulator, so
+/// it reads `a(0x44)` — the previous sample's `a(0x40)` — and scales its offset by 0.00048828
+/// where the other five read the finished accumulator and scale by 0.5. Everything after that is
+/// identical, down to the abs and the fractional read.
+///
+/// The read is `wavetable_tap`, the same fractional tap Rotary uses, and the interpolation is
+/// written the way the engine writes it: `sample * gain + fraction * next - fraction * sample`
+/// rather than a lerp, because those are not the same in float.
+void hexa_chorus_sample(float in_left,
+                        float in_right,
+                        float& out_left,
+                        float& out_right,
+                        Tape& a,
+                        Tape& b,
+                        const float* c) noexcept
+{
+    a.at(0x1F8) = in_right;
+    float f5 = c[0] * a.at(0x1E0) + 1e-08F;
+    const float f11 = c[1] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f5;
+    a.at(0x1D4) = f11;
+    f5 = f5 * c[3] + 1e-08F;
+    a.at(0x1D4) = f5;
+    a.at(0x1F8) = c[4] * f11 + 1e-08F;
+    out_right = c[6] * f5 + 1e-08F;
+
+    // What goes into the line: both inputs summed, one gain, then a one-pole whose state is the
+    // pair 0x1C/0x20.
+    const float sum = c[0x0A] * a.at(0x1FC) + c[0x0B] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = sum;
+    float feed = c[0x0E] * sum + 1e-08F;
+    a.at(0x1D4) = feed;
+    feed = c[0x10] * a.at(0x20) + feed * 1e-05F + feed * c[0x12] + 1e-08F;
+    a.at(0x1D8) = feed;
+    a.at(0x1C) = c[0x14] * a.at(0x20) + feed * 1e-05F + feed * c[0x16] + 1e-08F;
+    b.tap(0) = c[0x17] * feed + 1e-08F;
+
+    // The shared LFO, advanced once and read six times.
+    a.at(0x40) = phase_wrap(c[0x1B] * a.at(0x44) + 4.8828e-09F + c[0x1D] * 0.00048828F);
+
+    const auto voice = [&a, &b, c](int base, int slot, float phase) noexcept {
+        float depth = c[base + 0x05] * phase;
+        if (depth <= 0.0F) {
+            depth = -depth;
+        }
+        a.at(0x1D4) = depth + 1e-08F;
+        const TableTap tap = wavetable_tap(
+            phase_wrap((c[base + 0x07] + c[base + 0x0C]) * 0.5F
+                       + (c[base + 0x09] + 1e-05F) * (depth + 1e-08F) + 1e-05F),
+            b);
+        a.at(0x1EC) = tap.next;
+        a.at(0x1E8) = tap.sample;
+        a.at(slot) = tap.sample * c[base + 0x22] + tap.fraction * tap.next
+                     - tap.fraction * tap.sample + 1e-08F;
+    };
+
+    voice(0x1B, 0x24, a.at(0x40));
+    for (int i = 1; i < 6; ++i) {
+        const int base = 0x1B + 0x27 * i;
+        const float phase = phase_wrap(c[base] * a.at(0x40) + 5e-06F + c[base + 0x02] * 0.5F);
+        a.at(0x1D4) = phase;
+        voice(base, 0x24 + 4 * i, phase);
+    }
+
+    const float v1 = a.at(0x24);
+    const float v2 = a.at(0x28);
+    const float v3 = a.at(0x2C);
+    const float v4 = a.at(0x30);
+    const float v5 = a.at(0x34);
+    const float v6 = a.at(0x38);
+
+    // One channel: the six voices at their own weights, a gain, then the two-stage tail that also
+    // takes a share of the channel's own input.
+    const auto mix = [&](int coef, int tail, int feed_slot, int out_slot) noexcept {
+        float m = (c[coef] + 1e-05F) * v1 + v2 * 1e-05F + v2 * c[coef + 0x02] + v3 * 1e-05F
+                  + v3 * c[coef + 0x04] + v4 * 1e-05F + v4 * c[coef + 0x06] + v5 * 1e-05F
+                  + v5 * c[coef + 0x08] + v6 * 1e-05F + v6 * c[coef + 0x0A] + 1e-08F;
+        a.at(0x1D4) = m;
+        const float g = c[coef + 0x0D] * m + 1e-08F;
+        a.at(0x1D4) = g;
+        const float held = a.at(tail + 0x08);
+        a.at(tail) = c[coef + 0x10] * g + c[coef + 0x0F] * a.at(feed_slot) + 1e-08F;
+        float h = (c[coef + 0x12] + 1e-05F) * a.at(tail + 0x04) + a.at(tail) * 1e-05F
+                  + a.at(tail) * c[coef + 0x14] + held * 1e-05F + held * c[coef + 0x16] + 1e-08F;
+        a.at(tail + 0x04) = h;
+        h = (c[coef + 0x18] + 1e-05F) * held + h * 1e-05F + h * c[coef + 0x1A]
+            + a.at(tail + 0x0C) * 1e-05F + a.at(tail + 0x0C) * c[coef + 0x1C] + 1e-08F;
+        a.at(tail + 0x08) = h;
+        a.at(out_slot) = h;
+    };
+
+    mix(0x106, 0x180, 0x1FC, 0x1E4);
+    mix(0x128, 0x190, 0x1F8, 0x1DC);
+
+    a.at(0x1F8) = in_left;
+    float left = c[0x170] * a.at(0x1E4) + 1e-08F;
+    const float left_in = c[0x171] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1D4) = left_in;
+    left = c[0x173] * left + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1F8) = c[0x174] * left_in + 1e-08F;
+    out_left = c[0x176] * left + 1e-08F;
+}
+
 /// Which transcription serves a dispatch index.
 enum class Processor {
     thru, ///< dispatch 0, and dispatch 1's cleared "no effect" state
@@ -1233,6 +1346,7 @@ enum class Processor {
     rotary, ///< dispatch 9 — the rotating speaker
     stereo_eq, ///< dispatch 2 — the four-band stereo EQ
     enhancer, ///< dispatch 7 — the Enhancer
+    hexa_chorus, ///< dispatch 12 — six chorus voices off one delay line
     efx_reverb, ///< dispatch 0x19, with the inverted output routing
     passthrough, ///< not transcribed yet: signal passes unchanged
 };
@@ -1256,6 +1370,8 @@ enum class Processor {
         return Processor::stereo_eq;
     case 7:
         return Processor::enhancer;
+    case 12:
+        return Processor::hexa_chorus;
     default:
         return Processor::passthrough;
     }
@@ -1658,6 +1774,21 @@ void InsertionEffect::Impl::apply(bool on_select)
         break;
     case Processor::stereo_eq:
         apply_stereo_eq();
+        break;
+    case Processor::hexa_chorus:
+        // Only the level, and that is measured rather than assumed: with the preset fill in place
+        // the whole 384-register file matches the module except registers 0x80 and 0x1F0, which
+        // the type's own handler writes from its level byte through the shared curve. Hexa Chorus
+        // defaults to `0x70`, and `level_curve[112]` is 107 — exactly what the live block reads.
+        //
+        // The other twenty GS parameters are **not** mapped: this type's `40 03 03`–`16` writes do
+        // not reach its registers, so its rate, depth, pre-delay and balance stay at the preset.
+        // A file that selects Hexa Chorus and leaves it alone is right; one that adjusts it gets
+        // the default voicing. Transcribing `fx_apply_hexa_chorus` @ `0x18004B980` is what closes
+        // that, and the register diff is how it would be checked.
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+        apply_common_tail();
         break;
     case Processor::efx_reverb:
         apply_efx_reverb();
@@ -2450,6 +2581,14 @@ void InsertionEffect::process(std::span<const float> in_left,
                             right,
                             impl.tape_a,
                             coef);
+        } else if (impl.processor == Processor::hexa_chorus) {
+            hexa_chorus_sample(in_left[n] + in_left[n],
+                               in_right[n] + in_right[n],
+                               left,
+                               right,
+                               impl.tape_a,
+                               impl.tape_b,
+                               coef);
         } else if (impl.processor == Processor::rotary) {
             rotary_sample(in_left[n] + in_left[n],
                           in_right[n] + in_right[n],

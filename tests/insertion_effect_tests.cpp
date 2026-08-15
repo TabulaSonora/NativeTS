@@ -408,6 +408,49 @@ TEST_CASE("the Enhancer brightens rather than passing through", "[efx][sccore]")
     CHECK(rms(std::span<const float>{tl}.subspan(64)) > 0.0);
 }
 
+TEST_CASE("the Hexa Chorus reads one delay line six times", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x01, 0x40);
+    CHECK(efx.current().name == "Hexa Chorus");
+    CHECK(efx.implemented());
+
+    // Verified against the module the same two ways the Enhancer was: the whole coefficient file
+    // and tap program match `scdec efxdump 01 40`, and the impulse response is **bit-identical**
+    // to `scdec efxir 01 40` over 1024 frames on both channels.
+    //
+    // The level is the part that needed the register diff to find. The preset fill leaves 0x80 and
+    // 0x1F0 to the type's own handler, and this type's level byte is `0x70`, which the shared curve
+    // turns into 107 rather than the 127 an untranscribed type falls back to.
+    // Address `0x16`, not `0x13`: the twenty parameters fold to indices 0 upward, so the level
+    // byte the handler reads as `params[0x13]` is the last of them.
+    const auto level_at = [&](int byte) {
+        InsertionEffect one{rom};
+        one.select_type(0x01, 0x40);
+        one.set_parameter(0x16, byte);
+        return one.coefficients()[0];
+    };
+    CHECK(level_at(0x7F) > level_at(0x70));
+    CHECK(level_at(0x70) > level_at(0x40));
+
+    // A modulated delay, not a gain: a lone impulse has to come back later and keep moving, so the
+    // tail is neither silent nor a single echo.
+    std::vector<float> impulse(4096, 0.0F);
+    impulse[0] = 1.0F;
+    std::vector<float> left(impulse.size());
+    std::vector<float> right(impulse.size());
+    efx.process(impulse, impulse, left, right);
+    CHECK(rms(std::span<const float>{left}.subspan(512)) > 0.0);
+
+    // Six voices at six phase offsets do not land on the two channels alike; a mono effect would.
+    double difference = 0.0;
+    for (std::size_t n = 512; n < left.size(); ++n) {
+        difference += std::abs(static_cast<double>(left[n]) - static_cast<double>(right[n]));
+    }
+    CHECK(difference > 0.0);
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();
