@@ -203,18 +203,24 @@ constexpr std::array<KnownDeviation, 21> known_deviations{{
     // **exactly** on the attack window, 0.7380 against 0.7380. Both close when the return does.
     {"panwet.mid", {1.0, 0.01, 9.44, 6.0, 0.155}, "the chorus return deficit, in dB and in balance"},
 
-    // **XG, and one of the six the corrected harness moved *away* from this engine** -- 0.025 to
-    // 0.036 of peak. The other is `th07_19_user_gm` below, at 0.047 to 0.103, and they are the
-    // corpus's only two XG files. Eighteen GS songs moved closer on the same change. A more
-    // accurate reference making both XG files worse and almost every GS file better is not a
-    // tolerance question; it says the XG path places its events differently, and that is the row to
-    // read alongside `th07` rather than either alone.
-    {"MAKORO.MID", {1.0, 0.037, 3.0, 6.0}, "XG; moved away when the harness got more accurate"},
+    // **Not an XG row, and the note that said so has been withdrawn.** Both of the corpus's XG
+    // files moved away from this engine when the harness was corrected, which looked like a
+    // statement about the XG path. It was a coincidence of two: `th07_19_user_gm` is the chorus
+    // return (see its row), and this one is the peak family -- our peak is **15.6% higher** than
+    // the module's here, where th07's is 10% lower. Opposite signs are not one defect. `canyon`,
+    // which is GS, has a worse peak ratio than either.
+    {"MAKORO.MID", {1.0, 0.037, 3.0, 6.0}, "peak family; a peak is a single sample"},
 
     {"shangai.mid", {1.0, 0.01, 3.0, 6.0, 0.128},
      "balance alone now; the CC1/CC2 routes it assigns are inert"},
+    // **This row passes its level bound by cancellation, and that is worth more than the pass.**
+    // Differencing a chorus-zeroed render out of it: the dry and reverb paths are **+0.47 dB hot**
+    // and the chorus return is **3.10x short**, and the two very nearly annihilate -- the mix reads
+    // -0.04 dB. Its 3.10x sits beside `panwet`'s 2.95x, measured over a whole song rather than one
+    // note. So a song inside its rms bound is not evidence that its paths are right, and this is
+    // the corpus's demonstration of it.
     {"macross2.mid", {1.0, 0.015, 3.0, 6.0, 0.070},
-     "was the corpus's worst band row at 11.0 dB; the harness held that error, not this engine"},
+     "dry +0.47 dB and the chorus return 3.10x short, cancelling to -0.04 dB in the mix"},
 
     // Still the corpus's worst stereo deviation, and still carrying a 63 Hz band, but less than
     // half what it was: 0.294 to 0.127. A song can be light in the low end and misplaced across the
@@ -267,10 +273,28 @@ constexpr std::array<KnownDeviation, 21> known_deviations{{
     {"canyon.mid", {1.0, 0.046, 5.20, 6.0}, "hot at 125 Hz and 8 kHz; invisible to the stream gate"},
     {"canyon-format1.mid", {1.0, 0.046, 5.20, 6.0}, "the same music as `canyon.mid`, format 1"},
 
-    // The corpus's second XG file, and the largest single deviation in this table. Its peak
-    // **doubled away** from the module when the harness stopped truncating event times -- 0.047 to
-    // 0.103 -- while eighteen GS songs improved. Read it with `MAKORO.MID` above.
-    {"th07_19_user_gm.mid", {1.0, 0.105, 3.0, 6.0}, "XG; the largest deviation here, and it grew"},
+    // **The chorus return, on the largest file in the corpus -- chased, and it is not XG.** Its
+    // peak doubled away from the module when the harness stopped truncating event times, which
+    // together with `MAKORO` read as a statement about the XG path. It is not. Three things were
+    // ruled out by measurement before the cause was found:
+    //
+    //  - *Not the event grid.* Both sides round half-to-even onto the 1 ms grid, and say so.
+    //  - *Not voice stealing*, though this file steals 70,484 times across 173,183 notes and is the
+    //    obvious suspect. Re-rendered with a pool that grows to 128 and never steals, the whole-song
+    //    RMS moves by **0.01 dB**. The voice census says the same from the other side: the module's
+    //    own flag runs at a mean of 56.5 sounding voices over all 33 minutes and never reaches 64.
+    //  - *Not XG.* `MAKORO` deviates the other way and `canyon`, which is GS, deviates further.
+    //
+    // It is the chorus return, and differencing says so outright. Zero this file's CC#93 messages
+    // and re-render both engines: the mix goes from **-0.81 dB to +0.08 dB** -- 33 minutes of dry
+    // and reverb agreeing to within a tenth of a decibel -- while the chorus wet those messages
+    // carry, which is 53.7% of the module's mix here, is **1.71x short**. The peak follows: at the
+    // module's own peak instant, 1218.49 s, the ratio goes from 0.794 to 0.921.
+    //
+    // What is left at 0.94 is the ordinary peak family, and the bound stays where the measurement
+    // puts it until the return is fixed rather than being fitted to the residual.
+    {"th07_19_user_gm.mid", {1.0, 0.105, 3.0, 6.0},
+     "the chorus return: -0.81 dB in the mix, +0.08 dB with the send zeroed"},
 
     {"MIDI-Corona-Baby Baby.mid", {1.24, 0.022, 3.0, 6.0},
      "the portamento-ceiling file; rms and peak"},

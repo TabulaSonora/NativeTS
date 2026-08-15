@@ -1822,6 +1822,15 @@ between the two -- which 0.53 does. That is arithmetic, not a measurement: what 
 differencing this song's two sends separately, the same three-render way, and predicting 0.98 on the
 reverb leg and 0.34 on the chorus leg before looking.
 
+**Two whole songs now carry the same measurement, and one of them passes its bound while carrying
+it.** Zeroing a file's CC#93 and re-rendering both engines isolates the chorus the same way:
+`th07_19_user_gm.mid` goes from **-0.81 dB in the mix to +0.08 dB** with the send out of the way,
+which is 33 minutes of dry and reverb agreeing to a tenth of a decibel, and the wet those messages
+carry is **1.71x short**. `macross2.mid` reads -0.04 dB in the mix and looks like agreement; it is
+not. Its dry and reverb are **+0.47 dB hot** and its chorus return is **3.10x short**, and the two
+very nearly annihilate. So a song inside its level bound is not evidence that its paths are right,
+and 3.10x is the first corroboration of `panwet`'s 2.95x from different material.
+
 ## Methodology worth borrowing
 
 Three habits earned their place during development:
