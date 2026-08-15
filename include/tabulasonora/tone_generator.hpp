@@ -164,6 +164,30 @@ struct ToneGeneratorOptions {
     /// longer identical to.
     bool extended_interpolation = true;
 
+    /// Start a fresh input-queue window at every SysEx message, as a host flushing before each one
+    /// would.
+    ///
+    /// **Off by default, and it is a departure rather than a fidelity switch — the measurement says
+    /// so.** The module drops what will not fit in one control tick's 2048 packets, silently, which
+    /// is why `darkness3.mid`'s nine trailing program changes never reach their parts and the module
+    /// plays the patches its bulk dump chose. The obvious question is whether a host can avoid that
+    /// by flushing more often, and the obvious answer is no: `scdec smf … flushsx` calls
+    /// `TG_flushMidi` before every SysEx message, and on `darkness3.mid` — 60 flushes, the file the
+    /// bound was measured on — the render is **byte-identical**. The 2048 bounds the *ready buffer*,
+    /// which nothing but `TG_Process` drains, so an extra flush moves the ring into a buffer that is
+    /// already full.
+    ///
+    /// What flushing mid-block does cost is placement: `TG_flushMidi` force-drains regardless of
+    /// timestamp, so events already enqueued in that block are released at the flush rather than at
+    /// their own offsets. Measured on `roland_sc88_y03.mid`, that is 120 samples of 10.7 million
+    /// differing by one LSB — real, and small.
+    ///
+    /// So switching this on here does something the module cannot be made to do: deliver the
+    /// messages its queue discards. Turn it on to hear a file as written rather than as the hardware
+    /// receives it; leave it off for anything compared against the DLL, exactly as with
+    /// `extended_interpolation`.
+    bool flush_before_sysex = false;
+
     /// Linear gain applied to the audio handed to the host.
     double output_gain = 1.0;
 

@@ -483,6 +483,7 @@ int render_command(int chorus_phase,
         engine_options.delay = options.delay;
         engine_options.efx = options.efx;
         engine_options.extended_interpolation = options.extended_interpolation;
+        engine_options.flush_before_sysex = options.flush_before_sysex;
         // The module's own timing, always. `render-note` above has set these since it was written
         // and this path never did, so a song rendered here started every note four 32-sample
         // chunks earlier than `SCCore.dll` would have and skipped the output stage the module
@@ -1096,6 +1097,7 @@ int main(int argc, char** argv)
     bool no_chorus = false;
     bool no_delay = false;
     bool no_efx = false;
+    bool flush_per_sysex = false;
     bool module_resampler = false;
     bool stream = false;
     int polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
@@ -1127,6 +1129,11 @@ int main(int argc, char** argv)
                      "Render with the module's own 4-tap resampler and its 4x pitch increment "
                      "ceiling, instead of the wide band-limiting one. What a render being compared "
                      "against SCCore.dll needs; it also restores the module's held portamento");
+    render->add_flag("--flush-per-sysex", flush_per_sysex,
+                     "Let every SysEx message start a fresh input-queue window, so a bulk dump "
+                     "larger than one control tick is delivered whole. The module drops what will "
+                     "not fit and cannot be flushed out of it, so this plays a file as written "
+                     "rather than as the hardware receives it -- not for comparison against the DLL");
     render->add_flag("--gsws", gsws,
                      "Render it the way the Microsoft GS Wavetable Synth does: the SC-55 map, "
                      "with reverb, chorus, delay and EFX all off. An explicit --map still wins");
@@ -1250,6 +1257,7 @@ int main(int argc, char** argv)
             render_options.delay = !no_delay;
             render_options.efx = !no_efx;
             render_options.extended_interpolation = !module_resampler;
+            render_options.flush_before_sysex = flush_per_sysex;
 
             ts::ChannelMask mask;
             apply_channels(mask, muted, /*mute=*/true);

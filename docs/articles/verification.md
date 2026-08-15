@@ -96,10 +96,25 @@ judging a residual against the DLL, not a test gate — nothing in the suite pas
 
 ## Where this engine departs from the reference
 
-Five cases, each deliberate, each because the hardware was measured and disagreed. Four of them are
-unconditional. The fifth is behind ts::ToneGeneratorOptions::extended_interpolation, which is on by
-default and off wherever the DLL is the reference, because it is the only one where reproducing the
-module and reproducing the hardware cannot both be done at once.
+Six cases, each deliberate. Four are unconditional and were adopted because the hardware was
+measured and disagreed with the module. The other two are switches, and they differ in which way
+they point: ts::ToneGeneratorOptions::extended_interpolation is **on** by default and turned off
+wherever the DLL is the reference, because it is the only case where reproducing the module and
+reproducing the hardware cannot both be done at once; ts::ToneGeneratorOptions::flush_before_sysex
+is **off** by default and exists to be turned on, because it does not reproduce anything — it
+delivers messages the module's input queue discards.
+
+**On that last one, the measurement is the point.** The module drops whatever will not fit in one
+control tick's 2048 packets, which is why `darkness3.mid`'s nine trailing program changes never
+reach their parts. Whether a host can avoid that by flushing more often is now answered: `scdec smf
+… flushsx` calls `TG_flushMidi` before every SysEx message, and on `darkness3.mid` — 60 flushes, the
+file the bound was measured on — the render is **byte-identical**. The 2048 bounds the *ready
+buffer*, and nothing but `TG_Process` drains it, so an extra flush moves the ring into a buffer that
+is already full. Flushing mid-block is not free either: `TG_flushMidi` force-drains regardless of
+timestamp, so events already enqueued in that block are released at the flush rather than at their
+own offsets — measured on `roland_sc88_y03.mid` as 120 samples of 10.7 million differing by one LSB.
+So the flag on the oracle is what proves the module cannot do this, and the option in the engine is
+what does it anyway, for a listener who wants the file rather than the hardware.
 
 **The loop's last sample.** The reference stops decoding one sample short of a loop's data end, so
 its forward loop substitutes the loop's *first* sample for the last and plays it twice per pass.

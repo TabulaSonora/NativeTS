@@ -73,6 +73,13 @@ struct RenderOptions {
     /// `ToneGeneratorOptions::extended_interpolation`.
     bool extended_interpolation = true;
 
+    /// Deliver the SysEx the module's input queue would discard.
+    ///
+    /// Off, like the engine option it forwards to. `--flush-per-sysex` turns it on -- see
+    /// `ToneGeneratorOptions::flush_before_sysex`, which carries the measurement saying the module
+    /// itself cannot be made to do this.
+    bool flush_before_sysex = false;
+
     /// MIDI channel routed to the drum path.
     int drum_channel = 9;
 

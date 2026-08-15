@@ -364,11 +364,17 @@ struct ToneGenerator::Impl {
     ///
     /// Charges `packets` whether or not it fits, so a message that overflows does not leave room
     /// for a later, smaller one: the ring is walked in arrival order and the drop is positional.
-    [[nodiscard]] bool accepts(int sample_offset, int packets) noexcept
+    ///
+    /// `starts_window` is `ToneGeneratorOptions::flush_before_sysex` reaching this far: a host
+    /// flushing ahead of a message opens a window for it. On the module that buys nothing, because
+    /// the bound is on the buffer only `TG_Process` empties -- measured, and the option's own
+    /// documentation carries the reading -- so this is a deliberate departure and not a model of
+    /// anything.
+    [[nodiscard]] bool accepts(int sample_offset, int packets, bool starts_window = false) noexcept
     {
         const std::int64_t slot =
             (block_index * ToneGenerator::block_size + sample_offset) / control_tick_samples;
-        if (flush_block != slot) {
+        if (flush_block != slot || starts_window) {
             flush_block = slot;
             flush_packets = 0;
         }
@@ -1538,7 +1544,8 @@ void ToneGenerator::send_sysex_at(int sample_offset,
                                   std::span<const std::uint8_t> bytes)
 {
     // Three data bytes to a packet, which is how the module's input path carries a long message.
-    if (!impl_->accepts(sample_offset, static_cast<int>((bytes.size() + 2) / 3))) {
+    if (!impl_->accepts(sample_offset, static_cast<int>((bytes.size() + 2) / 3),
+                        impl_->options.flush_before_sysex)) {
         return;
     }
 

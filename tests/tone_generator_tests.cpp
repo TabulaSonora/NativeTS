@@ -2116,6 +2116,45 @@ TEST_CASE("the input queue drops a flush past its capacity", "[tone_generator]")
     CHECK(std::ranges::any_of(left, [](float sample) { return std::abs(sample) > 1e-4F; }));
 }
 
+TEST_CASE("flush_before_sysex delivers what the queue would drop", "[tone_generator][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // The part's panpot over SysEx, behind enough channel traffic to overrun one control tick's
+    // 2048 packets. `dt1` is 10 bytes, so it is four packets of the tick's budget.
+    //
+    // Pan rather than level, and CC#7 as the padding, because the two must not be the same control:
+    // GS part level *is* CC#7, so padding with volume messages and then reading the volume back
+    // measures the padding. `40 1x 1C` with a zero is the panpot's RND, which nothing else here
+    // writes.
+    const auto pan_after = [&](bool flush_before_sysex) {
+        ToneGeneratorOptions options;
+        options.flush_before_sysex = flush_before_sysex;
+        ToneGenerator generator{notes, options};
+
+        for (int i = 0; i < 2100; ++i) {
+            generator.send_channel(0xB0, 7, 127);
+        }
+        generator.send_sysex(dt1({0x40, 0x11, 0x1C, 0}));
+        return generator.part(0).pan;
+    };
+
+    // Off, this is the module: the message is past the bound and is discarded without a word, so
+    // the part keeps the pan a GS reset gave it, whatever that is.
+    const int reset_pan = ToneGenerator{notes}.part(0).pan;
+    REQUIRE(reset_pan != 0);
+    CHECK(pan_after(false) == reset_pan);
+
+    // On, the SysEx opens a window of its own and lands. **This is a departure, not a model.** The
+    // module cannot be talked into it: `scdec smf ... flushsx` calls `TG_flushMidi` before every
+    // SysEx message and `darkness3.mid` -- 60 of them, the file this bound was measured on --
+    // renders byte-identical either way, because 2048 bounds the buffer that only `TG_Process`
+    // empties. See `ToneGeneratorOptions::flush_before_sysex`.
+    CHECK(pan_after(true) == 0);
+}
+
 TEST_CASE("the extended resampler frees the glide without brightening the note", "[tone_generator]")
 {
     const RomImage rom =
