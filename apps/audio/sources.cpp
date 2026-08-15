@@ -42,6 +42,11 @@ StreamingSource::StreamingSource(NoteRenderer& notes,
     // output is data that gets compared against reference renders.
     player_.skip_lead_in();
 
+    // And hand a dense opening over at a cable's rate. A player stands in for the wire, and the
+    // engine's queue drops what a host dumps on it in one tick -- which on a file like
+    // `darkness3.mid` is most of its own setup. See `SequencePlayer::set_spread_bursts`.
+    player_.set_spread_bursts(true);
+
     length_ = player_.last_event_position()
               + static_cast<std::int64_t>(tail_seconds * ToneGenerator::sample_rate);
     channels_ = options.channels;

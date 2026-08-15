@@ -511,6 +511,7 @@ int render_command(int chorus_phase,
         if (options.skip_lead_in) {
             player.skip_lead_in();
         }
+        player.set_spread_bursts(options.spread_bursts);
         if (loops >= 2 && player.loop()) {
             player.set_loop_count(loops);
             player.set_fade_seconds(fade_seconds);
@@ -1102,6 +1103,7 @@ int main(int argc, char** argv)
     bool no_efx = false;
     bool flush_per_sysex = false;
     bool skip_lead_in = false;
+    bool spread_bursts = false;
     bool module_resampler = false;
     bool stream = false;
     int polyphony = ts::ToneGeneratorOptions::unlimited_polyphony;
@@ -1133,6 +1135,11 @@ int main(int argc, char** argv)
                      "Render with the module's own 4-tap resampler and its 4x pitch increment "
                      "ceiling, instead of the wide band-limiting one. What a render being compared "
                      "against SCCore.dll needs; it also restores the module's held portamento");
+    render->add_flag("--spread-bursts", spread_bursts,
+                     "Hand a dense opening over at a cable's rate rather than all at once. The "
+                     "engine drops what will not fit in one control tick, as the module does to a "
+                     "host, so a file whose opening is dense loses the end of its own setup. Off "
+                     "here because a render is data; the players do this by default");
     render->add_flag("--skip-lead-in", skip_lead_in,
                      "Start at the song's first note instead of at its silent lead-in. The setup "
                      "before the note is still replayed into the engine, so only the silence goes. "
@@ -1267,6 +1274,7 @@ int main(int argc, char** argv)
             render_options.extended_interpolation = !module_resampler;
             render_options.flush_before_sysex = flush_per_sysex;
             render_options.skip_lead_in = skip_lead_in;
+            render_options.spread_bursts = spread_bursts;
 
             ts::ChannelMask mask;
             apply_channels(mask, muted, /*mute=*/true);

@@ -2158,6 +2158,50 @@ TEST_CASE("a seek replays a setup burst the queue would have dropped", "[tone_ge
     CHECK(reference.part(0).program != 48);
 }
 
+TEST_CASE("a spread feed delivers a burst the queue would drop", "[tone_generator][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // The same 2,048-packet bound as the seek case, reached the other way: not by replaying state
+    // but by a file whose own opening is dense. `darkness3.mid` is the real one -- 104 events on
+    // tick 0, crossing the bound at its 47th -- and what it loses is the program changes that
+    // follow its bulk dump.
+    //
+    // Dropping them is faithful to a *host* handing the engine a burst in one call. It is not what
+    // a wire does: MIDI is 31,250 baud, so that opening takes about 210 ms to arrive and the queue
+    // drains twenty-one times on the way. A player stands in for the wire.
+    const auto program_after = [&](bool spread) {
+        ToneGenerator generator{notes};
+        std::vector<MidiEvent> events;
+        const auto at = [&](std::int64_t position, int status, int d1, int d2 = 0) {
+            MidiEvent event;
+            event.position = position;
+            event.kind = MidiEventKind::channel;
+            event.status = status;
+            event.data1 = d1;
+            event.data2 = d2;
+            events.push_back(event);
+        };
+        for (int i = 0; i < 2100; ++i) {
+            at(0, 0xB0, 7, 100);
+        }
+        at(0, 0xC0, 48);
+        at(32000, 0x90, 60, 100);
+
+        SequencePlayer player{generator, smf::Song{events, std::nullopt, 32000}};
+        player.set_spread_bursts(spread);
+        std::vector<float> left(4096);
+        std::vector<float> right(4096);
+        player.render(left, right);
+        return generator.part(0).program;
+    };
+
+    CHECK(program_after(false) != 48); // the module, fed as a host feeds it
+    CHECK(program_after(true) == 48);  // the same file, delivered at a cable's rate
+}
+
 TEST_CASE("an out-of-range bank select LSB lands on SC-8820", "[tone_generator][sccore]")
 {
     const RomImage rom =

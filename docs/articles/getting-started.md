@@ -97,6 +97,7 @@ tabula-sonora render song.mid out.wav --map 4
 | `--polyphony N` | voice limit outright; `0` grows the pool on demand, and is the default |
 | `--ports 1\|2\|4` | 16, 32 or 64 parts; two is the hardware |
 | `--module-resampler` | the module's own 4-tap resampler and its 4× pitch increment ceiling, instead of the wide band-limiting one. What a render being compared against `SCCore.dll` needs; it also restores the module's held portamento |
+| `--spread-bursts` | hand a dense opening over at a cable's rate rather than all at once. The engine drops what will not fit in one control tick, as the module does to a host that dumps a burst on it, so a file whose opening is dense loses the end of its own setup. Off here because a render is data; the players do it by default |
 | `--skip-lead-in` | start at the song's first note instead of its silent lead-in. The setup before the note is still replayed into the engine, so only the silence goes. Off here because a render is data; the players do it by default |
 | `--flush-per-sysex` | let every SysEx message start a fresh input-queue window, so a bulk dump larger than one control tick is delivered whole instead of being silently truncated. The module drops the remainder and cannot be flushed out of doing so, so this plays a file as written rather than as the hardware receives it |
 

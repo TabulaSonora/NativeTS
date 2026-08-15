@@ -95,6 +95,25 @@ void SequencePlayer::dispatch_within(std::int64_t samples)
     // placement can never be observed and any error in it is silently absorbed.
     const std::int64_t limit = position_ + samples;
     while (cursor_ < events_.size() && events_[cursor_].position <= limit) {
+        if (spread_bursts_) {
+            // A cable delivers a burst over time; this hands it over in one call. The engine drops
+            // whatever runs past the input queue's 2,048 packets in a tick -- faithfully, because
+            // that is what the module does to a host that dumps one on it -- so a file whose
+            // opening is dense loses the end of its own setup. Holding the remainder back for the
+            // next call is what a wire does, and the budget is what decides where "the remainder"
+            // begins.
+            const MidiEvent& event = events_[cursor_];
+            const int cost = event.kind == MidiEventKind::sysex
+                                 ? static_cast<int>((event.sysex.size() + 2) / 3)
+                                 : 1;
+            if (pass_packets_ > 0 && pass_packets_ + cost > spread_packet_budget) {
+                burst_held_ = true;
+                break;
+            }
+            pass_packets_ += cost;
+        }
+        // Held-back events arrive with their position already behind the cursor, so the offset
+        // clamps to the start of the stretch: late, which is what a wire would have done too.
         const auto offset = static_cast<int>(
             std::max<std::int64_t>(0, events_[cursor_].position - position_));
         generator_->send_at(offset, events_[cursor_].port, events_[cursor_]);
@@ -168,6 +187,17 @@ void SequencePlayer::render(std::span<float> left, std::span<float> right)
             break;
         }
 
+        // Cleared before the first dispatch of the pass, not the last: a burst whose events are
+        // all already due is held back by *this* call, and resetting the flag afterwards threw that
+        // away and left the pacing switched off for exactly the files it exists for.
+        //
+        // The budget is per *pass* rather than per call for the same reason. A pass dispatches
+        // twice -- what is already due, then what falls inside the stretch -- and a counter local
+        // to each call let two budgets' worth into one tick, which is the whole thing this is
+        // meant to prevent.
+        burst_held_ = false;
+        pass_packets_ = 0;
+
         // Whatever is already due, then the loop check, then whatever is due after a jump -- the
         // order this has always had, and the reason an event sitting exactly on the loop end still
         // reaches the engine before the jump takes the cursor away from it.
@@ -193,6 +223,14 @@ void SequencePlayer::render(std::span<float> left, std::span<float> right)
         count = std::max<std::size_t>(count, 1);
 
         dispatch_within(static_cast<std::int64_t>(count) - 1);
+
+        // A burst that did not fit is delivered a control tick at a time, because that is the rate
+        // the engine's queue actually drains at: `TG_Process` empties it once per tick, so handing
+        // over another budget's worth before one has elapsed would drop it again. Rendering a tick
+        // and coming back is what a cable's pacing looks like from here.
+        if (burst_held_) {
+            count = std::min<std::size_t>(count, control_tick_samples);
+        }
 
         generator_->render(left.subspan(start, count), right.subspan(start, count));
 

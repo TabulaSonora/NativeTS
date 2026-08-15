@@ -126,6 +126,25 @@ public:
     /// Where the song's first note falls, in samples, or zero when it starts on one.
     [[nodiscard]] std::int64_t first_note() const noexcept { return first_note_; }
 
+    /// Hands a dense opening over at a cable's rate instead of all at once.
+    ///
+    /// **Off by default, on in the players**, for the same reason as `skip_lead_in`: a render is
+    /// data measured against a reference, and the reference is the module fed the way a host feeds
+    /// it. A player is standing in for the cable.
+    ///
+    /// The engine drops whatever a caller hands it past the input queue's 2,048 packets in one
+    /// control tick, and that is faithful — it is what the module does to a host that dumps a burst
+    /// on it. But MIDI is 31,250 baud, so `darkness3.mid`'s opening of about 660 bytes takes
+    /// roughly 210 ms to arrive over a wire, twenty-one control ticks, and hardware drops none of
+    /// it. Handing it over in one call is this player's choice, not the file's.
+    ///
+    /// With this on, a burst past the budget spills into the following calls. Measured on
+    /// `darkness3.mid` through the same change in the oracle harness: its parts stop keeping the
+    /// bulk dump's programs and take the file's own, and the render moves 2.31 dB.
+    void set_spread_bursts(bool spread) noexcept { spread_bursts_ = spread; }
+
+    [[nodiscard]] bool spread_bursts() const noexcept { return spread_bursts_; }
+
 private:
     /// The seek body: replays state up to `sample` without touching the loop bookkeeping.
     void replay_to(std::int64_t sample);
@@ -151,6 +170,19 @@ private:
 
     std::optional<smf::SongLoop> loop_;
     std::int64_t first_note_ = 0;
+    bool spread_bursts_ = false;
+
+    /// Under the engine's 2,048 so a message straddling the edge still fits.
+    static constexpr int spread_packet_budget = 2000;
+
+    /// The rate the engine's input queue drains at: `TG_Process` empties it once per control tick.
+    static constexpr int control_tick_samples = 320;
+
+    /// Whether the last dispatch held part of a burst back for the next pass.
+    bool burst_held_ = false;
+
+    /// Packets handed over in the current pass, across both of its dispatch calls.
+    int pass_packets_ = 0;
     int loop_count_ = 1;
     int loops_played_ = 0;
     double fade_seconds_ = 7.0;

@@ -86,6 +86,12 @@ struct RenderOptions {
     /// comparison against a reference render rests on. `--skip-lead-in` turns it on.
     bool skip_lead_in = false;
 
+    /// Hand a dense opening over at a cable's rate rather than all at once.
+    ///
+    /// Off, unlike the players, for the same reason as `skip_lead_in`. `--spread-bursts` turns it
+    /// on — see `SequencePlayer::set_spread_bursts`.
+    bool spread_bursts = false;
+
     /// MIDI channel routed to the drum path.
     int drum_channel = 9;
 
