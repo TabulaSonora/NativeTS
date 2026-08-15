@@ -265,13 +265,16 @@ constexpr std::array<KnownDeviation, 21> known_deviations{{
     // change; the reference did, and on these six it moved away rather than toward. They are new
     // debts, not new excuses, and three of them are worth reading rather than counting.
     //
-    // `canyon` is the sharpest. It is the file the bit-exact stream gate replays, which is a
-    // *self*-baseline -- it reports that the render moved, never whether it should have -- so this
-    // engine has been running 4.28 dB hot at 125 Hz and 5.09 dB at 8 kHz under the most-exercised
-    // file in the suite, where by construction that gate could not see it. Both variants carry it
-    // identically, which is expected: format 0 and format 1 of the same music.
-    {"canyon.mid", {1.0, 0.046, 5.20, 6.0}, "hot at 125 Hz and 8 kHz; invisible to the stream gate"},
-    {"canyon-format1.mid", {1.0, 0.046, 5.20, 6.0}, "the same music as `canyon.mid`, format 1"},
+    // **`canyon`'s band row is closed, and what closed it was a bank select.** It read 4.28 dB hot
+    // at 125 Hz and 5.09 dB at 8 kHz -- under the file the bit-exact stream gate replays, where a
+    // *self*-baseline could never see it -- and both were one cause: the file sends bank select
+    // **LSB 42** on its drum channel, an out-of-range value the module resolves to the SC-8820 kit
+    // while this engine kept the map the caller asked for. A different snare and a different
+    // maracas, which is exactly two bands six octaves apart. See the LSB sweep in
+    // `tone_generator.cpp`. The bands are now inside the default at every map and the peak ratio at
+    // map 1 went 0.865 to 0.995; the peak row that remains is another map's.
+    {"canyon.mid", {1.0, 0.046, 3.0, 6.0}, "peak only, and only on the maps the bank select misses"},
+    {"canyon-format1.mid", {1.0, 0.046, 3.0, 6.0}, "the same music as `canyon.mid`, format 1"},
 
     // **The chorus return, on the largest file in the corpus -- chased, and it is not XG.** Its
     // peak doubled away from the module when the harness stopped truncating event times, which

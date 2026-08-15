@@ -653,19 +653,51 @@ struct ToneGenerator::Impl {
                                         + map_of(parts[static_cast<std::size_t>(part)]));
     }
 
-    // Which vintage's tone map the part resolves against: bank select LSB 1-4 names one, anything
-    // else keeps the configured default.
+    // Which vintage's tone map the part resolves against: bank select LSB 1-3 names one, **4 and
+    // anything above lands on SC-8820**, and 0 keeps the configured default.
+    //
+    // What the module does with an out-of-range LSB is measured, and it is not what this engine
+    // did. Sweeping the LSB on a rhythm part -- program 0, one snare, everything else fixed -- the
+    // renders fall into four groups, and the top one is open-ended:
+    //
+    //     LSB 0, 1        identical (0 leaves the part's map alone; the harness had set map 1)
+    //     LSB 2           its own kit
+    //     LSB 3           its own kit
+    //     LSB 4 and up    identical for 4, 5, 6, 8, 10, 42, 64 and 127
+    //
+    // And it overrides an explicit request rather than being ignored: with the harness setting each
+    // part's map by `40 4x 01` first, LSB 42 renders **the same at maps 1, 2, 3 and 4**, byte for
+    // byte, and that render is the map-4 one.
+    //
+    // **Whether that is a clamp to the top of the range or a fall back to the module's own default
+    // cannot be told apart here, and probably not at all.** SC-8820 is both, and the DLL offers no
+    // way to move the default somewhere else and watch which one follows. The two readings predict
+    // the same audio for every input, so this implements the observable behaviour and takes no
+    // position on the mechanism. What matters for a caller is the part it fixes: the result does
+    // **not** depend on `ToneGeneratorOptions::map`, so asking for an SC-55 render does not keep a
+    // part whose file sent LSB 42 on the SC-55 map.
+    //
+    // Reading it as "not a map, so keep the default" is what made `canyon.mid` render 4.8 dB hot at
+    // 125 Hz and 5.0 dB at 8 kHz with a peak ratio of 0.865: it sends bank LSB **42** on its drum
+    // channel, so the module plays the SC-8820 kit -- a different snare and a different maracas --
+    // where this engine stayed on whichever map the caller asked for. With this, those read
+    // +1.3 dB, -0.1 dB and 0.995.
     //
     // XG overrides both. System On puts every part on the XG map, and there is no per-part escape
     // from it while the mode holds -- the bank LSB has become the variation index and no longer
     // names a map at all.
+    [[nodiscard]] static int map_index_for(const Part& part) noexcept
+    {
+        return part.bank_lsb >= 1 ? std::min(part.bank_lsb, 4) : 0;
+    }
+
     [[nodiscard]] ToneMap tone_map_for(const Part& part) const noexcept
     {
         if (xg_mode) {
             return ToneMap::xg;
         }
-        if (part.bank_lsb >= 1 && part.bank_lsb <= 4) {
-            return static_cast<ToneMap>(part.bank_lsb);
+        if (const int index = map_index_for(part); index != 0) {
+            return static_cast<ToneMap>(index);
         }
         return options.map;
     }
@@ -679,9 +711,8 @@ struct ToneGenerator::Impl {
                 return *row;
             }
         }
-        if (part.bank_lsb >= 1 && part.bank_lsb <= 4) {
-            const std::optional<int> row =
-                DrumKitTable::row_for_map(static_cast<ToneMap>(part.bank_lsb));
+        if (const int index = map_index_for(part); index != 0) {
+            const std::optional<int> row = DrumKitTable::row_for_map(static_cast<ToneMap>(index));
             if (row) {
                 return *row;
             }

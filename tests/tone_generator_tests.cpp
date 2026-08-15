@@ -2116,6 +2116,49 @@ TEST_CASE("the input queue drops a flush past its capacity", "[tone_generator]")
     CHECK(std::ranges::any_of(left, [](float sample) { return std::abs(sample) > 1e-4F; }));
 }
 
+TEST_CASE("an out-of-range bank select LSB lands on SC-8820", "[tone_generator][sccore]")
+{
+    const RomImage rom =
+        RomImage::open(testdata::require_sccore().string(), RomVerification::quick);
+    NoteRenderer notes{rom};
+
+    // Swept on the module with `scdec smf`, one snare on a rhythm part, everything else fixed: the
+    // renders fall into four groups, `0`/`1`, `2`, `3`, and `4` together with 5, 6, 8, 10, 42, 64
+    // and 127 -- byte-identical across all of them. And an out-of-range LSB **overrides an explicit
+    // request**: with each part's map set by `40 4x 01` first, LSB 42 renders identically at maps
+    // 1, 2, 3 and 4, and that render is the map-4 one.
+    //
+    // **Clamp or fall back to the module's default? The two cannot be told apart.** SC-8820 is both
+    // the top of the range and the power-on map, and the DLL has no way to move the default and
+    // watch which one follows -- so this asserts the behaviour and claims nothing about the
+    // mechanism. The part that matters to a caller is that the answer does not depend on
+    // `ToneGeneratorOptions::map`.
+    //
+    // `canyon.mid` is why it matters: it sends bank LSB **42** on its drum channel, so the module
+    // plays the SC-8820 kit. Staying on the caller's map instead put a different snare and a
+    // different maracas in the mix -- 4.8 dB hot at 125 Hz, 5.0 dB at 8 kHz, and a peak ratio of
+    // 0.865 against the module. Now they read +1.3 dB, -0.1 dB and 0.995.
+    const auto map_of = [&](int lsb) {
+        ToneGeneratorOptions options;
+        options.map = ToneMap::sc55;
+        ToneGenerator generator{notes, options};
+        generator.send_channel(0xB0, 32, lsb);
+        return generator.part_tone_map(0);
+    };
+
+    CHECK(map_of(0) == ToneMap::sc55); // the caller's map, untouched
+    CHECK(map_of(1) == ToneMap::sc55);
+    CHECK(map_of(2) == ToneMap::sc88);
+    CHECK(map_of(3) == ToneMap::sc88pro);
+    CHECK(map_of(4) == ToneMap::sc8820);
+
+    // Everything past the last map is that map, rather than a fall back to the default.
+    for (const int lsb : {5, 6, 8, 10, 42, 64, 127}) {
+        INFO("bank LSB " << lsb);
+        CHECK(map_of(lsb) == ToneMap::sc8820);
+    }
+}
+
 TEST_CASE("flush_before_sysex delivers what the queue would drop", "[tone_generator][sccore]")
 {
     const RomImage rom =
