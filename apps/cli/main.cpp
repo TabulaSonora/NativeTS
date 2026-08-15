@@ -706,7 +706,13 @@ void apply_channels(ts::ChannelMask& mask, const std::vector<std::string>& lists
 ///
 /// Names and the implemented flag come from the DLL's own directory, which is why this needs the
 /// ROM at all; `tools/scan_midi_efx.py` drives it over an archive and aggregates the rows.
-int scan_efx_command(const std::string& dll, const std::vector<fs::path>& files)
+///
+/// `--directory` prints that directory on its own and scans nothing. A scan's rows carry the
+/// implemented flag as it stood *when the scan ran*, and a corpus scan is expensive enough that
+/// nobody re-runs it to learn that an algorithm landed — so the report step re-reads the flags from
+/// here instead, and a transcribed type moves out of the priority list without the archive being
+/// touched. It is the same derivation either way: select the type, ask `implemented()`.
+int scan_efx_command(const std::string& dll, const std::vector<fs::path>& files, bool directory_only)
 {
     const ts::RomImage rom = ts::RomImage::open(dll, ts::RomVerification::quick);
     ts::InsertionEffect efx{rom};
@@ -734,6 +740,15 @@ int scan_efx_command(const std::string& dll, const std::vector<fs::path>& files)
              << ((key >> 8) & 0x7F) << ' ' << std::setw(2) << (key & 0x7F);
         return text.str();
     };
+
+    if (directory_only) {
+        nlohmann::json types = nlohmann::json::object();
+        for (const auto& [key, entry] : directory) {
+            types[key_label(key)] = {{"name", entry.first}, {"implemented", entry.second}};
+        }
+        std::cout << nlohmann::json{{"directory", std::move(types)}}.dump() << '\n';
+        return 0;
+    }
 
     for (const fs::path& file : files) {
         std::vector<ts::MidiEvent> events;
@@ -1173,10 +1188,20 @@ int main(int argc, char** argv)
     bench->add_option("--iterations", iterations, "Runs per stage; the fastest is reported");
 
     std::vector<fs::path> scan_paths;
+    bool efx_directory = false;
     CLI::App* scan_efx = app.add_subcommand(
         "scan-efx", "Tag files with the insertion-EFX traffic they carry, one JSON row each.");
     add_dll(scan_efx);
-    scan_efx->add_option("files", scan_paths, "Music files to scan")->required();
+    CLI::Option* efx_directory_flag = scan_efx->add_flag(
+        "--directory", efx_directory,
+        "Print the DLL's EFX directory -- every type, its name and whether this engine renders it "
+        "-- and scan nothing. This is what re-groups an old scan without re-walking the archive.");
+    scan_efx->add_option("files", scan_paths, "Music files to scan")->excludes(efx_directory_flag);
+    scan_efx->callback([&] {
+        if (!efx_directory && scan_paths.empty()) {
+            throw CLI::RequiredError("files (or --directory)");
+        }
+    });
 
     CLI11_PARSE(app, argc, argv);
 
@@ -1241,7 +1266,7 @@ int main(int argc, char** argv)
             return bench_command(dll, midi_path, iterations);
         }
         if (scan_efx->parsed()) {
-            return scan_efx_command(dll, scan_paths);
+            return scan_efx_command(dll, scan_paths, efx_directory);
         }
         if (dump_effect->parsed()) {
             return dump_effect_command(dll, effect_kind, effect_type, effect_samples, output_file);

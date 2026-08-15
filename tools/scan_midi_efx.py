@@ -25,9 +25,14 @@ Two steps:
     prints the best few candidate files per type: most notes through the block first, smallest
     file breaking ties, since a focused file makes better test material than a long medley.
 
+    It re-reads the implemented flags from the DLL first (`scan-efx --directory`), so a scan taken
+    before an algorithm landed still groups correctly and says which types moved. Which types a
+    corpus *selects* does not change; only whether this engine renders them does, and re-walking
+    an archive to learn that is minutes of I/O for a question the ROM answers in milliseconds.
+
 Usage:
     python3 tools/scan_midi_efx.py scan <archive dir> <efx.jsonl> [--cli <tabula-sonora>]
-    python3 tools/scan_midi_efx.py report <efx.jsonl> [picks per type]
+    python3 tools/scan_midi_efx.py report <efx.jsonl> [picks per type] [--cli <tabula-sonora>]
 
 The scan needs the built CLI and an SCCore.dll (--dll / $TS_SCCORE_DLL / ./SCCore.dll): the type
 names and the implemented flags are read from the DLL's own directory, not shipped. That also
@@ -92,18 +97,53 @@ def run_scan(root, out_path, cli):
     print(f"{written} files with EFX traffic -> {out_path}", file=sys.stderr)
 
 
-def run_report(rows_path, picks):
+def read_directory(cli):
+    """The DLL's EFX directory as it stands *now*: {key: {name, implemented}}.
+
+    A scan's rows carry the implemented flag as it was when the scan ran, and a scan over a large
+    archive is expensive enough that nobody re-runs it merely because an algorithm was transcribed.
+    So the report re-reads the flags from the engine instead. Still derived rather than listed --
+    `scan-efx --directory` selects each type and asks `InsertionEffect::implemented()`, which is the
+    same question the scan asked.
+    """
+    result = subprocess.run(
+        [cli, "scan-efx", "--directory"], stdout=subprocess.PIPE, text=True, check=False
+    )
+    if result.returncode != 0 or not result.stdout.strip():
+        return None
+    return json.loads(result.stdout)["directory"]
+
+
+def run_report(rows_path, picks, cli=None):
     rows = [json.loads(line) for line in open(rows_path, encoding="utf-8")]
     print(f"{len(rows)} files with EFX traffic\n")
+
+    # Refresh the flags before grouping, when a CLI and a DLL are to hand. Without one the rows'
+    # own flags are used and the header says so, because a report that silently listed a
+    # transcribed type as pending would send someone to transcribe it twice.
+    directory = read_directory(cli) if cli else None
+    if directory is None:
+        print("! flags are the scan's own; pass --cli to re-read them from the DLL\n")
+    else:
+        moved = sorted(
+            key
+            for row in rows
+            for key, use in row["types"].items()
+            if key in directory and use["implemented"] != directory[key]["implemented"]
+        )
+        if moved:
+            names = ", ".join(f"{key} {directory[key]['name'].strip()}" for key in dict.fromkeys(moved))
+            print(f"! {len(set(moved))} type(s) changed group since the scan: {names}\n")
 
     # One aggregate per type key, folding every row's tally together. "--" is the power-on
     # bucket: parts routed through the block by `40 4x 22` before any type was selected.
     types = {}
     for row in rows:
         for key, use in row["types"].items():
+            live = directory.get(key) if directory else None
             entry = types.setdefault(
                 key,
-                {"name": use["name"], "implemented": use["implemented"],
+                {"name": (live or use)["name"], "implemented": (live or use)["implemented"],
                  "files": [], "selects": 0, "notes": 0},
             )
             entry["files"].append(row)
@@ -155,7 +195,12 @@ def main():
     if len(args) >= 3 and args[0] == "scan":
         run_scan(args[1], args[2], find_cli(cli_arg))
     elif len(args) >= 2 and args[0] == "report":
-        run_report(args[1], int(args[2]) if len(args) > 2 else 5)
+        # The CLI is optional here: a report without one still groups, on the scan's own flags.
+        try:
+            cli = find_cli(cli_arg)
+        except SystemExit:
+            cli = None
+        run_report(args[1], int(args[2]) if len(args) > 2 else 5, cli)
     else:
         print(__doc__, file=sys.stderr)
         sys.exit(2)

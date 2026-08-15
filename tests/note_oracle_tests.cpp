@@ -228,7 +228,7 @@ struct KnownDrumDeviation {
 /// case would be twenty-odd bounds all restating one fact about one patch. Reading it back the
 /// other way is the point of the table: *Whistle is wrong*, not *these four renders are wrong*.
 ///
-/// Thirty-two of the thirty-six programs in the sweep need no row at all.
+/// Twenty-nine of the thirty-six programs in the sweep need no row at all.
 ///
 /// **This table used to be twice as long, and what emptied it was one line of the engine.** Nine
 /// melodic rows became four when the playback rate started going through the module's own
@@ -283,15 +283,19 @@ constexpr std::array<KnownDeviation, 7> known_deviations{{
 /// the Piano row above it. One table keyed by program alone would silently lend one the other's
 /// bound, and the mistake would look exactly like a passing test.
 ///
-/// **Thirty-six of the fifty-four drum cases need no row**, and forty of them agree on level to
-/// under half a decibel. What the eighteen that remain say is four things, not eighteen:
+/// **Forty-one of the fifty-four drum cases need no row.** What the thirteen that remain say is
+/// three things, not thirteen -- plus one that used to head this list and is now closed:
 ///
-///  - **Crash cymbals are about 2.5 dB light**, six cases across six kits and three distinct tones.
-///    They used to stop dead at 1.84 s as well, and that part is fixed: it was a ring timer this
-///    port invented, not the decay -- `scdec tvatrace` reads the module's own segment targets and
-///    durations out of the voice, and this engine builds them exactly. See
-///    \ref the-drum-ring-was-invented. Roughly a third of the level that remains is a DC offset the
-///    module's render carries and this one does not; see \ref the-module-has-dc.
+///  - **The crash cymbals are closed, and what closed them is worth keeping.** They used to be a
+///    row apiece -- about 2.5 dB light across six kits and three tones, stopping dead at 1.84 s --
+///    and both halves turned out to be this port's inventions rather than the module's behaviour.
+///    The early stop was a ring timer this port invented, not the decay: `scdec tvatrace` reads the
+///    module's own segment targets and durations out of the voice and this engine now builds them
+///    exactly (\ref the-drum-ring-was-invented). The level was the DC offset, which is no longer
+///    missing either -- the module's decoder zeroes its predictor at the exponent-block boundary
+///    *below* a wave's data start and integrates the preamble deltas in, so an unaligned wave rides
+///    their sum, and the decode seeds from that integral (\ref the-module-has-dc). Every crash row
+///    is gone from the table below. Do not reintroduce one from an older measurement.
 ///  - **Hi-hats, where the module has a low-frequency floor this engine does not.** The module's
 ///    `TR-808 CHH` reads -46 dB at 63 Hz against a -34.8 dB loudest band; ours reads -147, which is
 ///    silence. Below 4 kHz the hat carries nothing either way, but its whole spectrum is only 26 dB

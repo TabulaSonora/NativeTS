@@ -3004,8 +3004,16 @@ void ToneGenerator::Impl::mix_effects(std::span<float> left, std::span<float> ri
         // the arguments `fx_process_block` loads into rdx before each stage. Those had been taken
         // for the left and right of one stereo chorus, which is why the chorus input never appeared
         // to respond to CC#93: every earlier read was of the delay's bus. Printing this port's at
-        // the same point makes the two directly comparable, which is what the 5.79x panwet deficit
+        // the same point makes the two directly comparable, which is what the panwet chorus deficit
         // has been missing -- every coefficient on the path already matches.
+        //
+        // The deficit is **2.95x**, measured by rendering the file three ways through each engine
+        // and differencing -- normal, CC#93 zeroed, both sends zeroed -- so the dry that fed the
+        // effect cancels instead of being counted as wet. The 5.79 an earlier note carried is that
+        // figure multiplied by the per-part send clamp this port does not yet apply: a projection
+        // of where the deficit would land if the clamp were fixed on its own, which is exactly why
+        // it must not be. The same pass put the reverb return at 0.99, so this is the chorus
+        // return alone and not the send network.
         static const bool probe_buses = std::getenv("TS_SEND_BUS_PROBE") != nullptr;
         if (probe_buses) {
             const auto stats = [](std::span<const float> bus) {

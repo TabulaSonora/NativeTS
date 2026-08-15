@@ -334,7 +334,8 @@ TEST_CASE("Rotary modulates rather than merely passing", "[efx][sccore]")
           != rms(std::span<const float>{left}.subspan(16000)));
 }
 
-TEST_CASE("the stereo EQ shelves respond and the mid bands are known missing", "[efx][sccore]")
+TEST_CASE("the stereo EQ shelves respond and its mid bands go through the bank loader",
+          "[efx][sccore]")
 {
     const RomImage rom = open_rom();
     InsertionEffect efx{rom};

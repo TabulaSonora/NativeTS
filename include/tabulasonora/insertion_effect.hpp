@@ -45,11 +45,13 @@ struct EfxRecord {
 /// lines whose base decrements one sample per sample, so an algorithm is a program of taps at
 /// fixed offsets (`fx_delayline_wrap` @ `0x180089830`).
 ///
-/// The per-algorithm processors are transcribed individually, and only a first tranche exists:
-/// Thru, Overdrive and Distortion (one dataflow — the decompiled functions differ only in
-/// presets). A type whose processor has not been transcribed yet passes the signal through
-/// unchanged and reports itself via `implemented()`, so a host can say which effect it is not
-/// rendering rather than rendering it wrong.
+/// The per-algorithm processors are transcribed individually, and seven of the 65 exist: Thru,
+/// Equalizer, Overdrive, Distortion (one dataflow with Overdrive — the decompiled functions differ
+/// only in presets), Rotary, Reverb and OD / OD2. A type whose processor has not been transcribed
+/// yet passes the signal through unchanged and reports itself via `implemented()`, so a host can
+/// say which effect it is not rendering rather than rendering it wrong. Ask `implemented()` rather
+/// than counting on this list: it is derived from the processor the type resolves to, so it is
+/// current by construction and this comment is not.
 ///
 /// Roland-derived data — the directory, the presets, the parameter curves — is decoded from the
 /// user's own DLL at runtime, like every other table in this engine. Offsets are pinned to SOUND

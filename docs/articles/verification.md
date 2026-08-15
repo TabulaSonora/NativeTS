@@ -566,6 +566,34 @@ The rule that falls out is short. *Tier 3 says the render moved. Tier 2 says whe
 — provided the tier 2 case was harvested in isolation.* Neither instrument is trustworthy about the
 question it was not built to answer.
 
+### The other way a harvest goes stale: the harness moves under it {#harness-drift}
+
+Isolation is one failure. The other is that the reference itself changes, and it is harder to
+notice, because a fixture that is *wrong* looks exactly like a fixture that is *old*.
+
+This is what `fixture_manifest.json` is for, and it has now caught the case it was written for.
+The song harvest was taken on 2026-08-07. Two days later the spec project fixed how `scdec` hands
+events to the DLL — real `deltaFrames` with a flush before enqueueing, and event times **rounded
+rather than truncated**. Re-harvesting on the current harness:
+
+| harvest | cases | audio identical to the previous one |
+| --- | --- | --- |
+| notes | 239 | **239** |
+| songs | 36 | **2** |
+
+**The same harness change moved every song and not one note**, and the two songs it did not move say
+why: `panwet.mid` is a one-note probe and `pchoral3.mid` renders as silence. A single event has
+nowhere to be misplaced to; a sequence of thousands does. Peaks moved by up to 0.150, RMS by up to
+0.29 dB, and one band of `macross2.mid` by 4.4 dB — comfortably more than the tolerances the gate
+holds this engine to, which means every song bound fitted before that date was fitted against a
+reference that placed its events by truncation.
+
+Two things to take from it. **A note gate cannot detect harness drift** — its cases are too simple to
+express the difference — so the manifest, not the gate, is what has to carry that check. And **a
+bound is only as current as the harvest it was measured against**: after a re-harvest the deviations
+have to be read off again before any row is called a regression, because the row and the reference no
+longer refer to the same reference.
+
 ### A gate the corpus could not supply {#sharing-lfo1}
 
 `partial_alloc_node @ 1800029e0` claims **one** LFO1 node per note and sets its refcount at `+3` to
@@ -1642,19 +1670,32 @@ Stated plainly, because they are not covered by the numbers above:
   replaced without touching any DSP. The test that covers it says so in as many words.
 - **The LFO has no hardware trace.** It is verified against the reference, which the spec project
   separately reports as bit-exact against the live engine. That is one link removed from the DLL.
-- **Insertion EFX exists as a block, but only three of its algorithms do.** ts::InsertionEffect
+- **Insertion EFX exists as a block, and seven of its sixty-five algorithms do.** ts::InsertionEffect
   transcribes the block machinery in full — the register file, the per-type preset fill, the two
   decrementing delay lines, the `40 03` selection and parameter SysEx, and the `40 4x 22` part
   routing — and decodes the directory, presets, defaults and parameter curves from the user's own
-  DLL, `tools/dump_efx_table.py` being where that reading was worked out. Of the 65 types, Thru,
-  Overdrive and Distortion have their processors transcribed and verified against the live engine
-  (a Thru-routed part is level-transparent in the DLL and within 1.5% here; Overdrive matches to
-  1.4% RMS and tracks the no-EFX baseline's per-band spread). The other 62 pass the signal through
-  unchanged, with routing and send levels still honoured, and report it via
-  ts::InsertionEffect::implemented — so a host can say which effect it is *not* rendering rather
-  than rendering it wrong. One number in the block is calibrated rather than traced: the ×4 between
-  the algorithm's halved output and the dry mix comes from those live renders, decomposed only as
-  far as the 2.0 ramp target the apply handlers write.
+  DLL, `tools/dump_efx_table.py` being where that reading was worked out. The transcribed types are
+  **Thru** (`00 00`), **Equalizer** (`01 00`), **Overdrive** (`01 10`), **Distortion** (`01 11`),
+  **Rotary** (`01 22`), **Reverb** (`01 55`) and **OD / OD2** (`11 03`); Overdrive and Distortion
+  are one dataflow that differs only in its presets, which is how the decompiled functions differ.
+  The other **58 pass the signal through** unchanged, with routing and send levels still honoured,
+  and report it via ts::InsertionEffect::implemented — so a host can say which effect it is *not*
+  rendering rather than rendering it wrong. That flag is derived from the processor the type
+  resolves to rather than kept as a list, so `tools/scan_midi_efx.py` re-groups the corpus by itself
+  when a new algorithm lands.
+
+  **The gate is the register file, not the audio.** `scdec efxdump` reads the live block's
+  coefficient file, tap program and register mirror out of the running DLL, and all seven types
+  match it word for word; ts::InsertionEffect::coefficients and ts::InsertionEffect::tap_program
+  expose the same layout here. Audio agrees too — a Thru-routed part is level-transparent in the DLL
+  and within 1.5% here, Overdrive matches to 1.4% RMS and tracks the no-EFX baseline's per-band
+  spread — but the register diff is what found three faults that a level comparison had recorded as
+  calibration facts. **The ×4 make-up gain this bullet used to describe as calibrated was one of
+  them, and it is retracted:** the gain is in the registers, where the startup rows set the
+  wide-scale flag on the routing pair at `0x83`/`0x1F3`, so a routing byte of `0x7F` means ×3.97.
+  Nothing in the block is fitted to a render. What is still calibrated is one number *outside* it —
+  the conversion of an EFX send into this engine's reverb bus, measured as a ratio against a part
+  send through the same network rather than as a level read off a note.
 - **Drum tones with the 4-partial layout are not reversed** upstream. A melodic tone here has two
   partial slots (ts::Tone::partial_slots), and asking for more throws rather than guessing. General
   MIDI kits resolve to ordinary melodic tones, so the common path works.
@@ -1688,9 +1729,21 @@ Stated plainly, because they are not covered by the numbers above:
   to be conclusive — the patches whose filters are open enough to hear a cutoff sweep barely change
   brightness under one. LFO2's pitch depth was in this list until the random waveforms were
   implemented, which is what made a patch that could demonstrate it available at all.
-- **Some GS part parameters are recognised and dropped**, each because nothing under them is
-  modelled: assign mode (`40 1x 14`, one voice-allocation policy here) and per-key Rx note-on/off
-  in the drum setup (`40 2x 07`/`08`), whose law is not recovered.
+- **Two GS part parameters are recognised and dropped**, and for two different reasons. Assign mode
+  (`40 1x 14`) reaches a placeholder because there is one voice-allocation policy here for it to
+  select between — it is downstream of the allocator bullet above, not a separate gap. `40 1x 60` →
+  `part+0x44c` has no handler at all, and is dropped rather than half-applied because it is a byte
+  of packed fields rather than a value: its neighbours `+0x3d8` and `+0x3d9` are packed the same
+  way, and writing one of those through as a raw byte is what left every melodic part of
+  `darkness3.mid` deaf. `40 1x 26` → `part+0x446` is dropped too and is *not* a limit: the module
+  stores it as a boolean and the offset occurs exactly once in the whole binary, at that write.
+
+  Per-key Rx note-on and Rx note-off in the drum setup were in this list and are no longer.
+  They are recovered and modelled: bit 0 and bit 4 of `part+0x480`, reached either through the
+  per-parameter form (`40 2x 07`/`08`) or through the `49` bulk plane, which shares one byte between
+  them and is split back out at the boundary. There is no NRPN route — `nrpn_apply` enumerates
+  `0x19` and `0x1B` and drops them — and a revoked Rx Note On refuses the key ahead of velocity and
+  the mute groups.
 
 ## Simultaneous voices of one tone drift apart; one voice does not {#simultaneous-voices}
 
@@ -1745,6 +1798,14 @@ The same dry differencing gives, over the whole song: dry RMS ratio **0.9951**, 
 correct; this is a second, independent file with the same shape, measured the same way. It does not
 show up in that song's gate rows because the wet is a small part of its level -- mix 0.9510 -- which
 is exactly why it needs differencing to see at all.
+
+**The two figures are consistent with one defect rather than two, and that is checkable.** On
+`panwet.mid`, differenced stage by stage, the reverb return is right (0.99 peak, 0.98 RMS) and the
+chorus return is short by **2.95x**, i.e. this engine renders 0.34 of it. This row's 0.5342 is a
+*combined* wet, reverb and chorus together, so a correct reverb and a chorus at 0.34 should land
+between the two -- which 0.53 does. That is arithmetic, not a measurement: what would settle it is
+differencing this song's two sends separately, the same three-render way, and predicting 0.98 on the
+reverb leg and 0.34 on the chorus leg before looking.
 
 ## Methodology worth borrowing
 
