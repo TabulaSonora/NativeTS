@@ -375,6 +375,39 @@ TEST_CASE("the stereo EQ shelves respond and its mid bands go through the bank l
     CHECK(render(0x0C, 0x60) != render(0x0C, 0x00));
 }
 
+TEST_CASE("the Enhancer brightens rather than passing through", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x01, 0x02);
+    CHECK(efx.current().name == "Enhancer");
+    CHECK(efx.implemented());
+
+    // Verified against the module two ways that this test cannot repeat here: its coefficient file
+    // and tap program match `scdec efxdump 01 02` word for word, all 384 and 34 of them, and its
+    // impulse response is **bit-identical** to `scdec efxir 01 02` over 512 frames on both
+    // channels. What is asserted here is that the transcription is wired in and does the thing the
+    // name promises, which is what a regression would break first.
+    const std::vector<float> input = sine(8192, 0.25);
+    std::vector<float> left(input.size());
+    std::vector<float> right(input.size());
+    efx.process(input, input, left, right);
+
+    // Not a pass-through: an Enhancer that did nothing would return its input unchanged.
+    CHECK_FALSE(std::equal(input.begin(), input.end(), left.begin()));
+    CHECK(rms(std::span<const float>{left}.subspan(4096)) > 0.0);
+
+    // An impulse leaves a tail, which a bare gain would not.
+    InsertionEffect tail{rom};
+    tail.select_type(0x01, 0x02);
+    std::vector<float> impulse(512, 0.0F);
+    impulse[0] = 1.0F;
+    std::vector<float> tl(impulse.size());
+    std::vector<float> tr(impulse.size());
+    tail.process(impulse, impulse, tl, tr);
+    CHECK(rms(std::span<const float>{tl}.subspan(64)) > 0.0);
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();

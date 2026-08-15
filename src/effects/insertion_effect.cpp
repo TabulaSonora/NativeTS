@@ -1141,6 +1141,90 @@ void stereo_eq_sample(float in_left,
     out_left = c[0x176] * left + 1e-08F;
 }
 
+/// Dispatch 7 — the Enhancer.
+///
+/// The same skeleton as the stereo EQ: the shared input staging, one chain per channel, the shared
+/// output staging. Only the chain differs, and the two channels are one chain at a coefficient
+/// stride of **0x31** and a state stride of 0x40, with the tail pair 0x10 apart — checked term by
+/// term across all twenty-two coefficients each channel reads.
+///
+/// What the chain is: a one-pole into a three-tap comb, three bare gains in series, a second
+/// three-tap, and a two-stage tail that mixes the comb's output back against its own history. The
+/// `0x1D4` scratch writes are kept because the engine makes them; they are dead stores into the
+/// tape's scratch slot and cost nothing to reproduce.
+///
+/// The two channels differ in the *order* the decompiler prints the three terms of the first sum,
+/// and only there. Floating-point addition is not associative, so that is not nothing — but the
+/// terms are identical and one order has to be chosen for a shared body, exactly as `stereo_eq`
+/// chose one. The right channel's order is used.
+void enhancer_sample(float in_left,
+                     float in_right,
+                     float& out_left,
+                     float& out_right,
+                     Tape& a,
+                     const float* c) noexcept
+{
+    a.at(0x1F8) = in_right;
+    float f4 = c[0] * a.at(0x1E0) + 1e-08F;
+    float f6 = c[1] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1D4) = f6;
+    f4 = f4 * c[3] + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1F8) = c[4] * f6 + 1e-08F;
+    out_right = c[6] * f4 + 1e-08F;
+
+    const auto chain = [&a, c](int base, int tail, int coef, float input, int out_slot) noexcept {
+        a.at(0x1D4) = input;
+
+        const float f5 = c[coef + 0x02] * a.at(base + 0x04) + input * 1e-05F
+                         + input * c[coef + 0x04] + 1e-08F;
+        a.at(base + 0x08) = f5;
+        a.at(base) = f5 * 1e-05F + c[coef + 0x06] * a.at(base + 0x04) + f5 * c[coef + 0x08]
+                     + 1e-08F;
+        a.at(base + 0x10) = a.at(base + 0x0C) * c[coef + 0x0D] + f5 * c[coef + 0x0C]
+                            + a.at(base + 0x14) * c[coef + 0x0E] + 1e-08F;
+
+        // Three gains in series, each landing in the scratch slot on the way past.
+        float g = c[coef + 0x11] * a.at(base + 0x10) + 1e-08F;
+        a.at(0x1D4) = g;
+        g = c[coef + 0x14] * g + 1e-08F;
+        a.at(0x1D4) = g;
+        g = c[coef + 0x17] * g + 1e-08F;
+        a.at(0x1D4) = g;
+        a.at(base + 0x18) = c[coef + 0x1A] * g + 1e-08F;
+
+        // Read before the tail is rewritten: this stage mixes against the *previous* sample's
+        // output, which is what makes it a filter rather than a feed-forward sum.
+        const float held = a.at(tail + 0x08);
+
+        a.at(base + 0x20) = c[coef + 0x1B] * a.at(base + 0x24) + c[coef + 0x1C] * a.at(base + 0x1C)
+                            + c[coef + 0x1D] * a.at(base + 0x18) + 1e-08F;
+        a.at(tail) = c[coef + 0x20] * a.at(base + 0x20) + c[coef + 0x1F] * f5 + 1e-08F;
+
+        float h = (c[coef + 0x22] + 1e-05F) * a.at(tail + 0x04) + a.at(tail) * 1e-05F
+                  + a.at(tail) * c[coef + 0x24] + held * 1e-05F + held * c[coef + 0x26] + 1e-08F;
+        a.at(tail + 0x04) = h;
+        h = (c[coef + 0x28] + 1e-05F) * held + h * 1e-05F + h * c[coef + 0x2A]
+            + a.at(tail + 0x0C) * 1e-05F + a.at(tail + 0x0C) * c[coef + 0x2C] + 1e-08F;
+        a.at(tail + 0x08) = h;
+        a.at(out_slot) = h;
+    };
+
+    chain(0x40, 0x180, 0x0A, a.at(0x1FC) * c[0x0A] + 1e-08F, 0x1E4);
+    chain(0x80, 0x190, 0x3B, c[0x3B] * a.at(0x1F8) + 1e-08F, 0x1DC);
+
+    a.at(0x1F8) = in_left;
+    float left = c[0x170] * a.at(0x1E4) + 1e-08F;
+    const float left_in = c[0x171] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1D4) = left_in;
+    left = c[0x173] * left + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1F8) = c[0x174] * left_in + 1e-08F;
+    out_left = c[0x176] * left + 1e-08F;
+}
+
 /// Which transcription serves a dispatch index.
 enum class Processor {
     thru, ///< dispatch 0, and dispatch 1's cleared "no effect" state
@@ -1148,6 +1232,7 @@ enum class Processor {
     od_od2, ///< dispatch 42 — two overdrive chains in parallel
     rotary, ///< dispatch 9 — the rotating speaker
     stereo_eq, ///< dispatch 2 — the four-band stereo EQ
+    enhancer, ///< dispatch 7 — the Enhancer
     efx_reverb, ///< dispatch 0x19, with the inverted output routing
     passthrough, ///< not transcribed yet: signal passes unchanged
 };
@@ -1169,6 +1254,8 @@ enum class Processor {
         return Processor::rotary;
     case 2:
         return Processor::stereo_eq;
+    case 7:
+        return Processor::enhancer;
     default:
         return Processor::passthrough;
     }
@@ -2356,6 +2443,13 @@ void InsertionEffect::process(std::span<const float> in_left,
                              right,
                              impl.tape_a,
                              coef);
+        } else if (impl.processor == Processor::enhancer) {
+            enhancer_sample(in_left[n] + in_left[n],
+                            in_right[n] + in_right[n],
+                            left,
+                            right,
+                            impl.tape_a,
+                            coef);
         } else if (impl.processor == Processor::rotary) {
             rotary_sample(in_left[n] + in_left[n],
                           in_right[n] + in_right[n],

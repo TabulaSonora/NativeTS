@@ -241,10 +241,10 @@ The three send effects are implemented. The insertion EFX block — the spec's s
 to this engine — is implemented as ts::InsertionEffect: the block machinery (register file,
 per-type preset fill, the two decrementing delay lines, the `40 03` SysEx block and the `40 4x 22`
 part routing) is transcribed in full and its directory, presets and parameter curves are decoded
-from the user's DLL at runtime, while **seven of the 65 algorithm processors** exist — Thru,
-Equalizer, Overdrive, Distortion, Rotary, Reverb and OD / OD2, each matching the live block's own
-coefficient file and tap program word for word under `scdec efxdump`. The other 58 pass the signal
-through unchanged, with routing and send levels still honoured, and report themselves via
+from the user's DLL at runtime, while **eight of the 65 algorithm processors** exist — Thru,
+Equalizer, Enhancer, Overdrive, Distortion, Rotary, Reverb and OD / OD2, each matching the live
+block's own coefficient file and tap program word for word under `scdec efxdump`. The other 57 pass
+the signal through unchanged, with routing and send levels still honoured, and report themselves via
 `InsertionEffect::implemented`.
 
 ### 6 · Output
