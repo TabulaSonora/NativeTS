@@ -540,6 +540,35 @@ TEST_CASE("every transcribed type's level reaches its registers", "[efx][sccore]
     CHECK(transcribed >= 10);
 }
 
+TEST_CASE("the Enhancer's parameters reach its registers", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+
+    // `fx_param_apply_47340` transcribed. Swept against the module with `scdec efxdump 01 02
+    // <addr> <value>` over **every one of the twenty parameter addresses at three values each** --
+    // sixty comparisons, 0 of 384 registers differing in each.
+    //
+    // What is asserted here is that the parameters this type actually spends move something, which
+    // is the part a stub would fail. The addresses are the ones the handler reads: `03` sens, `04`
+    // mix, `13` the low band, `14` the high band, `16` the level.
+    const auto registers_for = [&rom](int address, int value) {
+        InsertionEffect efx{rom};
+        efx.select_type(0x01, 0x02);
+        efx.set_parameter(address, value);
+        const auto coef = efx.coefficients();
+        return std::vector<float>(coef.begin(), coef.end());
+    };
+
+    for (const int address : {0x03, 0x04, 0x13, 0x14, 0x16}) {
+        INFO("parameter address " << std::hex << address);
+        CHECK(registers_for(address, 0x10) != registers_for(address, 0x70));
+    }
+
+    // And the two bands land on their own registers rather than sharing one: a handler that wrote
+    // the same triple twice would pass the check above.
+    CHECK(registers_for(0x13, 0x20) != registers_for(0x14, 0x20));
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();

@@ -1631,6 +1631,7 @@ struct InsertionEffect::Impl {
     void apply_od_od2();
     void apply_rotary(bool on_select);
     void apply_stereo_eq();
+    void apply_enhancer();
     void bank_load(const std::array<std::uint16_t, bank_register_count>& registers_,
                    std::uint8_t frequency,
                    std::uint8_t q,
@@ -1910,6 +1911,8 @@ void InsertionEffect::Impl::apply(bool on_select)
         apply_stereo_eq();
         break;
     case Processor::enhancer:
+        apply_enhancer();
+        break;
     case Processor::space_d:
     case Processor::hexa_chorus:
         // Only the level, and that is measured rather than assumed: with the preset fill in place
@@ -1917,17 +1920,19 @@ void InsertionEffect::Impl::apply(bool on_select)
         // the type's own handler writes from its level byte through the shared curve. Hexa Chorus
         // defaults to `0x70`, and `level_curve[112]` is 107 — exactly what the live block reads.
         //
-        // **The Enhancer was left out of this and the register diff could not see it**, because its
-        // default level is `0x7F` and `level_curve[127]` is 127 — the same value the untranscribed
-        // fallback hard-codes. It agreed at the default and nowhere else: at level `0x40` the module
-        // programs 53/128 where this wrote 127/128. A comparison taken only at a type's defaults
+        // **The Enhancer was left out of this once and the register diff could not see it**,
+        // because its default level is `0x7F` and `level_curve[127]` is 127 — the same value the
+        // untranscribed fallback hard-codes. It agreed at the default and nowhere else. It has its
+        // own handler now; the lesson stays, because a comparison taken only at a type's defaults
         // cannot tell a handler that computes the right answer from one that is a constant.
         //
-        // The other twenty GS parameters are **not** mapped: this type's `40 03 03`–`16` writes do
-        // not reach its registers, so its rate, depth, pre-delay and balance stay at the preset.
-        // A file that selects Hexa Chorus and leaves it alone is right; one that adjusts it gets
-        // the default voicing. Transcribing `fx_apply_hexa_chorus` @ `0x18004B980` is what closes
-        // that, and the register diff is how it would be checked.
+        // For these two the other twenty GS parameters are still **not** mapped: their
+        // `40 03 03`–`16` writes do not reach the registers, so rate, depth, pre-delay and balance
+        // stay at the preset. A file that selects one and leaves it alone is right; one that
+        // adjusts it gets the default voicing, and the corpus says most of them adjust it — 9 of
+        // the 14 files selecting Hexa Chorus and 7 of the 10 selecting Space D write parameters.
+        // `fx_apply_hexa_chorus` @ `0x18004B980` and Space D's handler @ `0x1800580C0` are what
+        // close that, and a parameter sweep against `scdec efxdump` is how they are checked.
         registers.write_slew(0x80, level_curve[params[0x13]]);
         registers.write_slew(0x1F0, level_curve[params[0x13]]);
         apply_common_tail();
@@ -1970,6 +1975,65 @@ void InsertionEffect::Impl::apply_common_tail()
 }
 
 /// `fx_param_apply_53a10`, the Overdrive/Distortion handler.
+/// `fx_param_apply_47340` @ 0x180047340 — the Enhancer's twenty parameters.
+///
+/// It shares the Overdrive's curves and spends them on different registers: the same low and high
+/// gain triples, the same drive curve, the same level curve. Two bands, a sens and a mix, each
+/// written to a pair of registers because the algorithm runs a chain per channel.
+///
+/// The two always-refreshed parameters carry the block's control offsets in the engine — the
+/// handler adds a latched byte to each before clamping to 0–127. Control sources are not modulated
+/// here, so those offsets are zero, exactly as in `apply_overdrive`.
+void InsertionEffect::Impl::apply_enhancer()
+{
+    apply_common_tail();
+
+    // The low band, one triple per channel.
+    if (changed(0x10)) {
+        const std::size_t v = params[0x10];
+        registers.write16(0xAD, low_gain_f[v]);
+        registers.write16(0xAB, low_gain_d[v]);
+        registers.write16(0xAF, low_gain_h[v]);
+        registers.write16(0xDE, low_gain_f[v]);
+        registers.write16(0xDC, low_gain_d[v]);
+        registers.write16(0xE0, low_gain_h[v]);
+        shadow[0x10] = params[0x10];
+    }
+
+    // The high band, bracketed by muting and restoring the level the way the Overdrive's is.
+    if (changed(0x11)) {
+        registers.write_slew(0x80, 0);
+        registers.write_slew(0x1F0, 0);
+        const std::size_t v = params[0x11];
+        registers.write16(0xB3, high_gain_f[v]);
+        registers.write16(0xB1, high_gain_d[v]);
+        registers.write16(0xB5, high_gain_h[v]);
+        registers.write16(0xE4, high_gain_f[v]);
+        registers.write16(0xE2, high_gain_d[v]);
+        registers.write16(0xE6, high_gain_h[v]);
+        shadow[0x11] = params[0x11];
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+    }
+
+    if (changed(0x13)) {
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+        shadow[0x13] = params[0x13];
+    }
+
+    // Sens and mix, always refreshed, because this is where the control offsets ride in.
+    const auto sens = static_cast<std::size_t>(std::clamp<int>(params[0], 0, 0x7F));
+    registers.write_slew(0x9B, drive_a[sens]);
+    registers.write_slew(0xCC, drive_a[sens]);
+    shadow[0] = params[0];
+
+    const auto mix = static_cast<std::size_t>(std::clamp<int>(params[1], 0, 0x7F));
+    registers.write_slew(0xAA, level_curve[mix]);
+    registers.write_slew(0xDB, level_curve[mix]);
+    shadow[1] = params[1];
+}
+
 void InsertionEffect::Impl::apply_overdrive()
 {
     apply_common_tail();
