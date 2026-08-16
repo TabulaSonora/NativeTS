@@ -485,6 +485,61 @@ TEST_CASE("Space D reads both halves of the line", "[efx][sccore]")
     CHECK(difference > 0.0);
 }
 
+TEST_CASE("GTR Multi 2 chains four effects and all twenty parameters land", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+    InsertionEffect efx{rom};
+    efx.select_type(0x04, 0x01);
+    CHECK(efx.current().name == "GTR Multi 2");
+    CHECK(efx.implemented());
+
+    // The first multi-effect type, and the first algorithm whose transcription needed the state
+    // window rather than the output to finish. Four term groupings inside it are not the
+    // left-to-right the decompiler prints -- MSVC computes two products that share a shape
+    // together, and adds the third afterwards -- and each is worth one or two ULP. `scdec efxir`
+    // said only that the output was wrong by 1e-07; `scdec efxir`'s state dump said which slot,
+    // and the slot said which expression.
+    //
+    // Verified: coefficient file and tap program match `scdec efxdump 04 01`, the impulse response
+    // is **bit-identical** to `scdec efxir 04 01` over 32,768 frames on both channels, and so is a
+    // 440 Hz sine over the same length.
+    std::vector<float> impulse(4096, 0.0F);
+    impulse[0] = 1.0F;
+    std::vector<float> left(impulse.size());
+    std::vector<float> right(impulse.size());
+    efx.process(impulse, impulse, left, right);
+
+    // A chain ending in a modulated line: the impulse is still moving long after it arrived.
+    CHECK(rms(std::span<const float>{left}.subspan(512)) > 0.0);
+
+    // Two chorus voices off one accumulator, so the channels are not the same signal.
+    double difference = 0.0;
+    for (std::size_t n = 512; n < left.size(); ++n) {
+        difference += std::abs(static_cast<double>(left[n]) - static_cast<double>(right[n]));
+    }
+    CHECK(difference > 0.0);
+
+    // Swept against the module with `scdec efxdump 04 01 <addr> <value>` at 0x00, 0x01, 0x02, 0x05,
+    // 0x40 and 0x7F on all twenty addresses: **120 of 120 exact**, coefficients and tap program.
+    //
+    // Here every address only has to move something, which is the check that catches a parameter
+    // wired to no register at all. `0x11` and `0x07` are the two that need `0x01` rather than
+    // `0x40`: both are latched to 0/1 and refuse anything wider, writing the last accepted byte
+    // back into the parameter block instead of clamping.
+    const auto registers_for = [&rom](int address, int value) {
+        InsertionEffect one{rom};
+        one.select_type(0x04, 0x01);
+        one.set_parameter(address, value);
+        const auto coef = one.coefficients();
+        return std::vector<float>(coef.begin(), coef.end());
+    };
+    for (int address = 0x03; address <= 0x16; ++address) {
+        const int high = (address == 0x07 || address == 0x11) ? 0x01 : 0x40;
+        INFO("parameter address " << std::hex << address);
+        CHECK(registers_for(address, 0x00) != registers_for(address, high));
+    }
+}
+
 TEST_CASE("every transcribed type's level reaches its registers", "[efx][sccore]")
 {
     // **The check the per-type diffs could not make.** A register comparison taken at a type's

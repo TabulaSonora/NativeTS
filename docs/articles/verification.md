@@ -1685,24 +1685,25 @@ Stated plainly, because they are not covered by the numbers above:
   replaced without touching any DSP. The test that covers it says so in as many words.
 - **The LFO has no hardware trace.** It is verified against the reference, which the spec project
   separately reports as bit-exact against the live engine. That is one link removed from the DLL.
-- **Insertion EFX exists as a block, and ten of its sixty-five algorithms do.** ts::InsertionEffect
+- **Insertion EFX exists as a block, and eleven of its sixty-five algorithms do.** ts::InsertionEffect
   transcribes the block machinery in full — the register file, the per-type preset fill, the two
   decrementing delay lines, the `40 03` selection and parameter SysEx, and the `40 4x 22` part
   routing — and decodes the directory, presets, defaults and parameter curves from the user's own
   DLL, `tools/dump_efx_table.py` being where that reading was worked out. The transcribed types are
   **Thru** (`00 00`), **Equalizer** (`01 00`), **Enhancer** (`01 02`), **Overdrive** (`01 10`),
   **Distortion** (`01 11`), **Rotary** (`01 22`), **Hexa Chorus** (`01 40`), **Space D**
-  (`01 43`), **Reverb** (`01 55`) and **OD / OD2** (`11 03`); Overdrive and Distortion
+  (`01 43`), **Reverb** (`01 55`), **OD / OD2** (`11 03`) and **GTR Multi 2** (`04 01`); Overdrive
+  and Distortion
   are one dataflow that differs only in its presets, which is how the decompiled functions differ.
-  The other **55 pass the signal through** unchanged, with routing and send levels still honoured,
+  The other **54 pass the signal through** unchanged, with routing and send levels still honoured,
   and report it via ts::InsertionEffect::implemented — so a host can say which effect it is *not*
   rendering rather than rendering it wrong. That flag is derived from the processor the type
   resolves to rather than kept as a list, so `tools/scan_midi_efx.py` re-groups the corpus by itself
   when a new algorithm lands.
 
   **The gate is the register file, not the audio.** `scdec efxdump` reads the live block's
-  coefficient file, tap program and register mirror out of the running DLL, and all seven types
-  match it word for word; ts::InsertionEffect::coefficients and ts::InsertionEffect::tap_program
+  coefficient file, tap program and register mirror out of the running DLL, and every transcribed
+  type matches it word for word; ts::InsertionEffect::coefficients and ts::InsertionEffect::tap_program
   expose the same layout here. Audio agrees too — a Thru-routed part is level-transparent in the DLL
   and within 1.5% here, Overdrive matches to 1.4% RMS and tracks the no-EFX baseline's per-band
   spread — but the register diff is what found three faults that a level comparison had recorded as

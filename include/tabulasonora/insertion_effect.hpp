@@ -45,9 +45,10 @@ struct EfxRecord {
 /// lines whose base decrements one sample per sample, so an algorithm is a program of taps at
 /// fixed offsets (`fx_delayline_wrap` @ `0x180089830`).
 ///
-/// The per-algorithm processors are transcribed individually, and nine of the 65 exist: Thru,
+/// The per-algorithm processors are transcribed individually, and eleven of the 65 exist: Thru,
 /// Equalizer, Enhancer, Overdrive, Distortion (one dataflow with Overdrive — the decompiled
-/// functions differ only in presets), Rotary, Hexa Chorus, Space D, Reverb and OD / OD2. A type whose processor has not been transcribed
+/// functions differ only in presets), Rotary, Hexa Chorus, Space D, Reverb, OD / OD2 and
+/// GTR Multi 2. A type whose processor has not been transcribed
 /// yet passes the signal through unchanged and reports itself via `implemented()`, so a host can
 /// say which effect it is not rendering rather than rendering it wrong. Ask `implemented()` rather
 /// than counting on this list: it is derived from the processor the type resolves to, so it is
@@ -114,6 +115,13 @@ public:
     /// register a wrong curve, width kind or preset slice landed in.
     [[nodiscard]] std::span<const float> coefficients() const;
     [[nodiscard]] std::span<const std::int32_t> tap_program() const;
+
+    /// The state window as an algorithm addresses it: 0x80 floats from the delay line's current
+    /// base, so entry `n` is the slot the transcriptions write as `a(4 * n)`. `scdec efxir` writes
+    /// the same window beside its impulse response, and diffing the two names the exact slot a
+    /// wrong tap or a misordered store landed in — which an output comparison can only tell you
+    /// exists.
+    [[nodiscard]] std::span<const float> state_window() const;
 
 private:
     struct Impl;

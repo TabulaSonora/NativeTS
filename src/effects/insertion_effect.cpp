@@ -148,6 +148,22 @@ constexpr std::int64_t rotary_spread_offset = file_offset(0x18198F040); // u8  -
 /// The chorus depth curve, u16. Hexa Chorus takes it >> 4, Space D >> 6.
 constexpr std::int64_t chorus_depth_offset = file_offset(0x18198B6E0);
 
+// GTR Multi 2 (`fx_param_apply_49e40`). A multi-effect: compressor, overdrive, amp simulator and
+// chorus, twenty parameters across the four. It reuses the Overdrive's curves, the OD / OD2
+// nineteen-register bank and both bank loaders, and adds four curves of its own.
+constexpr std::int64_t gm2_p0_curve_offset = file_offset(0x18198C3E0);  // u16 -> 0xB6
+constexpr std::int64_t gm2_p1_curve_offset = file_offset(0x18198C200);  // u16 -> 0xA6, 0xCC
+constexpr std::int64_t gm2_p17_curve_offset = file_offset(0x18198BCE0); // u8  -> 0x180
+constexpr std::int64_t gm2_p15_curve_offset = file_offset(0x18198C060); // u16 -> 0x18D
+constexpr std::int64_t gm2_amp_bank_offset = file_offset(0x1818969E0);
+constexpr std::int64_t gm2_eq_bank_offset = file_offset(0x181896A38);
+/// Where its OD type pours the shared nineteen-value bank: raw `fx_reg_write` indices, in the same
+/// order as `od2_bank_tables`, so only the destinations differ from the OD / OD2 chains'.
+constexpr std::array<int, 19> gm2_bank_registers{
+    0x7D, 0x80, 0x66, 0x67, 0x68, 0x6B, 0x6A, 0x69, 0x6E, 0x6D,
+    0x6C, 0x9D, 0x9C, 0x9B, 0xA0, 0x9F, 0x9E, 0xA1, 0xA2,
+};
+
 /// Space D's third parameter, u16 straight to register 0xC5.
 constexpr std::int64_t space_d_p3_offset = file_offset(0x18198EF40);
 
@@ -368,6 +384,14 @@ public:
     }
 
     void step() noexcept { base_ = (base_ - 1) & mask_; }
+
+    /// The window an algorithm can address, from the current base — `out[n]` is `at(4 * n)`.
+    void snapshot(std::span<float> out) noexcept
+    {
+        for (std::size_t n = 0; n < out.size(); ++n) {
+            out[n] = ring_[static_cast<std::size_t>((base_ + static_cast<int>(n)) & mask_)];
+        }
+    }
 
     void clear() noexcept { std::fill(ring_.begin(), ring_.end(), anti_denormal); }
 
@@ -1475,6 +1499,264 @@ void space_d_sample(float in_left,
     out_left = c[0x176] * left + 1e-08F;
 }
 
+/// `fx_algo_guitar_multi_2` @ 0x1800205C0 — dispatch 58, GTR Multi 2.
+///
+/// The first of the multi-effect types, and the first algorithm here that is a *chain* rather than
+/// one effect: compressor, overdrive with the same clipper Overdrive uses, an amp-simulator filter
+/// bank, and a two-voice chorus into the output. Nothing repeats, so this is straight-line — the
+/// shared bodies that made the Hexa Chorus short do not exist here.
+///
+/// Two details worth naming, because both are invisible in a defaults-only comparison:
+///
+/// The compressor's envelope branch (`f4 < 0`) takes its own path with its own constants, and the
+/// gain it produces is fed by `b.tap(0x3020)` — a delay tap read *before* the line is written this
+/// sample. That is the sidechain, and it is why the compressor's response is one buffer-length
+/// behind its input rather than instantaneous.
+///
+/// The engine's `DAT_181a6f91c` scratch is a thread-local global the function writes and reads
+/// several times over, and separately what `dsp_wavetable_lookup` returns its fraction in. It is a
+/// local here because every read in the function is preceded by a write in the function — checked,
+/// not assumed.
+void guitar_multi_2_sample(float in_left,
+                           float in_right,
+                           float& out_left,
+                           float& out_right,
+                           Tape& a,
+                           Tape& b,
+                           const float* c) noexcept
+{
+    const auto clamp_unit = [](float x) noexcept {
+        const float v = x + 1e-08F;
+        return v > 1.0F ? 1.0F : (v < -1.0F ? -1.0F : v);
+    };
+
+    a.at(0x1F8) = in_right;
+    float f4 = c[0] * a.at(0x1E0) + 1e-08F;
+    float f6 = c[1] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1D4) = f6;
+    f4 = c[3] * f4 + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x1F8) = f6 * c[4] + 1e-08F;
+    out_right = c[6] * f4 + 1e-08F;
+
+    // ---- compressor ---------------------------------------------------------------------------
+    // Both inputs summed into 0x1FC, a gain, a one-pole, and the result into the sidechain line.
+    float f5 = c[0x0A] * a.at(0x1FC) + c[0x0B] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1FC) = f5;
+    f4 = c[0x0E] * f5 + 1e-08F;
+    a.at(0x1D4) = f4;
+    f6 = a.at(0x1C) * c[0x10] + f4 * 1e-05F + f4 * c[0x12] + 1e-08F;
+    a.at(0x54) = f6;
+    a.at(0x1E8) = b.tap(0x3020);
+    a.at(0x18) = f6 * 1e-05F + a.at(0x1C) * c[0x14] + c[0x16] * f6 + 1e-08F;
+    b.tap(0x3000) = f6 * c[0x17] + 1e-08F;
+
+    // The detector: rectify, smooth, and branch on the sign of the smoothed value.
+    float t = (c[0x1B] * a.at(0x4C) + 1.001e-05F) * a.at(0x54) + 1e-08F;
+    a.at(0x1D4) = t;
+    t = c[0x23] * t;
+    if (t <= 0.0F) {
+        t = -t;
+    }
+    a.at(0x1D4) = t + 1e-08F;
+    f5 = (c[0x27] + 1e-05F) * (t + 1e-08F) + 1e-08F;
+    a.at(0x1D4) = f5;
+    f4 = c[0x2A] * f5 + 5e-06F + c[0x2C] * 0.5F;
+    f5 = f4 + 1e-08F;
+    a.at(0x1D4) = f5;
+    float f7 = 0.0F;
+    if (f4 < 0.0F) {
+        t = c[0x35] * a.at(0x4C);
+        if (t <= 0.0F) {
+            t = -t;
+        }
+        f7 = c[0x37] * 0.00048828F + (t + 4.8828e-09F);
+    } else {
+        f7 = (c[0x2F] * f5 + c[0x2E] * 0.5F + 1.001e-05F) * a.at(0x4C);
+    }
+    a.at(0x48) = f7 + 1e-08F;
+
+    // `g` stands in for the engine's `DAT_181a6f91c` scratch.
+    float g = c[0x43] * a.at(0x50) + c[0x42] * a.at(0x48) + 1e-08F;
+    a.at(0x4C) = g;
+
+    // The gain applied, against the sidechain tap read above.
+    f5 = a.at(0x1E8) * 4.0F * g + a.at(0x1E8) * 1e-05F + 1e-08F;
+    a.at(0x1D4) = f5;
+    a.at(0x40) = (c[0x4D] + 1e-05F) * f5 + 1e-08F;
+    f7 = c[0x50] * a.at(0x40) + c[0x4F] * a.at(0x44) + 1e-08F;
+    a.at(0x1D4) = f7;
+    f5 = c[0x53] * f7 + 1e-08F;
+    a.at(0x1D4) = f5;
+    f4 = c[0x56] * f5 + 1e-08F;
+    a.at(0x1D4) = f4;
+    f4 = c[0x5A] * f4 + c[0x59] * a.at(0x1FC) + 1e-08F;
+    a.at(0x1D4) = f4;
+    f4 = a.at(0x24) * c[0x5C] + f4 * 1e-05F + f4 * c[0x5E] + 1e-08F;
+    a.at(0x104) = f4;
+    a.at(0x20) = a.at(0x24) * c[0x60] + f4 * 1e-05F + f4 * c[0x62] + 1e-08F;
+
+    // ---- overdrive ----------------------------------------------------------------------------
+    // A three-pole into the gain ladder, then the same clip-and-knee shape Overdrive clips with.
+    float f8 = f4 * c[0x66] + c[0x67] * a.at(0x108) + a.at(0x10C) * c[0x68] + 1e-08F;
+    a.at(0x108) = f8;
+    f7 = c[0x6B] * f8 + (a.at(0x110) * c[0x69] + a.at(0x10C) * c[0x6A]) + 1e-08F;
+    a.at(0x10C) = f7;
+    f7 = c[0x6E] * f7 + (c[0x6C] * a.at(0x114) + a.at(0x110) * c[0x6D]) + 1e-08F;
+    a.at(0x110) = f7;
+    for (const int k : {0x71, 0x74, 0x77, 0x7A, 0x7D}) {
+        f7 = c[k] * f7 + 1e-08F;
+        a.at(0x1D4) = f7;
+    }
+    a.at(0x134) = clamp_unit(c[0x80] * f7);
+    t = c[0x83] * a.at(0x134);
+    if (t <= 0.0F) {
+        t = -t;
+    }
+    f7 = c[0x84] * 0.5F + t;
+    a.at(0x1D4) = f7 + 1e-08F;
+    if (f7 < 0.0F) {
+        a.at(0x1D4) = c[0x8A] * 1.52588e-05F + 1e-08F;
+    }
+    f5 = c[0x8E] * a.at(0x1D4) + c[0x8F] * 0.5F + 1e-08F;
+    a.at(0x1D4) = f5;
+    g = c[0x92] * f5 + c[0x91] * 0.5F + 1e-08F;
+    f4 = (a.at(0x134) * 1e-05F - g * a.at(0x134)) + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x118) = c[0x9A] * f4 + 1e-08F;
+    f7 = a.at(0x120) * c[0x9B] + c[0x9C] * a.at(0x11C) + c[0x9D] * a.at(0x118) + 1e-08F;
+    a.at(0x11C) = f7;
+    f4 = c[0x9E] * a.at(0x124) + c[0x9F] * a.at(0x120) + c[0xA0] * f7 + c[0xA1] * a.at(0x128)
+         + c[0xA2] * a.at(0x12C) + 1e-08F;
+    a.at(0x124) = f4;
+
+    // ---- amp simulator ------------------------------------------------------------------------
+    // The cabinet bank: two chains that cross-feed, the second summing four of its own history
+    // slots at 1e-05 apiece the way the OD / OD2 bank does.
+    const float held_e8 = a.at(0xE8);
+    a.at(0x58) = c[0xA5] * f4 + 1e-08F;
+    f4 = a.at(0x58);
+    float f9 = (c[0xA7] + 1e-05F) * a.at(0x5C) + f4 * 1e-05F + f4 * c[0xA9] + a.at(0x60) * 1e-05F
+               + a.at(0x60) * c[0xAB] + 1e-08F;
+    a.at(0x5C) = f9;
+    f7 = a.at(0xF8);
+    f9 = c[0xAF] * f9 + c[0xB0] * held_e8 + 1e-08F;
+    a.at(0xEC) = (c[0xAD] + 1e-05F) * held_e8 + c[0xAE] * a.at(0xF0) + 1e-08F;
+    a.at(0x1D4) = f9;
+    a.at(0x64) = c[0xB3] * f9 + c[0xB2] * a.at(0xEC) + 1e-08F;
+    f9 = a.at(0x64);
+    a.at(0xE4) = f9 * 1e-05F + held_e8 * c[0xB5] + f9 * c[0xB7] + 1e-08F;
+    const float f11 = c[0xC5] * a.at(0x100) + (c[0xC4] + 1e-05F) * f7 + 1e-08F;
+    f9 = (c[0xB9] + 1e-05F) * f9 + c[0xBA] * a.at(0xE4) + a.at(0x68) * 1e-05F + a.at(0x68) * c[0xBC]
+         + a.at(0x6C) * 1e-05F + a.at(0x6C) * c[0xBE] + a.at(0x70) * 1e-05F + a.at(0x70) * c[0xC0]
+         + a.at(0x74) * 1e-05F + a.at(0x74) * c[0xC2] + 1e-08F;
+    a.at(0x6C) = f9;
+    a.at(0xFC) = f11;
+    f6 = f7 * c[0xC7] + c[0xC6] * f9 + 1e-08F;
+    a.at(0x1D4) = f6;
+    f8 = c[0xCA] * f6 + c[0xC9] * a.at(0xFC) + 1e-08F;
+    a.at(0x1D4) = f8;
+    a.at(0x74) = f11;
+    a.at(0xF4) = f8 * 1e-05F + f7 * c[0xCC] + f8 * c[0xCE] + 1e-08F;
+    f6 = (c[0xD3] + 1e-05F) * f11 + a.at(0xE0) * 1e-05F + a.at(0xE0) * c[0xD5] + 1e-08F;
+    a.at(0x1D4) = f6;
+    f4 = c[0xD8] * f6 + f4 * c[0xD7] + 1e-08F;
+    a.at(0x1D4) = f4;
+    f7 = a.at(0x140);
+    f4 = c[0xDB] * f4 + c[0xDA] * a.at(0x104) + 1e-08F;
+    a.at(0x1D4) = f4;
+    a.at(0x138) = c[0xDE] * f4 + 1e-08F;
+    f6 = a.at(0x144);
+    f9 = (c[0xE0] + 1e-05F) * a.at(0x13C) + a.at(0x138) * 1e-05F + a.at(0x138) * c[0xE2]
+         + f7 * 1e-05F + f7 * c[0xE4] + 1e-08F;
+    a.at(0x13C) = f9;
+    f8 = a.at(0x148);
+    const float f10 = (c[0xE6] + 1e-05F) * f7 + f9 * 1e-05F + f9 * c[0xE8] + f6 * 1e-05F
+                      + f6 * c[0xEA] + 1e-08F;
+    a.at(0x140) = f10;
+    a.at(0x14C) = c[0xEF] * a.at(0x150) + f8 * c[0xEE] + 1e-08F;
+
+    // `(c[0xF1] + c[0xF0])` is one term the decompiler prints as a sum of two coefficients rather
+    // than as two products, so it is kept that way — the two are not the same in float.
+    f5 = (c[0xF1] + c[0xF0]) * f8 + (f10 * c[0xED] + f6 * c[0xEC]) + c[0xF2] * a.at(0x14C)
+         + 1e-08F;
+    a.at(0x1D4) = f5;
+    f5 = c[0xF5] * f5 + f8 * c[0xF4] + 1e-08F;
+    a.at(0x144) = f5;
+    f7 = c[0xF8] * f5 + f10 * c[0xF7] + 1e-08F;
+    a.at(0x1D4) = f7;
+
+    // ---- chorus and output --------------------------------------------------------------------
+    f8 = c[0xFD] * a.at(0x164) + 1e-08F;
+    f6 = c[0xFB] * f7 + 1e-08F;
+    a.at(0x1FC) = f6;
+    a.at(0x1F8) = f6;
+    a.at(0x1D4) = f8;
+    f5 = c[0x100] * f8 + (c[0xFF] * f6 + c[0xFE] * f6) + 1e-08F;
+    a.at(0x1D4) = f5;
+    f8 = f5 * 1e-05F + a.at(0x2C) * c[0x102] + f5 * c[0x104] + 1e-08F;
+    a.at(0x1D4) = f8;
+    a.at(0x28) = f8 * 1e-05F + a.at(0x2C) * c[0x106] + f8 * c[0x108] + 1e-08F;
+    b.tap(0) = f8 * c[0x109] + 1e-08F;
+
+    // The chorus LFO, then two voices off it. Each squares its own rectified phase before the
+    // table read, which the single-effect chorus types do not do.
+    a.at(0x158) = phase_wrap(c[0x10C] * a.at(0x15C) + 4.8828e-09F + c[0x10E] * 0.00048828F);
+
+    t = c[0x111] * a.at(0x158);
+    if (t <= 0.0F) {
+        t = -t;
+    }
+    f4 = t + 1e-08F;
+    g = f4;
+    a.at(0x1D4) = f4;
+    a.at(0x1D8) = f4 * g + f4 * 1e-05F + 1e-08F;
+    f7 = c[0x119] * a.at(0x1D8) + c[0x118] * f4 + 1e-08F;
+    a.at(0x1D4) = f7;
+    TableTap tap = wavetable_tap(phase_wrap(f7 * 1e-05F + c[0x11B] * 0.015625F + f7 * c[0x11D]), b);
+    a.at(0x1EC) = tap.next;
+    g = tap.fraction;
+    f5 = g * a.at(0x1EC);
+    a.at(0x1E8) = tap.sample;
+    f8 = c[0x136] * 0.5F + 5.0099998e-06F;
+    a.at(0x160) = a.at(0x1E8) * c[0x133] + f5 - g * a.at(0x1E8) + 1e-08F;
+    a.at(0x1D4) = f8;
+    a.at(0x1E4) = c[0x138] * a.at(0x160) + c[0x137] * a.at(0x1FC) + 1e-08F;
+
+    // The second voice offsets from the first's phase, not from the accumulator.
+    a.at(0x1D4) = phase_wrap(c[0x13A] * f8 + c[0x139] * a.at(0x158));
+    t = c[0x13D] * a.at(0x1D4);
+    if (t <= 0.0F) {
+        t = -t;
+    }
+    f6 = t + 1e-08F;
+    g = f6;
+    a.at(0x1D4) = f6;
+    f4 = f6 * g + f6 * 1e-05F + 1e-08F;
+    a.at(0x1D8) = f4;
+    f7 = c[0x145] * f4 + c[0x144] * f6 + 1e-08F;
+    a.at(0x1D4) = f7;
+    tap = wavetable_tap(phase_wrap(f7 * 1e-05F + c[0x147] * 0.015625F + f7 * c[0x149]), b);
+    a.at(0x1EC) = tap.next;
+    g = tap.fraction;
+    f5 = g * a.at(0x1EC);
+    a.at(0x1E8) = tap.sample;
+    f5 = a.at(0x1E8) * c[0x15F] + f5 - g * a.at(0x1E8) + 1e-08F;
+    a.at(0x1D4) = f5;
+    a.at(0x1DC) = c[0x163] * f5 + c[0x162] * a.at(0x1F8) + 1e-08F;
+
+    a.at(0x1F8) = in_left;
+    float left = c[0x170] * a.at(0x1E4) + 1e-08F;
+    const float left_in = c[0x171] * a.at(0x1F8) + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1D4) = left_in;
+    left = c[0x173] * left + 1e-08F;
+    a.at(0x1D4) = left;
+    a.at(0x1F8) = c[0x174] * left_in + 1e-08F;
+    out_left = c[0x176] * left + 1e-08F;
+}
+
 /// Which transcription serves a dispatch index.
 enum class Processor {
     thru, ///< dispatch 0, and dispatch 1's cleared "no effect" state
@@ -1485,6 +1767,7 @@ enum class Processor {
     enhancer, ///< dispatch 7 — the Enhancer
     hexa_chorus, ///< dispatch 12 — six chorus voices off one delay line
     space_d, ///< dispatch 14 — two voices, one per half of the line
+    guitar_multi_2, ///< dispatch 58 — compressor, overdrive, amp simulator, chorus
     efx_reverb, ///< dispatch 0x19, with the inverted output routing
     passthrough, ///< not transcribed yet: signal passes unchanged
 };
@@ -1512,6 +1795,8 @@ enum class Processor {
         return Processor::hexa_chorus;
     case 14:
         return Processor::space_d;
+    case 58:
+        return Processor::guitar_multi_2;
     default:
         return Processor::passthrough;
     }
@@ -1567,6 +1852,22 @@ struct InsertionEffect::Impl {
     std::array<std::uint8_t, 128> rotary_spread{};
     std::array<std::uint16_t, 128> rotary_speed{};
 
+    // GTR Multi 2. Seven latched parameters, each the read-back-the-latch clamp the other
+    // handlers use, at its own width.
+    std::array<std::uint16_t, 128> gm2_p0_curve{};
+    std::array<std::uint16_t, 128> gm2_p1_curve{};
+    std::array<std::uint8_t, 128> gm2_p17_curve{};
+    std::array<std::uint16_t, 128> gm2_p15_curve{};
+    std::array<std::uint16_t, amp_bank_register_count> gm2_amp_bank{};
+    std::array<std::uint16_t, bank_register_count> gm2_eq_bank{};
+    std::uint8_t gm2_od_switch_latch = 0;
+    std::uint8_t gm2_od_type_latch = 0;
+    std::uint8_t gm2_amp_type_latch = 0;
+    std::uint8_t gm2_amp_switch_latch = 0;
+    std::uint8_t gm2_cab_switch_latch = 0;
+    std::uint8_t gm2_eq_q_latch = 0;
+    std::uint8_t gm2_chorus_switch_latch = 0;
+
     std::array<std::uint8_t, 2> od2_type_latch{};
     std::array<std::uint8_t, 2> od2_amp_type_latch{};
     std::array<std::uint8_t, 2> od2_amp_switch_latch{};
@@ -1592,6 +1893,7 @@ struct InsertionEffect::Impl {
     std::array<std::int32_t, reverb_tap_count> reverb_taps{};
 
     RegisterFile registers;
+    std::array<float, 0x80> state_snapshot{};
     Tape tape_a{1 << 15};
     Tape tape_b{1 << 17};
 
@@ -1645,6 +1947,9 @@ struct InsertionEffect::Impl {
     void apply_enhancer();
     void apply_hexa_chorus(bool on_select);
     void apply_space_d();
+    void apply_guitar_multi_2();
+    void gm2_drive_pair();
+    void gm2_chorus_level();
     void bank_load(const std::array<std::uint16_t, bank_register_count>& registers_,
                    std::uint8_t frequency,
                    std::uint8_t q,
@@ -1845,6 +2150,12 @@ void InsertionEffect::Impl::load_tables(const RomImage& rom)
     read_u16s(reverb_lpf_curve_offset, rev_lpf_curve);
     read_u16s(chorus_depth_offset, chorus_depth);
     read_u16s(space_d_p3_offset, space_d_p3);
+    read_u16s(gm2_p0_curve_offset, gm2_p0_curve);
+    read_u16s(gm2_p1_curve_offset, gm2_p1_curve);
+    read_u8s(gm2_p17_curve_offset, gm2_p17_curve);
+    read_u16s(gm2_p15_curve_offset, gm2_p15_curve);
+    read_u16s(gm2_amp_bank_offset, gm2_amp_bank);
+    read_u16s(gm2_eq_bank_offset, gm2_eq_bank);
     read_u16s(reverb_time_curve_offset, rev_time_curve);
     read_u16s(reverb_feedback_a_offset, rev_feedback_a);
     read_u16s(reverb_feedback_b_offset, rev_feedback_b);
@@ -1933,6 +2244,9 @@ void InsertionEffect::Impl::apply(bool on_select)
         break;
     case Processor::space_d:
         apply_space_d();
+        break;
+    case Processor::guitar_multi_2:
+        apply_guitar_multi_2();
         break;
     case Processor::efx_reverb:
         apply_efx_reverb();
@@ -2279,6 +2593,216 @@ void InsertionEffect::Impl::apply_space_d()
     registers.write_slew(0x0F1, rev_p16_b[feedback]);
     registers.write_slew(0x109, rev_p16_b[feedback]);
     shadow[0x0F] = params[0x0F];
+}
+
+/// `fx_param_apply_49e40` @ 0x180049E40 — GTR Multi 2's parameters.
+///
+/// The widest handler here, because the type is four effects: parameters 0–5 are the compressor and
+/// the overdrive, 6–9 the amp simulator and its low shelf, 10–13 a mid band and a high shelf, and
+/// 14–17 the chorus. Seven of the twenty are latched rather than clamped, each at its own width —
+/// 2, 2, 4, 2, 2, 5 and 2 — and a refused value is written back into the parameter block.
+///
+/// Almost nothing here is new machinery. It reuses the Overdrive's gain and level curves, the OD /
+/// OD2 nineteen-value bank (same tables, same order, different destinations), `amp_bank_program`
+/// and `bank_load` — the whole type is those pieces on other registers, plus four curves of its own.
+///
+/// Two shapes to watch. The OD type's branch is a mute-program-restore that ends by rewriting the
+/// block level from parameter 0x13, so a type change and a level change interleave correctly. And
+/// the drive curve select is the *opposite* way round from the OD / OD2 chain it borrows the tables
+/// from: this one takes the alternate curve when its type is anything **but** 1.
+void InsertionEffect::Impl::apply_guitar_multi_2()
+{
+    apply_common_tail();
+
+    if (changed(0x13)) {
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+        shadow[0x13] = params[0x13];
+    }
+
+    // ---- compressor -----------------------------------------------------------------------
+    if (changed(0)) {
+        registers.write16(0xB6, gm2_p0_curve[params[0]]);
+        shadow[0] = params[0];
+    }
+
+    // The overdrive's amp switch, latched. Its register pair is bracketed by the two writes the
+    // next two branches mute with, which is why it is programmed before them.
+    if (params[3] < 2) {
+        gm2_od_switch_latch = params[3];
+    } else {
+        params[3] = gm2_od_switch_latch;
+    }
+    if (changed(3)) {
+        registers.write_slew(0xDA, amp_switch_a[gm2_od_switch_latch]);
+        registers.write_slew(0xD9, amp_switch_b[params[3]]);
+        shadow[3] = gm2_od_switch_latch;
+    }
+
+    if (changed(1)) {
+        registers.write_slew(0xDA, 0);
+        registers.write16(0xA6, gm2_p1_curve[params[1]]);
+        registers.write16(0xCC, gm2_p1_curve[params[1]]);
+        shadow[1] = params[1];
+        registers.write_slew(0xDA, amp_switch_a[params[3]]);
+    }
+    if (changed(2)) {
+        registers.write_slew(0xDA, 0);
+        registers.write_index_byte(0x56, level_curve[params[2]]);
+        shadow[2] = params[2];
+        registers.write_slew(0xDA, amp_switch_a[params[3]]);
+    }
+
+    // ---- overdrive type -------------------------------------------------------------------
+    if (params[4] < 2) {
+        gm2_od_type_latch = params[4];
+    } else {
+        params[4] = gm2_od_type_latch;
+    }
+    if (changed(4)) {
+        registers.write_slew(0x80, 0);
+        registers.write_slew(0x1F0, 0);
+        registers.write_index_byte(0x5A, 0);
+        registers.write_index_byte(0x59, 0);
+        for (std::size_t i = 0; i < gm2_bank_registers.size(); ++i) {
+            registers.write_index_byte(gm2_bank_registers[i], od2_bank[i][gm2_od_type_latch]);
+        }
+        gm2_drive_pair();
+        registers.write_index_byte(0x5A, amp_switch_a[params[3]]);
+        registers.write_index_byte(0x59, amp_switch_b[params[3]]);
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+        shadow[4] = gm2_od_type_latch;
+    }
+
+    // ---- amp simulator --------------------------------------------------------------------
+    if (params[7] < 2) {
+        gm2_amp_switch_latch = params[7];
+    } else {
+        params[7] = gm2_amp_switch_latch;
+    }
+    if (changed(7)) {
+        registers.write_slew(0x158, amp_switch_a[gm2_amp_switch_latch]);
+        registers.write_slew(0x157, amp_switch_b[params[7]]);
+        shadow[7] = gm2_amp_switch_latch;
+    }
+    if (params[6] < 4) {
+        gm2_amp_type_latch = params[6];
+    } else {
+        params[6] = gm2_amp_type_latch;
+    }
+    if (changed(6)) {
+        amp_bank_program(gm2_amp_bank, gm2_amp_type_latch, params[7]);
+        shadow[6] = gm2_amp_type_latch;
+    }
+    if (params[8] < 2) {
+        gm2_cab_switch_latch = params[8];
+    } else {
+        params[8] = gm2_cab_switch_latch;
+    }
+    if (changed(8)) {
+        registers.write_slew(0x15B, amp_switch_a[gm2_cab_switch_latch]);
+        registers.write_slew(0x15A, amp_switch_b[params[8]]);
+        shadow[8] = gm2_cab_switch_latch;
+    }
+
+    // ---- the three tone bands -------------------------------------------------------------
+    if (changed(9)) {
+        const std::size_t v = params[9];
+        registers.write16(0x161, low_gain_f[v]);
+        registers.write16(0x15F, low_gain_d[v]);
+        registers.write16(0x163, low_gain_h[v]);
+        shadow[9] = params[9];
+    }
+    if (params[0x0B] < 5) {
+        gm2_eq_q_latch = params[0x0B];
+    } else {
+        params[0x0B] = gm2_eq_q_latch;
+    }
+    if (changed(0x0B) || changed(0x0C) || changed(0x0A)) {
+        bank_load(gm2_eq_bank, params[0x0A], gm2_eq_q_latch, params[0x0C]);
+        shadow[0x0A] = params[0x0A];
+        shadow[0x0B] = gm2_eq_q_latch;
+        shadow[0x0C] = params[0x0C];
+    }
+    if (changed(0x0D)) {
+        const std::size_t v = params[0x0D];
+        registers.write_slew(0x17B, 0);
+        registers.write16(0x167, high_gain_f[v]);
+        registers.write16(0x165, high_gain_d[v]);
+        registers.write16(0x169, high_gain_h[v]);
+        shadow[0x0D] = params[0x0D];
+        registers.write_slew(0x17B, 0x7F);
+    }
+
+    // ---- chorus ---------------------------------------------------------------------------
+    if (params[0x0E] < 2) {
+        gm2_chorus_switch_latch = params[0x0E];
+    } else {
+        params[0x0E] = gm2_chorus_switch_latch;
+    }
+    if (changed(0x0E)) {
+        registers.write_slew(0x1B8, 0);
+        registers.write_slew(0x1E3, 0);
+        registers.write_slew(0x180, 0);
+        for (const int index : {0xFD, 0x119, 0x145}) {
+            registers.write_index_byte(index, amp_switch_a[params[0x0E]]);
+        }
+        for (const int index : {0x118, 0x13A, 0x144}) {
+            registers.write_index_byte(index, amp_switch_b[params[0x0E]]);
+        }
+        shadow[0x0E] = gm2_chorus_switch_latch;
+        registers.write_slew(0x180, gm2_p17_curve[params[0x11]]);
+        gm2_chorus_level();
+    }
+    if (changed(0x0F)) {
+        registers.write16(0x18D, gm2_p15_curve[params[0x0F]]);
+        shadow[0x0F] = params[0x0F];
+    }
+    if (changed(0x10)) {
+        registers.write_slew(0x80, 0);
+        registers.write_slew(0x1F0, 0);
+        registers.write_slew(0x180, 0);
+        const auto depth = static_cast<std::uint16_t>(chorus_depth[params[0x10]] >> 4);
+        registers.write16(0x19C, depth);
+        registers.write16(0x1C8, depth);
+        shadow[0x10] = params[0x10];
+        registers.write_slew(0x180, gm2_p17_curve[params[0x11]]);
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+    }
+    if (changed(0x11)) {
+        registers.write_slew(0x180, gm2_p17_curve[params[0x11]]);
+        shadow[0x11] = params[0x11];
+    }
+
+    // Always refreshed: the drive and the chorus level carry the block's control offsets, which
+    // are zero here for the same reason they are in every other handler.
+    gm2_drive_pair();
+    shadow[5] = params[5];
+    gm2_chorus_level();
+    shadow[0x12] = params[0x12];
+}
+
+/// The drive pair, `0xF1` and `0x125`. Which second curve it uses turns on the OD type, and the
+/// test is inverted against the OD / OD2 chain that shares the tables: alternate unless type is 1.
+void InsertionEffect::Impl::gm2_drive_pair()
+{
+    const auto v = static_cast<std::size_t>(
+        std::clamp<int>(static_cast<std::int8_t>(shadow[0x18]) + static_cast<std::int8_t>(params[5]),
+                        0,
+                        0x7F));
+    const std::uint8_t second = params[4] != 1 ? od2_drive_alt[v] : drive_b[v];
+    registers.write_pair(0xF1, drive_a[v], 0x125, second);
+}
+
+/// The chorus return level, `0x1B8` and `0x1E3`, from parameter 0x12 plus its control offset.
+void InsertionEffect::Impl::gm2_chorus_level()
+{
+    const auto v = static_cast<std::size_t>(std::clamp<int>(
+        static_cast<std::int8_t>(shadow[0x19]) + static_cast<std::int8_t>(params[0x12]), 0, 0x7F));
+    registers.write_slew(0x1B8, level_curve[v]);
+    registers.write_slew(0x1E3, level_curve[v]);
 }
 
 void InsertionEffect::Impl::apply_overdrive()
@@ -3050,6 +3574,14 @@ void InsertionEffect::process(std::span<const float> in_left,
                            impl.tape_a,
                            impl.tape_b,
                            coef);
+        } else if (impl.processor == Processor::guitar_multi_2) {
+            guitar_multi_2_sample(in_left[n] + in_left[n],
+                                  in_right[n] + in_right[n],
+                                  left,
+                                  right,
+                                  impl.tape_a,
+                                  impl.tape_b,
+                                  coef);
         } else if (impl.processor == Processor::rotary) {
             rotary_sample(in_left[n] + in_left[n],
                           in_right[n] + in_right[n],
@@ -3085,6 +3617,7 @@ void InsertionEffect::process(std::span<const float> in_left,
         out_left[n] = left * 0.5F * wet + in_left[n] * bypass;
         out_right[n] = right * 0.5F * wet + in_right[n] * bypass;
     }
+    impl.tape_a.snapshot(impl.state_snapshot);
 }
 
 void InsertionEffect::reset()
@@ -3101,6 +3634,11 @@ std::span<const float> InsertionEffect::coefficients() const
 std::span<const std::int32_t> InsertionEffect::tap_program() const
 {
     return {impl_->reverb_taps.data(), impl_->reverb_taps.size()};
+}
+
+std::span<const float> InsertionEffect::state_window() const
+{
+    return {impl_->state_snapshot.data(), impl_->state_snapshot.size()};
 }
 
 } // namespace ts
