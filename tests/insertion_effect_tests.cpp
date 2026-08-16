@@ -569,6 +569,55 @@ TEST_CASE("the Enhancer's parameters reach its registers", "[efx][sccore]")
     CHECK(registers_for(0x13, 0x20) != registers_for(0x14, 0x20));
 }
 
+TEST_CASE("the chorus types' parameters reach their registers", "[efx][sccore]")
+{
+    const RomImage rom = open_rom();
+
+    // `fx_param_apply_4b980` and `fx_param_apply_580c0` transcribed. Swept against the module with
+    // `scdec efxdump <type> <addr> <value>` over every address these handlers read: **Hexa Chorus
+    // 50 of 50 exact** at five values including its latched ranges, **Space D 24 of 24**, and both
+    // exact at their defaults on the tap program as well as the coefficient file.
+    const auto registers_for = [&rom](int msb, int lsb, int address, int value) {
+        InsertionEffect efx{rom};
+        efx.select_type(msb, lsb);
+        efx.set_parameter(address, value);
+        const auto coef = efx.coefficients();
+        return std::vector<float>(coef.begin(), coef.end());
+    };
+
+    // Rate, depth, their two spreads, the stereo spread, feedback, the two bands and the level.
+    // The pairs are per address rather than uniform, because two of these parameters would not
+    // move under one: the depth spread accepts only 0x2C-0x54 and latches anything else, and the
+    // stereo spread only 0x00-0x14. Several of the shared curves are also flat across their bottom
+    // few entries, so a low pair proves nothing.
+    const std::vector<std::pair<int, std::pair<int, int>>> hexa{
+        {0x03, {0x10, 0x60}}, {0x04, {0x10, 0x60}}, {0x05, {0x10, 0x60}}, {0x06, {0x02, 0x12}},
+        {0x07, {0x2C, 0x54}}, {0x08, {0x02, 0x12}}, {0x12, {0x10, 0x60}}, {0x13, {0x10, 0x60}},
+        {0x14, {0x10, 0x60}}, {0x16, {0x10, 0x60}},
+    };
+    for (const auto& [address, values] : hexa) {
+        INFO("Hexa Chorus, parameter address " << std::hex << address);
+        CHECK(registers_for(0x01, 0x40, address, values.first)
+              != registers_for(0x01, 0x40, address, values.second));
+    }
+    for (const int address : {0x03, 0x04, 0x05, 0x06, 0x12, 0x13, 0x14, 0x16}) {
+        INFO("Space D, parameter address " << std::hex << address);
+        CHECK(registers_for(0x01, 0x43, address, 0x10) != registers_for(0x01, 0x43, address, 0x60));
+    }
+
+    // **The stereo spread starts latched at its default and must stay put until it is written.**
+    // Firing it on the select moved twelve registers away from the module, and firing it when some
+    // other parameter changed did the same.
+    InsertionEffect fresh{rom};
+    fresh.select_type(0x01, 0x40);
+    const std::vector<float> at_select(fresh.coefficients().begin(), fresh.coefficients().end());
+    fresh.set_parameter(0x03, 0x20); // a different parameter entirely
+    const std::vector<float> after_other(fresh.coefficients().begin(), fresh.coefficients().end());
+    CHECK(at_select[0x106] == after_other[0x106]);
+    fresh.set_parameter(0x08, 0x05); // now the spread itself
+    CHECK(fresh.coefficients()[0x106] != at_select[0x106]);
+}
+
 TEST_CASE("an untranscribed type passes through and says so", "[efx][sccore]")
 {
     const RomImage rom = open_rom();

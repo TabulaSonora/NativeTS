@@ -145,6 +145,12 @@ constexpr int bank_register_count = 7;
 // Rotary (`fx_param_apply_57bc0`). Its own three curves on top of the shared gain and level ones.
 constexpr std::int64_t rotary_rate_offset = file_offset(0x18198CA60);   // u16 -> 0x139, 0xBE
 constexpr std::int64_t rotary_spread_offset = file_offset(0x18198F040); // u8  -> 0xF2, 0x126
+/// The chorus depth curve, u16. Hexa Chorus takes it >> 4, Space D >> 6.
+constexpr std::int64_t chorus_depth_offset = file_offset(0x18198B6E0);
+
+/// Space D's third parameter, u16 straight to register 0xC5.
+constexpr std::int64_t space_d_p3_offset = file_offset(0x18198EF40);
+
 constexpr std::int64_t rotary_speed_offset = file_offset(0x18198B7E0);  // u16 -> 0xB6/0xBA, 0x131/0x135
 
 /// The two chains' amp-simulator register banks (`chorus_load_algo_regs` takes the bank).
@@ -1549,6 +1555,8 @@ struct InsertionEffect::Impl {
     std::array<std::uint16_t, 128> eq_high_alt_f{};
     std::array<std::uint16_t, 128> eq_high_alt_d{};
     std::array<std::uint16_t, 128> eq_high_alt_h{};
+    std::array<std::uint16_t, 128> chorus_depth{};
+    std::array<std::uint16_t, 128> space_d_p3{};
     std::array<std::uint8_t, 2> eq_freq_latch{};
     std::array<std::uint8_t, 5> eq_q_latch{};
     std::array<std::vector<std::uint8_t>, 17> bank_tables;
@@ -1605,6 +1613,9 @@ struct InsertionEffect::Impl {
     // the slot Overdrive reads as its amp-simulator switch. Faithful, if surprising.
     std::uint8_t latch_dea0 = 0;
     std::uint8_t amp_type_latch = 0;
+    std::uint8_t hexa_rate_spread_latch = 0;
+    std::uint8_t hexa_depth_spread_latch = 0x40;
+    std::uint8_t hexa_spread_latch = 0;
     std::uint8_t amp_switch_latch = 0;
     std::uint8_t output_latch = 1;
 
@@ -1632,6 +1643,8 @@ struct InsertionEffect::Impl {
     void apply_rotary(bool on_select);
     void apply_stereo_eq();
     void apply_enhancer();
+    void apply_hexa_chorus(bool on_select);
+    void apply_space_d();
     void bank_load(const std::array<std::uint16_t, bank_register_count>& registers_,
                    std::uint8_t frequency,
                    std::uint8_t q,
@@ -1830,6 +1843,8 @@ void InsertionEffect::Impl::load_tables(const RomImage& rom)
         }
     }
     read_u16s(reverb_lpf_curve_offset, rev_lpf_curve);
+    read_u16s(chorus_depth_offset, chorus_depth);
+    read_u16s(space_d_p3_offset, space_d_p3);
     read_u16s(reverb_time_curve_offset, rev_time_curve);
     read_u16s(reverb_feedback_a_offset, rev_feedback_a);
     read_u16s(reverb_feedback_b_offset, rev_feedback_b);
@@ -1913,35 +1928,24 @@ void InsertionEffect::Impl::apply(bool on_select)
     case Processor::enhancer:
         apply_enhancer();
         break;
-    case Processor::space_d:
     case Processor::hexa_chorus:
-        // Only the level, and that is measured rather than assumed: with the preset fill in place
-        // the whole 384-register file matches the module except registers 0x80 and 0x1F0, which
-        // the type's own handler writes from its level byte through the shared curve. Hexa Chorus
-        // defaults to `0x70`, and `level_curve[112]` is 107 — exactly what the live block reads.
-        //
-        // **The Enhancer was left out of this once and the register diff could not see it**,
-        // because its default level is `0x7F` and `level_curve[127]` is 127 — the same value the
-        // untranscribed fallback hard-codes. It agreed at the default and nowhere else. It has its
-        // own handler now; the lesson stays, because a comparison taken only at a type's defaults
-        // cannot tell a handler that computes the right answer from one that is a constant.
-        //
-        // For these two the other twenty GS parameters are still **not** mapped: their
-        // `40 03 03`–`16` writes do not reach the registers, so rate, depth, pre-delay and balance
-        // stay at the preset. A file that selects one and leaves it alone is right; one that
-        // adjusts it gets the default voicing, and the corpus says most of them adjust it — 9 of
-        // the 14 files selecting Hexa Chorus and 7 of the 10 selecting Space D write parameters.
-        // `fx_apply_hexa_chorus` @ `0x18004B980` and Space D's handler @ `0x1800580C0` are what
-        // close that, and a parameter sweep against `scdec efxdump` is how they are checked.
-        registers.write_slew(0x80, level_curve[params[0x13]]);
-        registers.write_slew(0x1F0, level_curve[params[0x13]]);
-        apply_common_tail();
+        apply_hexa_chorus(on_select);
+        break;
+    case Processor::space_d:
+        apply_space_d();
         break;
     case Processor::efx_reverb:
         apply_efx_reverb();
         break;
     case Processor::thru:
     case Processor::passthrough:
+        // Reached only by types with no transcription. **A hard-coded level here is what hid a
+        // missing handler for two commits.** The Enhancer
+        // fell through to this branch, and its own default level is `0x7F` with `level_curve[127]`
+        // equal to 127 — the same value written below — so the register file matched the module at
+        // the default and nowhere else. A comparison taken only at a type's defaults cannot tell a
+        // handler that computes the right answer from one that is a constant; sweep the parameter.
+        //
         // Thru's handler (`fx_param_apply_5aab0`) sets its two level registers on the select
         // commit only, and runs the common tail either way; types without a transcription still
         // get the tail, so their sends and routing stay live.
@@ -2032,6 +2036,249 @@ void InsertionEffect::Impl::apply_enhancer()
     registers.write_slew(0xAA, level_curve[mix]);
     registers.write_slew(0xDB, level_curve[mix]);
     shadow[1] = params[1];
+}
+
+/// `fx_param_apply_4b980` @ 0x18004B980 — the Hexa Chorus's parameters.
+///
+/// Six voices programmed from four numbers: a rate and its spread, a depth and its spread. Each
+/// spread is added once per voice, so the registers march — the rate's in steps of `0x20` and the
+/// depth's by re-indexing the curve at `depth + k * offset`, clamped each time. `params[5]` is the
+/// stereo spread and writes twelve registers as a mirrored pair around 0x2000.
+///
+/// Three parameters are latched rather than clamped, which is the engine's way of refusing a value
+/// instead of folding it: rate spread above 0x14, depth spread outside 0x2C–0x54, and spread above
+/// 0x14 all restore the last accepted byte into the parameter block itself.
+void InsertionEffect::Impl::apply_hexa_chorus(bool on_select)
+{
+    apply_common_tail();
+
+    if (changed(0x10)) {
+        const std::size_t v = params[0x10];
+        registers.write16(0x199, low_gain_f[v]);
+        registers.write16(0x197, low_gain_d[v]);
+        registers.write16(0x19B, low_gain_h[v]);
+        registers.write16(0x1BB, low_gain_f[v]);
+        registers.write16(0x1B9, low_gain_d[v]);
+        registers.write16(0x1BD, low_gain_h[v]);
+        shadow[0x10] = params[0x10];
+    }
+    if (changed(0x11)) {
+        registers.write_slew(0x80, 0);
+        registers.write_slew(0x1F0, 0);
+        const std::size_t v = params[0x11];
+        registers.write16(0x19F, high_gain_f[v]);
+        registers.write16(0x19D, high_gain_d[v]);
+        registers.write16(0x1A1, high_gain_h[v]);
+        registers.write16(0x1C1, high_gain_f[v]);
+        registers.write16(0x1BF, high_gain_d[v]);
+        registers.write16(0x1C3, high_gain_h[v]);
+        shadow[0x11] = params[0x11];
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+    }
+    if (changed(0x13)) {
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+        shadow[0x13] = params[0x13];
+    }
+
+    // Rate and its spread. A refused spread is written back into the block, not clamped.
+    if (params[3] > 0x14) {
+        params[3] = hexa_rate_spread_latch;
+    }
+    hexa_rate_spread_latch = params[3];
+    if (changed(0) || changed(3)) {
+        registers.write_slew(0x193, 0);
+        registers.write_slew(0x1B5, 0);
+        const auto base = static_cast<std::int16_t>(rev_lpf_curve[params[0]]);
+        const auto step = static_cast<std::int16_t>(params[3]);
+        registers.write16(0x0A1, static_cast<std::uint16_t>(base));
+        registers.write16(0x0A6, static_cast<std::uint16_t>(base));
+        registers.write16(0x0C8, static_cast<std::uint16_t>(base + step * 0x20));
+        registers.write16(0x0CD, static_cast<std::uint16_t>(base + step * 0x20));
+        registers.write16(0x0EF, static_cast<std::uint16_t>(base + step * 0x40));
+        registers.write16(0x0F4, static_cast<std::uint16_t>(base + step * 0x40));
+        registers.write16(0x116, static_cast<std::uint16_t>(base + step * 0x60));
+        registers.write16(0x11B, static_cast<std::uint16_t>(base + step * 0x60));
+        registers.write16(0x13D, static_cast<std::uint16_t>(base + step * 0x80));
+        registers.write16(0x142, static_cast<std::uint16_t>(base + step * 0x80));
+        registers.write16(0x164, static_cast<std::uint16_t>(base + step * 0xA0));
+        registers.write16(0x169, static_cast<std::uint16_t>(base + step * 0xA0));
+        shadow[0] = params[0];
+        shadow[3] = params[3];
+        registers.write_slew(0x193, 0x20);
+        registers.write_slew(0x1B5, 0x20);
+    }
+
+    // Depth and its spread, the spread 0x40-centred and re-indexing the curve per voice.
+    if (static_cast<std::uint8_t>(params[4] - 0x2C) > 0x28) {
+        params[4] = hexa_depth_spread_latch;
+    }
+    hexa_depth_spread_latch = params[4];
+    if (changed(2) || changed(4)) {
+        registers.write_slew(0x193, 0);
+        registers.write_slew(0x1B5, 0);
+        const int offset = static_cast<int>(static_cast<std::int8_t>(params[4] - 0x40));
+        const auto depth_at = [&](int steps) {
+            const int index = std::clamp<int>(params[2] + steps * offset, 0, 0x7F);
+            return static_cast<std::uint16_t>(chorus_depth[static_cast<std::size_t>(index)] >> 4);
+        };
+        registers.write16(0x0A3, static_cast<std::uint16_t>(chorus_depth[params[2]] >> 4));
+        registers.write16(0x0CA, depth_at(1));
+        registers.write16(0x0F1, depth_at(2));
+        registers.write16(0x118, depth_at(3));
+        registers.write16(0x13F, depth_at(4));
+        registers.write16(0x166, depth_at(5));
+        shadow[2] = params[2];
+        shadow[4] = params[4];
+        registers.write_slew(0x193, 0x20);
+        registers.write_slew(0x1B5, 0x20);
+    }
+
+    // The stereo spread: six mirrored pairs around 0x2000. The slopes are confirmed by sweeping the
+    // module at 0x00, 0x05, 0x0A and 0x14 — registers 0x186, 0x188 and 0x18A come out as exactly
+    // `0x2000 + 0x198 * v`, `+ 0x110 * v` and `+ 0x88 * v`.
+    //
+    // **It does not run on the select, and its latch agrees with the default from then on.** Both
+    // halves are measured. At this type's default the live block holds values the formula does not
+    // produce — five registers carry what `v = 0x14` would give and a sixth carries 3 — so writing
+    // the formula's answer at select moves twelve registers away from the module, and the preset
+    // fill has already put the right ones there. And the module does not write them when some
+    // *other* parameter changes either: swept across every address this handler reads, the twelve
+    // stay put until `0x08` itself moves, at which point they take the formula exactly.
+    //
+    // Seeding the latch on the select is what reproduces both. Seeding the whole shadow that way
+    // also works for this type and is the wrong generalisation: it stops the EFX Reverb building
+    // its tap program, which the module plainly does build. Why this one parameter starts latched
+    // at its default is the open question; that it does is not.
+    if (params[5] < 0x15) {
+        hexa_spread_latch = params[5];
+    } else {
+        params[5] = hexa_spread_latch;
+    }
+    if (on_select) {
+        shadow[5] = hexa_spread_latch;
+    } else if (hexa_spread_latch != shadow[5]) {
+        registers.write_slew(0x193, 0);
+        registers.write_slew(0x1B5, 0);
+        const auto v = static_cast<std::int16_t>(hexa_spread_latch);
+        const auto wide = static_cast<std::uint16_t>(v * 0x198 + 0x2000);
+        const auto wide_neg = static_cast<std::uint16_t>(v * -0x198 + 0x2000);
+        const auto mid = static_cast<std::uint16_t>(v * 0x110 + 0x2000);
+        const auto mid_neg = static_cast<std::uint16_t>(v * -0x110 + 0x2000);
+        const auto near = static_cast<std::uint16_t>(v * 0x88 + 0x2000);
+        const auto near_neg = static_cast<std::uint16_t>(v * -0x88 + 0x2000);
+        registers.write16(0x185, wide);
+        registers.write16(0x1A7, wide_neg);
+        registers.write16(0x187, mid);
+        registers.write16(0x1A9, mid_neg);
+        registers.write16(0x189, near);
+        registers.write16(0x1AB, near_neg);
+        registers.write16(0x18B, near_neg);
+        registers.write16(0x1AD, near);
+        registers.write16(0x18D, mid_neg);
+        registers.write16(0x1AF, mid);
+        registers.write16(0x18F, wide_neg);
+        registers.write16(0x1B1, wide);
+        shadow[5] = hexa_spread_latch;
+        registers.write_slew(0x193, 0x20);
+        registers.write_slew(0x1B5, 0x20);
+    }
+
+    // Always refreshed: the control offsets ride in here, and are zero.
+    const auto pre = static_cast<std::size_t>(std::clamp<int>(params[1], 0, 0x7F));
+    registers.write16(0x09C, rotary_speed[pre]);
+    shadow[1] = params[1];
+
+    const auto feedback = static_cast<std::size_t>(std::clamp<int>(params[0x0F], 0, 0x7F));
+    registers.write_slew(0x196, rev_p16_a[feedback]);
+    registers.write_slew(0x1B8, rev_p16_a[feedback]);
+    registers.write_slew(0x195, rev_p16_b[feedback]);
+    registers.write_slew(0x1B7, rev_p16_b[feedback]);
+    shadow[0x0F] = params[0x0F];
+}
+
+/// `fx_param_apply_580c0` @ 0x1800580C0 — Space D's parameters.
+///
+/// The same four-band shape as the Enhancer's on different registers, plus three of its own: rate,
+/// depth and a third that indexes a table of its own. Its two voices take the rate at a fixed
+/// `0x4010` apart rather than at a programmable spread, which is what makes it the fixed-width
+/// sibling of the Hexa Chorus.
+void InsertionEffect::Impl::apply_space_d()
+{
+    apply_common_tail();
+
+    if (changed(0x10)) {
+        const std::size_t v = params[0x10];
+        registers.write16(0x0F5, low_gain_f[v]);
+        registers.write16(0x0F3, low_gain_d[v]);
+        registers.write16(0x0F7, low_gain_h[v]);
+        registers.write16(0x10D, low_gain_f[v]);
+        registers.write16(0x10B, low_gain_d[v]);
+        registers.write16(0x10F, low_gain_h[v]);
+        shadow[0x10] = params[0x10];
+    }
+    if (changed(0x11)) {
+        registers.write_slew(0x80, 0);
+        registers.write_slew(0x1F0, 0);
+        const std::size_t v = params[0x11];
+        registers.write16(0x0FB, high_gain_f[v]);
+        registers.write16(0x0F9, high_gain_d[v]);
+        registers.write16(0x0FD, high_gain_h[v]);
+        registers.write16(0x113, high_gain_f[v]);
+        registers.write16(0x111, high_gain_d[v]);
+        registers.write16(0x115, high_gain_h[v]);
+        shadow[0x11] = params[0x11];
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+    }
+    if (changed(0x13)) {
+        registers.write_slew(0x80, level_curve[params[0x13]]);
+        registers.write_slew(0x1F0, level_curve[params[0x13]]);
+        shadow[0x13] = params[0x13];
+    }
+
+    if (changed(0)) {
+        registers.write_slew(0x0EF, 0);
+        registers.write_slew(0x107, 0);
+        const auto base = static_cast<std::int16_t>(rev_lpf_curve[params[0]]);
+        registers.write16(0x0A3, static_cast<std::uint16_t>(base));
+        registers.write16(0x0A8, static_cast<std::uint16_t>(base));
+        registers.write16(0x0CA, static_cast<std::uint16_t>(base + 0x4010));
+        registers.write16(0x0CF, static_cast<std::uint16_t>(base + 0x4010));
+        shadow[0] = params[0];
+        registers.write_slew(0x0EF, 0x20);
+        registers.write_slew(0x107, 0x20);
+    }
+    if (changed(2)) {
+        registers.write_slew(0x0EF, 0);
+        registers.write_slew(0x107, 0);
+        const auto depth = static_cast<std::uint16_t>(chorus_depth[params[2]] >> 6);
+        registers.write16(0x0A5, depth);
+        registers.write16(0x0CC, depth);
+        shadow[2] = params[2];
+        registers.write_slew(0x0EF, 0x20);
+        registers.write_slew(0x107, 0x20);
+    }
+    if (changed(3)) {
+        registers.write_slew(0x0EF, 0);
+        registers.write_slew(0x107, 0);
+        registers.write16(0x0C5, space_d_p3[params[3]]);
+        shadow[3] = params[3];
+        registers.write_slew(0x0EF, 0x20);
+        registers.write_slew(0x107, 0x20);
+    }
+
+    const auto pre = static_cast<std::size_t>(std::clamp<int>(params[1], 0, 0x7F));
+    registers.write16(0x09E, rotary_speed[pre]);
+    shadow[1] = params[1];
+
+    const auto feedback = static_cast<std::size_t>(std::clamp<int>(params[0x0F], 0, 0x7F));
+    registers.write_slew(0x0F2, rev_p16_a[feedback]);
+    registers.write_slew(0x10A, rev_p16_a[feedback]);
+    registers.write_slew(0x0F1, rev_p16_b[feedback]);
+    registers.write_slew(0x109, rev_p16_b[feedback]);
+    shadow[0x0F] = params[0x0F];
 }
 
 void InsertionEffect::Impl::apply_overdrive()
