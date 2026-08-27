@@ -90,6 +90,16 @@ public:
     /// Loads every table by slicing the DLL at its manifest offset.
     [[nodiscard]] static TableSet from_rom(const RomImage& rom);
 
+    /// Tables this build's packing could not place in full, whose gaps were zero-filled.
+    ///
+    /// Empty for the build the offsets are recorded in. Non-empty means the DLL is readable and
+    /// plays, but a table carries zeroes where the cached blob over-reads past the real data; see
+    /// `RomImage::read_partial`.
+    [[nodiscard]] const std::vector<std::string>& unproven_tables() const noexcept
+    {
+        return unproven_;
+    }
+
     /// Loads every table from a directory of extracted `.bin` slices.
     ///
     /// Throws `std::runtime_error` if a cache file is missing or has the wrong length. A length
@@ -430,6 +440,7 @@ private:
     std::span<const std::uint8_t> kf_pitch_rate1_;
     std::span<const std::uint8_t> kf_tva_level_;
     std::span<const std::uint8_t> kf_tva_level2_;
+    std::vector<std::string> unproven_;
     std::span<const std::uint8_t> kf_tva_rate0_;
     std::span<const std::uint8_t> kf_tva_rate1_;
     std::vector<std::int16_t> kf_tvf_env_;

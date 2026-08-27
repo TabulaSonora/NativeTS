@@ -324,6 +324,29 @@ std::vector<std::uint8_t> RomImage::read(const TableEntry& entry) const
     return read(entry.file_offset, static_cast<std::size_t>(entry.size));
 }
 
+RomImage::PartialTable RomImage::read_partial(const TableEntry& entry) const
+{
+    PartialTable out;
+    out.bytes.resize(static_cast<std::size_t>(entry.size));
+
+    if (const auto direct = build_->table_offset(entry.name)) {
+        read_raw(*direct, std::span<std::uint8_t>{out.bytes});
+        return out;
+    }
+
+    std::size_t written = 0;
+    for (const MappedPiece& piece : build_->map_range(entry.file_offset, entry.size)) {
+        const auto length = static_cast<std::size_t>(piece.length);
+        if (piece.mapped()) {
+            read_raw(*piece.target_offset, std::span<std::uint8_t>{out.bytes}.subspan(written, length));
+        } else {
+            out.unproven.push_back(piece);   // already zero from the resize
+        }
+        written += length;
+    }
+    return out;
+}
+
 std::int64_t RomImage::wave_rom_base(std::string_view region) const
 {
     if (const auto offset = build_->wave_rom_offset(region)) {

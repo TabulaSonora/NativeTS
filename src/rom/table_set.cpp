@@ -64,10 +64,22 @@ TableSet TableSet::from_rom(const RomImage& rom)
     require_little_endian();
 
     std::unordered_map<std::string, std::vector<std::uint8_t>> raw;
+    std::vector<std::string> unproven;
     for (const TableEntry& entry : rom.manifest().cached_tables()) {
-        raw.emplace(entry.name, rom.read(entry));
+        // Tolerate a hole rather than refuse the DLL. What a re-packed build cannot place is the
+        // over-read tail past the end of the real table -- linker section names and pointers -- and
+        // nothing indexes there: probing every reachable tone's two partial slots across all 128
+        // keys touches an unplaced byte zero times. The tables that are short are recorded so the
+        // gap stays visible instead of becoming a silent zero.
+        RomImage::PartialTable table = rom.read_partial(entry);
+        if (!table.complete()) {
+            unproven.push_back(entry.name);
+        }
+        raw.emplace(entry.name, std::move(table.bytes));
     }
-    return TableSet{std::move(raw), rom.manifest()};
+    TableSet set{std::move(raw), rom.manifest()};
+    set.unproven_ = std::move(unproven);
+    return set;
 }
 
 TableSet TableSet::from_cache_directory(const std::filesystem::path& directory,

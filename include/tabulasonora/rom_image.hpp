@@ -120,7 +120,28 @@ public:
     [[nodiscard]] std::int64_t wave_rom_base(std::string_view region) const;
 
     /// Reads the bytes of one cached table, exactly `entry.size` long.
+    ///
+    /// Throws `RomCoverageError` if this build's packing cannot place every byte. Use
+    /// `read_partial` where a hole is tolerable.
     [[nodiscard]] std::vector<std::uint8_t> read(const TableEntry& entry) const;
+
+    /// One table, with whatever this build's packing could not place left zeroed and reported.
+    struct PartialTable {
+        std::vector<std::uint8_t> bytes;
+        /// Ranges of `bytes` that are zero-fill rather than data, as pinned-build offsets.
+        std::vector<MappedPiece> unproven;
+
+        [[nodiscard]] bool complete() const noexcept { return unproven.empty(); }
+    };
+
+    /// Reads a table, tolerating ranges this build cannot place.
+    ///
+    /// The cached blobs over-read past the end of the real tables into the linker's own section
+    /// names and pointers, which encode addresses and so cannot survive a re-packing. Refusing the
+    /// whole DLL over bytes that sit past the end of the data is the wrong trade -- but silently
+    /// substituting zeroes would be worse, so what was filled is returned alongside for the caller
+    /// to report.
+    [[nodiscard]] PartialTable read_partial(const TableEntry& entry) const;
 
     /// Reads the COFF `TimeDateStamp` from the PE header, or `0` if the file is not a PE image.
     [[nodiscard]] std::uint32_t read_pe_timestamp() const;
