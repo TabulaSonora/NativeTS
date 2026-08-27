@@ -24,6 +24,12 @@ namespace testdata {
 /// Resolved from `TS_SCCORE` first, then a candidate list including the sibling C# checkout.
 [[nodiscard]] std::optional<std::filesystem::path> sccore();
 
+/// An `SCCore.dll` from a build other than the pinned one, if one can be found.
+///
+/// `file_name` is the registry's name for it, e.g. `SCCore.64.dll`. Resolved from `TS_SCCORE_<NAME>`
+/// (the file name upper-cased, dots to underscores) first, then the repository root.
+[[nodiscard]] std::optional<std::filesystem::path> alternate_build(const std::string& file_name);
+
 /// The directory of extracted `tables/*.bin` slices, if it can be found.
 ///
 /// Resolved from `TS_TABLES` first, then `tables/` at the repository root. Regenerate it with

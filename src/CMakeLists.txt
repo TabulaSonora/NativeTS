@@ -13,6 +13,7 @@ if(PkgConfig_FOUND)
 endif()
 
 ts_embed_asset(TS_MANIFEST_SOURCE "${PROJECT_SOURCE_DIR}/assets/manifest.json" manifest_json)
+ts_embed_asset(TS_BUILDS_SOURCE "${PROJECT_SOURCE_DIR}/assets/builds.json" builds_json)
 
 add_library(tabulasonora
     dsp/envelope_machine.cpp
@@ -36,6 +37,7 @@ add_library(tabulasonora
     patches/patch_directory.cpp
     patches/tone.cpp
     dsp/sampler.cpp
+    rom/build_registry.cpp
     rom/rom_image.cpp
     rom/rom_locator.cpp
     rom/table_set.cpp
@@ -60,6 +62,7 @@ add_library(tabulasonora
     render/render_options.cpp
     render/wav_writer.cpp
     ${TS_MANIFEST_SOURCE}
+    ${TS_BUILDS_SOURCE}
 )
 
 add_library(ts::tabulasonora ALIAS tabulasonora)
@@ -114,7 +117,7 @@ endif()
 
 # The generated asset source is machine-written; holding them to the project's warning level
 # would fail the build on formatting nobody controls.
-set_source_files_properties(${TS_MANIFEST_SOURCE} ${TS_PRESETS_SOURCE}
+set_source_files_properties(${TS_MANIFEST_SOURCE} ${TS_BUILDS_SOURCE} ${TS_PRESETS_SOURCE}
     PROPERTIES COMPILE_OPTIONS "$<IF:$<CXX_COMPILER_ID:MSVC>,/w,-w>")
 
 # The rest of the package -- the headers, the config file, the export set this joins -- is in the

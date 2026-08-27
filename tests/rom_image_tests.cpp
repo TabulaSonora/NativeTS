@@ -92,10 +92,11 @@ TEST_CASE("a memory image reads the same as a file image", "[rom][sccore]")
     }
 }
 
-TEST_CASE("a file that is not the pinned build is refused", "[rom]")
+TEST_CASE("a file that is no build we know is refused", "[rom]")
 {
-    // Needs no DLL: any file of the wrong size fails on the very first check, and that check is
-    // what stops a different SCCore.dll from being read at offsets that no longer mean anything.
+    // Needs no DLL: a file matching no known build's size fails on the very first check, and that
+    // check is what stops an unrecognised SCCore.dll from being read at offsets that, for it, mean
+    // nothing. Recognised builds are read by translating those offsets; strangers are not guessed at.
     const fs::path temporary = fs::temp_directory_path() / "ts-not-sccore.bin";
     {
         std::ofstream stream{temporary, std::ios::binary};

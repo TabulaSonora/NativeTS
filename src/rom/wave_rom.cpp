@@ -4,8 +4,11 @@ namespace ts {
 
 WaveRom::WaveRom(const RomImage& rom)
     : rom_(&rom),
-      bank_a_base_(rom.manifest().region("wave_rom_bank_A").file_offset),
-      bank_b_base_(rom.manifest().region("wave_rom_bank_B").file_offset)
+      // Per build, not from the manifest: the ROM is excluded from the segment map (24 MB of bytes
+      // identical everywhere would swamp it) and the two banks are stored in a different order in
+      // different builds, so the registry records where each one starts.
+      bank_a_base_(rom.wave_rom_base("wave_rom_bank_A")),
+      bank_b_base_(rom.wave_rom_base("wave_rom_bank_B"))
 {
 }
 
@@ -33,13 +36,13 @@ std::optional<WaveStreams> WaveRom::read_streams(int region, int loop, int start
     const std::int32_t scale_length = ((scale_phase + delta_length) >> 5) + 4;
 
     WaveStreams streams;
-    streams.delta = rom_->read(delta_offset, static_cast<std::size_t>(delta_length));
-    streams.scale = rom_->read(scale_offset, static_cast<std::size_t>(scale_length));
+    streams.delta = rom_->read_raw(delta_offset, static_cast<std::size_t>(delta_length));
+    streams.scale = rom_->read_raw(scale_offset, static_cast<std::size_t>(scale_length));
     if (scale_phase > 0) {
         // The block-boundary preamble, which seeds the decode -- see the field's own comment.
         // Its exponents are the same scale byte the phase indexes into, already read above.
         streams.preamble_delta =
-            rom_->read(base + (loop & ~0x1F), static_cast<std::size_t>(scale_phase));
+            rom_->read_raw(base + (loop & ~0x1F), static_cast<std::size_t>(scale_phase));
     }
     streams.sample_count = sample_count;
     streams.data_start = loop;

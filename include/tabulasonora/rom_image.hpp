@@ -1,5 +1,6 @@
 #pragma once
 
+#include "tabulasonora/build_registry.hpp"
 #include "tabulasonora/table_manifest.hpp"
 
 #include <cstdint>
@@ -14,18 +15,34 @@ namespace ts {
 
 /// How strictly `RomImage::open` checks that the file is the pinned build.
 enum class RomVerification {
-    /// Verify size, PE timestamp and the full SHA-256. The default, and the only safe choice.
+    /// Identify the build by size, PE timestamp and the full SHA-256. The default.
+    ///
+    /// Any build in the registry is accepted, not only the pinned one — a build the engine knows how
+    /// to translate is as safe to read as the build the offsets were recorded against.
     full,
-    /// Verify size and PE timestamp but skip the SHA-256. Faster; use only in tight loops.
+    /// Identify by size and PE timestamp but skip the SHA-256. Faster; use only in tight loops.
+    ///
+    /// Two builds sharing both would make this ambiguous; the registry rejects that rather than
+    /// guess, so an ambiguous pair falls through to the same error as an unknown file.
     quick,
-    /// Perform no checks at all. For experimenting with a different build; offsets will be wrong.
+    /// Perform no checks at all, and assume the pinned build. Offsets will be wrong for any other.
     none,
 };
 
-/// Thrown when the supplied `SCCore.dll` is not the build the table offsets are pinned to.
+/// Thrown when the supplied `SCCore.dll` is not a build this engine knows how to read.
 class RomIdentityError : public std::runtime_error {
 public:
     explicit RomIdentityError(const std::string& message) : std::runtime_error(message) {}
+};
+
+/// Thrown when a read falls in a range the identified build's map cannot place.
+///
+/// Distinct from `RomIdentityError` because it means something different: the file *is* a recognised
+/// build, but this particular table could not be traced through its re-packed `.rdata`. Returning
+/// zeroes for the hole would be silently wrong, so it is an error rather than a partial read.
+class RomCoverageError : public std::runtime_error {
+public:
+    explicit RomCoverageError(const std::string& message) : std::runtime_error(message) {}
 };
 
 /// Read-only access to `SCCore.dll` *as a data file*.
@@ -70,14 +87,37 @@ public:
     /// The offset map these reads are interpreted through.
     [[nodiscard]] const TableManifest& manifest() const noexcept { return *manifest_; }
 
+    /// The build this file was identified as, which every offset is translated through.
+    [[nodiscard]] const BuildProfile& build() const noexcept { return *build_; }
+
     /// Reads into a caller-supplied buffer, filling it completely.
     ///
-    /// Throws `std::runtime_error` if the file ends before the buffer is filled.
+    /// `file_offset` is a **pinned-build** offset — the coordinate system `manifest.json` records —
+    /// and is translated into this build's, gathering the pieces when the packing differs. On the
+    /// pinned build that translation is the identity and this costs nothing.
+    ///
+    /// Throws `RomCoverageError` if any of the range is unmapped in this build, or
+    /// `std::runtime_error` if the file ends before the buffer is filled.
     void read(std::int64_t file_offset, std::span<std::uint8_t> destination) const;
 
-    /// Reads `length` bytes starting at `file_offset`.
+    /// Reads `length` bytes starting at a pinned-build `file_offset`.
     [[nodiscard]] std::vector<std::uint8_t> read(std::int64_t file_offset,
                                                  std::size_t length) const;
+
+    /// Reads at an absolute offset in *this* file, with no translation.
+    ///
+    /// For data located per build rather than through the segment map — the wave ROM, whose banks
+    /// are found by scanning block magic (see `wave_rom_base`).
+    void read_raw(std::int64_t file_offset, std::span<std::uint8_t> destination) const;
+
+    /// Reads `length` bytes at an absolute, untranslated offset.
+    [[nodiscard]] std::vector<std::uint8_t> read_raw(std::int64_t file_offset,
+                                                     std::size_t length) const;
+
+    /// Absolute offset of a wave-ROM bank in this build, by manifest region name.
+    ///
+    /// Throws `std::out_of_range` if the build does not record that region.
+    [[nodiscard]] std::int64_t wave_rom_base(std::string_view region) const;
 
     /// Reads the bytes of one cached table, exactly `entry.size` long.
     [[nodiscard]] std::vector<std::uint8_t> read(const TableEntry& entry) const;
@@ -107,11 +147,13 @@ private:
 
     RomImage(std::string path, std::unique_ptr<Source> source, const TableManifest& manifest);
 
-    void verify(RomVerification verification) const;
+    /// Identifies the file against the build registry, setting `build_`.
+    void identify(RomVerification verification);
 
     std::string path_;
     std::unique_ptr<Source> source_;
     const TableManifest* manifest_;
+    const BuildProfile* build_ = nullptr;
     std::int64_t length_ = 0;
 };
 

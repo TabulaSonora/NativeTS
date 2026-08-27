@@ -1,5 +1,7 @@
 #include "test_data.hpp"
 
+#include <cctype>
+
 #include "rom/sha256.hpp"
 
 #include <nlohmann/json.hpp>
@@ -187,6 +189,23 @@ std::optional<fs::path> tables()
     return first_existing({
         repository_root() / "tables",
         repository_root().parent_path() / "DotNetAdministravit" / "tables",
+    });
+}
+
+std::optional<fs::path> alternate_build(const std::string& file_name)
+{
+    std::string variable = "TS_SCCORE_";
+    for (const char c : file_name) {
+        variable.push_back(c == '.' ? '_' : static_cast<char>(std::toupper(static_cast<unsigned char>(c))));
+    }
+    if (auto path = from_environment(variable.c_str())) {
+        return path;
+    }
+    return first_existing({
+        repository_root() / file_name,
+        // The pinned build lives at the TabulaSonora root, one above this engine's own tree, and
+        // the alternate builds sit beside it.
+        repository_root().parent_path() / file_name,
     });
 }
 

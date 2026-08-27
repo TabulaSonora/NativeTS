@@ -3,6 +3,8 @@
 #include "dsp/fixed.hpp"
 #include "rom/sha256.hpp"
 
+#include "tabulasonora/build_registry.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -51,6 +53,33 @@ namespace {
     }
     return digits;
 }
+
+/// The message for a file that matches no build the engine knows.
+///
+/// It lists every build the registry does know, because the useful next step is almost always "you
+/// have a different SOUND Canvas VA release than you thought" and the sizes make that obvious at a
+/// glance. `SCCore.dll` carries no version resource, so there is nothing friendlier to report.
+[[nodiscard]] std::string unknown_build_message(const std::string& path,
+                                                std::int64_t length,
+                                                std::uint32_t pe_timestamp,
+                                                const std::string& sha256)
+{
+    std::ostringstream message;
+    message << "'" << path << "' is not an SCCore.dll build this engine knows: "
+            << with_separators(length) << " bytes, PE timestamp " << pe_timestamp << " ("
+            << format_timestamp(pe_timestamp) << ')';
+    if (!sha256.empty()) {
+        message << ", SHA-256 " << sha256;
+    }
+    message << ". Known builds:";
+    for (const BuildProfile& profile : BuildRegistry::defaults().builds()) {
+        message << "\n  " << profile.id() << "  " << with_separators(profile.identity().size)
+                << " bytes  " << format_timestamp(profile.identity().pe_timestamp) << "  "
+                << profile.architecture() << "  " << profile.file_name();
+    }
+    return message.str();
+}
+
 
 } // namespace
 
@@ -206,9 +235,7 @@ RomImage::open(const std::string& path, RomVerification verification, const Tabl
     const TableManifest& map = manifest != nullptr ? *manifest : TableManifest::defaults();
     RomImage image{path, std::make_unique<FileSource>(path), map};
 
-    if (verification != RomVerification::none) {
-        image.verify(verification);
-    }
+    image.identify(verification);
     return image;
 }
 
@@ -220,13 +247,11 @@ RomImage RomImage::from_memory(std::span<const std::uint8_t> bytes,
     const TableManifest& map = manifest != nullptr ? *manifest : TableManifest::defaults();
     RomImage image{std::move(name), std::make_unique<MemorySource>(bytes), map};
 
-    if (verification != RomVerification::none) {
-        image.verify(verification);
-    }
+    image.identify(verification);
     return image;
 }
 
-void RomImage::read(std::int64_t file_offset, std::span<std::uint8_t> destination) const
+void RomImage::read_raw(std::int64_t file_offset, std::span<std::uint8_t> destination) const
 {
     if (file_offset < 0) {
         throw std::out_of_range("A file offset cannot be negative.");
@@ -246,6 +271,42 @@ void RomImage::read(std::int64_t file_offset, std::span<std::uint8_t> destinatio
     }
 }
 
+std::vector<std::uint8_t> RomImage::read_raw(std::int64_t file_offset, std::size_t length) const
+{
+    std::vector<std::uint8_t> buffer(length);
+    read_raw(file_offset, std::span<std::uint8_t>{buffer});
+    return buffer;
+}
+
+void RomImage::read(std::int64_t file_offset, std::span<std::uint8_t> destination) const
+{
+    if (file_offset < 0) {
+        throw std::out_of_range("A file offset cannot be negative.");
+    }
+    if (destination.empty()) {
+        return;
+    }
+
+    // On the pinned build this is one piece at the same offset, so the gather costs a single read.
+    const auto pieces = build_->map_range(file_offset, static_cast<std::int64_t>(destination.size()));
+    std::size_t written = 0;
+    for (const MappedPiece& piece : pieces) {
+        const auto length = static_cast<std::size_t>(piece.length);
+        if (!piece.mapped()) {
+            std::ostringstream message;
+            message << "'" << path_ << "' is " << build_->id() << ", whose .rdata is packed "
+                    << "differently from the pinned build; " << length << " byte"
+                    << (length == 1 ? "" : "s") << " at pinned offset 0x" << std::hex
+                    << piece.pinned_offset << std::dec
+                    << " could not be traced into it. That data is present in the file but its "
+                       "location is not proven, so reading it would be a guess.";
+            throw RomCoverageError(message.str());
+        }
+        read_raw(*piece.target_offset, destination.subspan(written, length));
+        written += length;
+    }
+}
+
 std::vector<std::uint8_t> RomImage::read(std::int64_t file_offset, std::size_t length) const
 {
     std::vector<std::uint8_t> buffer(length);
@@ -255,13 +316,27 @@ std::vector<std::uint8_t> RomImage::read(std::int64_t file_offset, std::size_t l
 
 std::vector<std::uint8_t> RomImage::read(const TableEntry& entry) const
 {
+    // A whole-table offset proven by content search beats reassembling the same bytes out of
+    // segments, so prefer it where the build records one.
+    if (const auto direct = build_->table_offset(entry.name)) {
+        return read_raw(*direct, static_cast<std::size_t>(entry.size));
+    }
     return read(entry.file_offset, static_cast<std::size_t>(entry.size));
+}
+
+std::int64_t RomImage::wave_rom_base(std::string_view region) const
+{
+    if (const auto offset = build_->wave_rom_offset(region)) {
+        return *offset;
+    }
+    throw std::out_of_range("Build '" + build_->id() + "' does not record wave-ROM region '"
+                            + std::string{region} + "'.");
 }
 
 std::uint32_t RomImage::read_pe_timestamp() const
 {
     std::array<std::uint8_t, 4> four{};
-    read(0x3C, four);
+    read_raw(0x3C, four);
 
     const std::int64_t pe_header = static_cast<std::int64_t>(fx::read_u32le(four.data()));
     if (pe_header <= 0 || pe_header + 8 > length_) {
@@ -269,12 +344,12 @@ std::uint32_t RomImage::read_pe_timestamp() const
     }
 
     std::array<std::uint8_t, 4> signature{};
-    read(pe_header, signature);
+    read_raw(pe_header, signature);
     if (signature[0] != 'P' || signature[1] != 'E' || signature[2] != 0 || signature[3] != 0) {
         return 0;
     }
 
-    read(pe_header + 8, four);
+    read_raw(pe_header + 8, four);
     return fx::read_u32le(four.data());
 }
 
@@ -297,36 +372,46 @@ std::string RomImage::compute_sha256() const
     return hash.finish_hex();
 }
 
-void RomImage::verify(RomVerification verification) const
+void RomImage::identify(RomVerification verification)
 {
-    const DllIdentity& expected = manifest_->dll();
+    const BuildRegistry& registry = BuildRegistry::defaults();
 
-    if (length_ != expected.size) {
-        throw RomIdentityError("'" + path_ + "' is " + with_separators(length_)
-                               + " bytes; the pinned build — the one that ships with "
-                               + expected.product + ' ' + expected.version + " — is "
-                               + with_separators(expected.size)
-                               + " bytes. A different build moves every table offset.");
+    // `none` skips identification entirely and assumes the pinned build, which is what the caller
+    // asked for: it is the mode for poking at an unrecognised file, where wrong offsets are the
+    // point rather than an accident.
+    if (verification == RomVerification::none) {
+        build_ = &registry.pinned();
+        return;
+    }
+
+    // Size first. A file matching no build's size cannot be any of them, and settling that before
+    // touching the PE header keeps a stray short file reporting "not a build I know" rather than
+    // failing inside the header reader, which is both the wrong error and the wrong exception type.
+    const bool plausible_size = std::any_of(registry.builds().begin(), registry.builds().end(),
+                                            [this](const BuildProfile& profile) {
+                                                return profile.identity().size == length_;
+                                            });
+    if (!plausible_size) {
+        throw RomIdentityError(unknown_build_message(path_, length_, 0, {}));
     }
 
     const std::uint32_t timestamp = read_pe_timestamp();
-    if (timestamp != expected.pe_timestamp) {
-        throw RomIdentityError("'" + path_ + "' has PE timestamp " + std::to_string(timestamp)
-                               + " (" + format_timestamp(timestamp) + "); the pinned build is "
-                               + std::to_string(expected.pe_timestamp) + " ("
-                               + format_timestamp(expected.pe_timestamp) + ").");
-    }
+    const BuildProfile* candidate = registry.find_by_size_and_timestamp(length_, timestamp);
 
-    if (verification != RomVerification::full) {
+    if (verification == RomVerification::quick) {
+        if (candidate == nullptr) {
+            throw RomIdentityError(unknown_build_message(path_, length_, timestamp, {}));
+        }
+        build_ = candidate;
         return;
     }
 
     const std::string sha256 = compute_sha256();
-    if (sha256 != expected.sha256) {
-        throw RomIdentityError("'" + path_ + "' has SHA-256 " + sha256 + "; the pinned build is "
-                               + expected.sha256
-                               + ". Table offsets are only valid for that exact build.");
+    const BuildProfile* found = registry.find_by_sha256(sha256);
+    if (found == nullptr) {
+        throw RomIdentityError(unknown_build_message(path_, length_, timestamp, sha256));
     }
+    build_ = found;
 }
 
 } // namespace ts
