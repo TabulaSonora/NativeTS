@@ -53,7 +53,16 @@ MAPS = {"Sc55": 1, "Sc88": 2, "Sc88Pro": 3, "Sc8820": 4}
 #     bank 0x41 -> 8005:223392
 #
 # Three distinct waves. The bank-0 fallback would have made all three identical.
-INDIRECT_BANKS = {0x40: MAPS["Sc88"], 0x41: MAPS["Sc55"]}
+# `program_resolve_tone` @180069200 tests the lookup bank before any of the three levels run, and
+# these two send it through an indirection table indexed by program. That table is a *separate
+# program map*: three 0x80-byte planes supplying the map, bank and program the lookup then uses, per
+# program, rather than one fixed redirect for the whole bank.
+#
+# This used to be modelled as "bank 0x40 means map Sc88 bank 0, keeping the program", which is what
+# the shipped data mostly amounts to -- but not everywhere, and the planes are what actually decide.
+# Reading them keeps this resolver independent of the engine while still being driven by the DLL.
+INDIRECT_BANK_TABLES = {0x40: "bank64", 0x41: "bank65"}
+INDIRECT_PLANE = 0x80
 
 
 def read_tables(image, manifest):
@@ -66,6 +75,8 @@ def read_tables(image, manifest):
         ("lut3", "lut3_32b0.bin"),
         ("tone", "tone_a.bin"),
         ("layered", "layered_1896690.bin"),
+        ("bank64", "tone_indirect_bank64_a8bf0.bin"),
+        ("bank65", "tone_indirect_bank65_a9800.bin"),
     ):
         entry = entries[name]
         offset = int(entry["file_offset"], 16)
@@ -102,12 +113,23 @@ def lut3_raw(tables, program, map_index, bank):
 
 
 def lut3_resolved(tables, program, map_index, bank):
-    # A compatibility bank resolves in the map it names, at that map's bank 0, whatever map the
-    # part is currently on. This is checked before the ordinary lookup because the current map's
-    # own entry for bank 0x40/0x41 is not what sounds.
-    redirect = INDIRECT_BANKS.get(bank)
-    if redirect is not None:
-        return lut3_raw(tables, program, redirect, 0)
+    # A compatibility bank redirects through its own program map, whatever map the part is currently
+    # on. Checked before the ordinary lookup because the current map's own entry for bank 0x40/0x41
+    # is not what sounds.
+    table_key = INDIRECT_BANK_TABLES.get(bank)
+    if table_key is not None:
+        table = tables[table_key]
+        if program < 0 or program >= INDIRECT_PLANE or len(table) < 3 * INDIRECT_PLANE:
+            return None
+        substituted_bank = table[INDIRECT_PLANE + program]
+        # The shipped planes substitute bank 0, so this resolves in one step. Guard against data
+        # that says otherwise rather than against anything observed.
+        if substituted_bank in INDIRECT_BANK_TABLES:
+            return None
+        return lut3_resolved(tables,
+                             table[2 * INDIRECT_PLANE + program],
+                             table[program],
+                             substituted_bank)
 
     raw = lut3_raw(tables, program, map_index, bank)
     if bank != 0 and (raw is None or raw == UNASSIGNED):
