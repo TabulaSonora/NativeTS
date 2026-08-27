@@ -58,6 +58,19 @@ export interface RomInfo {
     name: string;
     size: number;
     sha256: string;
+
+    /** Registry id of the build the bytes were identified as, e.g. `2016-03-09-x64`. */
+    build: string;
+
+    /** SOUND Canvas VA release the build ships in, e.g. `1.1.6` or `1.0.3`. */
+    version: string;
+
+    /** `x64` or `x86`. The DLL is read as data, never executed, so either works on any host. */
+    architecture: string;
+
+    /** Whether this is the build the manifest's offsets are recorded in. */
+    pinned: boolean;
+
     verified: boolean;
 }
 
