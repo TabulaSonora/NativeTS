@@ -1,5 +1,7 @@
 #include "tabulasonora/build_registry.hpp"
 
+#include "tabulasonora/effect_presets.hpp"
+#include "tabulasonora/effect_programmer.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/wave_rom.hpp"
 #include "test_data.hpp"
@@ -178,5 +180,67 @@ TEST_CASE("an unknown build is refused with a message naming what is known", "[r
         const std::string text = error.what();
         CHECK(text.find("Known builds") != std::string::npos);
         CHECK(text.find("SCCore.dll") != std::string::npos);
+    }
+}
+
+TEST_CASE("the effect programmer resolves through the build it is reading", "[rom][builds][sccore]")
+{
+    // The effect coefficients are not reached through manifest offsets: EffectProgrammer reads a
+    // handful of tables at addresses of its own, four of which are pointer tables it dereferences.
+    // Those cannot be content-mapped -- their entries are image VAs -- so the registry records where
+    // each landed per build, and the pointers resolve through that build's section table.
+    for (const BuildProfile& profile : BuildRegistry::defaults().builds()) {
+        INFO("build " << profile.id());
+        if (profile.pinned()) {
+            CHECK_FALSE(profile.effect_offset("tap_pointers").has_value());
+            continue;
+        }
+        for (const char* symbol : {"tap_pointers", "second_tap_pointers", "level_pointers",
+                                   "coefficient_pointers", "reverb_macro_rows", "chorus_macro_rows",
+                                   "chorus_lpf_ladder", "reverb_damp_ladder", "delay_preset_offset",
+                                   "eq_low_table", "eq_high_table"}) {
+            INFO("symbol " << symbol);
+            CHECK(profile.effect_offset(symbol).has_value());
+        }
+
+        // A pointer read out of a 32-bit image is four bytes, not eight.
+        CHECK(profile.pointer_size() == (profile.architecture() == "x86" ? 4 : 8));
+
+        // A VA that is plainly outside the image must not resolve to a file offset, or a bad
+        // pointer would read whatever happened to sit at the clamped position.
+        CHECK_FALSE(profile.va_to_file_offset(0).has_value());
+    }
+}
+
+TEST_CASE("every build programs the same effect presets", "[rom][builds][sccore]")
+{
+    const fs::path pinned_path = testdata::require_sccore();
+    const RomImage pinned = RomImage::open(pinned_path.string(), RomVerification::full);
+    const EffectPresets reference = EffectProgrammer::compute(pinned);
+
+    for (const char* name : {"SCCore.64.dll", "SCCore.32.dll"}) {
+        const auto path = testdata::alternate_build(name);
+        if (!path) {
+            continue;
+        }
+        const RomImage other = RomImage::open(path->string(), RomVerification::full);
+        const EffectPresets computed = EffectProgrammer::compute(other);
+
+        // The coefficient data is the same in every build; only the addresses naming it differ.
+        INFO(name);
+        REQUIRE(computed.reverb().types.size() == reference.reverb().types.size());
+        REQUIRE(computed.chorus().types.size() == reference.chorus().types.size());
+        for (std::size_t i = 0; i < reference.reverb().types.size(); ++i) {
+            INFO("reverb type " << i);
+            const ReverbPreset& a = reference.reverb().types[i];
+            const ReverbPreset& b = computed.reverb().types[i];
+            CHECK(b.injection_tap == a.injection_tap);
+            CHECK(b.damp_feedback == a.damp_feedback);
+            CHECK(b.damp_input == a.damp_input);
+            CHECK(b.gain_input == a.gain_input);
+            CHECK(b.gain_output == a.gain_output);
+        }
+        CHECK(computed.reverb().type_names == reference.reverb().type_names);
+        CHECK(computed.chorus().type_names == reference.chorus().type_names);
     }
 }

@@ -14,9 +14,61 @@
    "md5": "f16b5eb9c7e204de7f9b3a829d2d5500",
    "pe_timestamp": 1457503232,
    "pinned": false,
+   "image_base": "0x180000000",
+   "sections": [
+    {
+     "rva": "0x1000",
+     "virtual_size": "0xa2b7b",
+     "raw": "0x400",
+     "raw_size": "0xa2c00"
+    },
+    {
+     "rva": "0xa4000",
+     "virtual_size": "0x1977b06",
+     "raw": "0xa3000",
+     "raw_size": "0x1977c00"
+    },
+    {
+     "rva": "0x1a1c000",
+     "virtual_size": "0x71a40",
+     "raw": "0x1a1ac00",
+     "raw_size": "0x8000"
+    },
+    {
+     "rva": "0x1a8e000",
+     "virtual_size": "0x3ad4",
+     "raw": "0x1a22c00",
+     "raw_size": "0x3c00"
+    },
+    {
+     "rva": "0x1a92000",
+     "virtual_size": "0x1b4",
+     "raw": "0x1a26800",
+     "raw_size": "0x200"
+    },
+    {
+     "rva": "0x1a93000",
+     "virtual_size": "0x4848",
+     "raw": "0x1a26a00",
+     "raw_size": "0x4a00"
+    }
+   ],
    "wave_rom": {
     "wave_rom_bank_A": "0xa15130",
     "wave_rom_bank_B": "0x215120"
+   },
+   "effects": {
+    "chorus_lpf_ladder": "0xf9a98",
+    "chorus_macro_rows": "0x1a151b0",
+    "delay_preset_offset": "0x215030",
+    "eq_high_table": "0x210b30",
+    "eq_low_table": "0x210a00",
+    "reverb_damp_ladder": "0xf9a98",
+    "reverb_macro_rows": "0x106ab8",
+    "coefficient_pointers": "0x1068b0",
+    "level_pointers": "0x106950",
+    "second_tap_pointers": "0x1069a0",
+    "tap_pointers": "0x106900"
    },
    "tables": {
     "curve_amp_hi_2ba0.bin": "0x104a00",
@@ -4878,9 +4930,55 @@
    "md5": "d44d1b8c9a6f956ca2324f2f5d348c44",
    "pe_timestamp": 1457503331,
    "pinned": false,
+   "image_base": "0x10000000",
+   "sections": [
+    {
+     "rva": "0x1000",
+     "virtual_size": "0x9c34e",
+     "raw": "0x400",
+     "raw_size": "0x9c400"
+    },
+    {
+     "rva": "0x9e000",
+     "virtual_size": "0x1972766",
+     "raw": "0x9c800",
+     "raw_size": "0x1972800"
+    },
+    {
+     "rva": "0x1a11000",
+     "virtual_size": "0x6f4a0",
+     "raw": "0x1a0f000",
+     "raw_size": "0x8000"
+    },
+    {
+     "rva": "0x1a81000",
+     "virtual_size": "0x1b4",
+     "raw": "0x1a17000",
+     "raw_size": "0x200"
+    },
+    {
+     "rva": "0x1a82000",
+     "virtual_size": "0x1be40",
+     "raw": "0x1a17200",
+     "raw_size": "0x1c000"
+    }
+   ],
    "wave_rom": {
     "wave_rom_bank_A": "0xa0cd58",
     "wave_rom_bank_B": "0x20cd48"
+   },
+   "effects": {
+    "chorus_lpf_ladder": "0xff6b0",
+    "chorus_macro_rows": "0x1a0cd88",
+    "delay_preset_offset": "0x20cc40",
+    "eq_high_table": "0x208d08",
+    "eq_low_table": "0x208bc0",
+    "reverb_damp_ladder": "0xff6b0",
+    "reverb_macro_rows": "0xffcc8",
+    "coefficient_pointers": "0xffb08",
+    "level_pointers": "0xffb58",
+    "second_tap_pointers": "0xffb80",
+    "tap_pointers": "0xffb30"
    },
    "tables": {
     "curve_amp_hi_2ba0.bin": "0xfdb20",
@@ -9707,6 +9805,45 @@
    "md5": "dbd9a30c168efef577d40a28d9adf37d",
    "pe_timestamp": 1572416468,
    "pinned": true,
+   "image_base": "0x180000000",
+   "sections": [
+    {
+     "rva": "0x1000",
+     "virtual_size": "0x90bcb",
+     "raw": "0x400",
+     "raw_size": "0x90c00"
+    },
+    {
+     "rva": "0x92000",
+     "virtual_size": "0x1976aa6",
+     "raw": "0x91000",
+     "raw_size": "0x1976c00"
+    },
+    {
+     "rva": "0x1a09000",
+     "virtual_size": "0x6cb40",
+     "raw": "0x1a07c00",
+     "raw_size": "0x8600"
+    },
+    {
+     "rva": "0x1a76000",
+     "virtual_size": "0x3618",
+     "raw": "0x1a10200",
+     "raw_size": "0x3800"
+    },
+    {
+     "rva": "0x1a7a000",
+     "virtual_size": "0x1e0",
+     "raw": "0x1a13a00",
+     "raw_size": "0x200"
+    },
+    {
+     "rva": "0x1a7b000",
+     "virtual_size": "0xca4",
+     "raw": "0x1a13c00",
+     "raw_size": "0xe00"
+    }
+   ],
    "wave_rom": {
     "wave_rom_bank_A": "0x92700",
     "wave_rom_bank_B": "0x1092730"

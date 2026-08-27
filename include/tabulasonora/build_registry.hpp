@@ -94,6 +94,25 @@ public:
     /// rather than a reassembly, and it reaches tables too short for any window search to anchor.
     [[nodiscard]] std::optional<std::int64_t> table_offset(std::string_view name) const;
 
+    /// Width of a stored pointer in this build: 8 for x64, 4 for x86.
+    ///
+    /// The effect programmer dereferences pointer tables, and a 32-bit image stores 4-byte entries.
+    [[nodiscard]] int pointer_size() const noexcept { return architecture_ == "x86" ? 4 : 8; }
+
+    /// Where one of the effect programmer's own reads lands in this build, by symbol name.
+    ///
+    /// Kept apart from the segment map because four of these are *pointer tables*, whose entries are
+    /// image VAs. A content map can never place those: the value encodes an address, so it differs
+    /// in every build by construction. Returns nothing for the reference build, whose offsets are
+    /// the ones compiled into `EffectProgrammer`.
+    [[nodiscard]] std::optional<std::int64_t> effect_offset(std::string_view symbol) const;
+
+    /// Turns an image VA read out of *this* build into a file offset in it.
+    ///
+    /// The effect programmer dereferences pointer tables, and a pointer read from a 2016 image names
+    /// an address in that image's layout, not the reference build's.
+    [[nodiscard]] std::optional<std::int64_t> va_to_file_offset(std::int64_t va) const;
+
     /// The wave-ROM bank offset in this build, by manifest region name.
     ///
     /// The ROM is excluded from the segment map — 24 MB of bytes identical across every build would
@@ -119,6 +138,12 @@ private:
     std::vector<BuildSegment> segments_;
     std::vector<std::pair<std::string, std::int64_t>> wave_rom_;
     std::vector<std::pair<std::string, std::int64_t>> tables_;
+    std::vector<std::pair<std::string, std::int64_t>> effects_;
+    std::int64_t image_base_ = 0;
+    struct Section {
+        std::int64_t rva, virtual_size, raw, raw_size;
+    };
+    std::vector<Section> sections_;
 };
 
 /// Every build the engine recognises, keyed by content hash.

@@ -42,7 +42,7 @@ using nlohmann::json;
 [[nodiscard]] std::int64_t parse_hex(const std::string& text)
 {
     if (text.empty()) {
-        throw std::runtime_error("builds.json has an empty hex value.");
+        return 0;
     }
     return static_cast<std::int64_t>(std::stoll(text, nullptr, 16));
 }
@@ -117,6 +117,32 @@ bool BuildProfile::covers_table(const TableEntry& entry) const
     return table_offset(entry.name).has_value() || covers(entry.file_offset, entry.size);
 }
 
+std::optional<std::int64_t> BuildProfile::effect_offset(std::string_view symbol) const
+{
+    for (const auto& [name, offset] : effects_) {
+        if (name == symbol) {
+            return offset;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::int64_t> BuildProfile::va_to_file_offset(std::int64_t va) const
+{
+    const std::int64_t rva = va - image_base_;
+    for (const Section& section : sections_) {
+        const std::int64_t span = std::max(section.virtual_size, section.raw_size);
+        if (rva >= section.rva && rva < section.rva + span) {
+            const std::int64_t offset = section.raw + (rva - section.rva);
+            if (offset < section.raw + section.raw_size) {
+                return offset;
+            }
+            return std::nullopt;   // in the section's virtual tail, which has no bytes on disk
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<std::int64_t> BuildProfile::wave_rom_offset(std::string_view region) const
 {
     for (const auto& [name, offset] : wave_rom_) {
@@ -183,6 +209,22 @@ BuildRegistry BuildRegistry::parse(std::string_view text)
         identity.md5 = lower_hex(string_or_empty(item, "md5"));
         identity.pe_timestamp = require(item, "pe_timestamp").get<std::uint32_t>();
         profile.identity_ = std::move(identity);
+
+        profile.image_base_ = parse_hex(string_or_empty(item, "image_base"));
+        if (const auto sections = item.find("sections"); sections != item.end()) {
+            for (const json& section : *sections) {
+                profile.sections_.push_back({parse_hex(section.at("rva").get<std::string>()),
+                                             parse_hex(section.at("virtual_size").get<std::string>()),
+                                             parse_hex(section.at("raw").get<std::string>()),
+                                             parse_hex(section.at("raw_size").get<std::string>())});
+            }
+        }
+
+        if (const auto effects = item.find("effects"); effects != item.end()) {
+            for (const auto& [name, offset] : effects->items()) {
+                profile.effects_.emplace_back(name, parse_hex(offset.get<std::string>()));
+            }
+        }
 
         if (const auto tables = item.find("tables"); tables != item.end()) {
             for (const auto& [name, offset] : tables->items()) {

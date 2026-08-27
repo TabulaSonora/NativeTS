@@ -21,7 +21,7 @@ Reads the spec repo's versions.json and segments-*.json, re-verifies every segme
 DLLs, and writes a compact registry. Segments are emitted as flat [start, end, shift] triples because
 there are ~800 per build and one JSON object each would triple the asset for no gain.
 """
-import argparse, hashlib, json, os, struct, sys
+import argparse, hashlib, json, os, struct, subprocess, sys, tempfile
 
 ROM_MAGIC = bytes.fromhex("A4EBA52BE929")
 ROM_BLOCK = 0x100000
@@ -43,6 +43,23 @@ def parse_hex(text):
 def pe_timestamp(data):
     e_lfanew = struct.unpack_from("<I", data, 0x3C)[0]
     return struct.unpack_from("<I", data, e_lfanew + 8)[0]
+
+def pe_layout(data):
+    """Image base and section table -- what turns a VA read out of this build into a file offset."""
+    e = struct.unpack_from("<I", data, 0x3C)[0]
+    opt = e + 24
+    is64 = struct.unpack_from("<H", data, opt)[0] == 0x20B
+    base = struct.unpack_from("<Q" if is64 else "<I", data, opt + (24 if is64 else 28))[0]
+    count = struct.unpack_from("<H", data, e + 6)[0]
+    opt_size = struct.unpack_from("<H", data, e + 20)[0]
+    sections = []
+    for i in range(count):
+        o = opt + opt_size + 40 * i
+        vsize, rva, rsize, raw = struct.unpack_from("<IIII", data, o + 8)
+        if rsize:
+            sections.append({"rva": "0x%x" % rva, "virtual_size": "0x%x" % vsize,
+                             "raw": "0x%x" % raw, "raw_size": "0x%x" % rsize})
+    return "0x%x" % base, sections
 
 def wave_rom_banks(data):
     """The two bank blobs, by contiguity. Builds differ in which order they store them."""
@@ -107,6 +124,10 @@ def main():
 
     for key, build in sorted(versions["builds"].items()):
         data = images[key]
+        # Recompute rather than inherit `path` from the loop above, whose last iteration leaves it
+        # pointing at whichever build sorted last -- which silently made the effect locator compare
+        # the reference build against itself.
+        build_path = os.path.join(args.dll_dir, build["filename"])
         entry = {
             "id": key,
             "file_name": build["filename"],
@@ -120,9 +141,27 @@ def main():
             "md5": build["md5"],
             "pe_timestamp": build["pe_timestamp"],
             "pinned": build["sha256"].lower() == pinned_sha,
+            "image_base": pe_layout(data)[0],
+            "sections": pe_layout(data)[1],
             "wave_rom": {k: "0x%x" % v for k, v in sorted(wave_rom_banks(data).items())},
         }
         if not entry["pinned"]:
+            # Where EffectProgrammer's own reads land in this build. Separate from "segments"
+            # because four of them are pointer tables, which a content map can never place: their
+            # entries are image VAs, so they differ in every build by construction.
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as scratch:
+                fx_path = scratch.name
+            subprocess.run([sys.executable,
+                            os.path.join(here, "tools", "locate_effect_tables.py"),
+                            os.path.join(args.dll_dir, manifest["dll"]["filename"]),
+                            build_path, fx_path], check=True, stdout=subprocess.DEVNULL)
+            effects = json.load(open(fx_path))
+            os.unlink(fx_path)
+            missing = sorted(k for k, v in effects.items() if v is None)
+            if missing:
+                sys.exit("%s: effect tables unresolved: %s" % (key, ", ".join(missing)))
+            entry["effects"] = effects
+
             # Tables found byte-exact as a whole blob in this build. A proven offset for the whole
             # table is better evidence than stitching it out of segments, and it places short ones
             # (`g_ramp_divider` is four bytes) that no window search could ever anchor.

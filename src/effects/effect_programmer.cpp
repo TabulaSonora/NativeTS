@@ -25,6 +25,38 @@ constexpr std::int64_t section_adjust = 0x1000;
     return virtual_address - image_base - section_adjust;
 }
 
+/// Every read in this file is `read_raw`: the offsets here are already in the target build's own
+/// coordinates, either because `located` returned that build's, or because `pointer_target` resolved
+/// a pointer through its section table. Passing one through `RomImage::read` would translate it a
+/// second time, from a pinned offset it never was.
+///
+/// Where one of these tables lands in the build actually being read.
+///
+/// The constants below are the reference build's. Roland re-packed `.rdata` between releases, and
+/// four of these are pointer tables, which no content map can place -- their entries are image VAs,
+/// so they differ in every build by construction. `builds.json` records where each one landed;
+/// `fallback` is used for the reference build, which records none.
+[[nodiscard]] std::int64_t located(const RomImage& rom, std::string_view symbol,
+                                   std::int64_t fallback)
+{
+    if (const auto offset = rom.build().effect_offset(symbol)) {
+        return *offset;
+    }
+    return fallback;
+}
+
+/// Resolves a pointer read out of the DLL, in that DLL's own layout.
+///
+/// A VA stored in a 2016 image names an address in *its* sections, not the reference build's, so the
+/// fixed `-image_base -0x1000` is only right for the build the constants came from.
+[[nodiscard]] std::int64_t pointer_target(const RomImage& rom, std::int64_t virtual_address)
+{
+    if (const auto offset = rom.build().va_to_file_offset(virtual_address)) {
+        return *offset;
+    }
+    return file_offset(virtual_address);
+}
+
 // The GS macro parameter rows the SysEx handlers load: `sysex_reverb_macro` @ 0x180071c20 reads
 // 7-byte rows from g_reverb_preset_tbl, and the chorus rows are 8 bytes wide.
 constexpr std::int64_t reverb_macro_rows = file_offset(0x1819A0248);
@@ -135,7 +167,7 @@ constexpr std::array<double, 120> delay_ratio_percent{
 [[nodiscard]] std::vector<std::uint16_t>
 read_u16(const RomImage& rom, std::int64_t offset, std::size_t count)
 {
-    const std::vector<std::uint8_t> bytes = rom.read(offset, count * 2);
+    const std::vector<std::uint8_t> bytes = rom.read_raw(offset, count * 2);
     std::vector<std::uint16_t> values(count);
     for (std::size_t i = 0; i < count; ++i) {
         values[i] = fx::read_u16le(bytes.data() + (i * 2));
@@ -147,15 +179,19 @@ read_u16(const RomImage& rom, std::int64_t offset, std::size_t count)
 [[nodiscard]] std::vector<std::uint16_t>
 read_row(const RomImage& rom, std::int64_t pointer_table, int index, std::size_t count)
 {
+    // Entry width follows the image: a 32-bit build stores 4-byte pointers, and reading 8 there
+    // splices the next entry onto the address.
+    const int width = rom.build().pointer_size();
     const std::vector<std::uint8_t> pointer =
-        rom.read(pointer_table + (static_cast<std::int64_t>(index) * 8), 8);
+        rom.read_raw(pointer_table + (static_cast<std::int64_t>(index) * width),
+                     static_cast<std::size_t>(width));
 
     std::uint64_t address = 0;
-    for (int i = 7; i >= 0; --i) {
+    for (int i = width - 1; i >= 0; --i) {
         address = (address << 8) | pointer[static_cast<std::size_t>(i)];
     }
 
-    return read_u16(rom, file_offset(static_cast<std::int64_t>(address)), count);
+    return read_u16(rom, pointer_target(rom, static_cast<std::int64_t>(address)), count);
 }
 
 /// Reads one EQ band's whole table: two frequency rows of 25 gain settings.
@@ -218,9 +254,9 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
 
     // The per-character program rows, through the loader's pointer tables. Taps are stored relative
     // to the ring base every GS macro program uses.
-    const std::vector<int> stored = read_signed_row(rom, tap_pointers, character, 24);
-    const std::vector<int> stored_second = read_signed_row(rom, second_tap_pointers, character, 8);
-    const std::vector<std::uint16_t> coefs = read_row(rom, coefficient_pointers, character, 20);
+    const std::vector<int> stored = read_signed_row(rom, located(rom, "tap_pointers", tap_pointers), character, 24);
+    const std::vector<int> stored_second = read_signed_row(rom, located(rom, "second_tap_pointers", second_tap_pointers), character, 8);
+    const std::vector<std::uint16_t> coefs = read_row(rom, located(rom, "coefficient_pointers", coefficient_pointers), character, 20);
 
     std::array<int, 24> tap{};
     for (std::size_t i = 0; i < tap.size(); ++i) {
@@ -316,8 +352,8 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
 
     // The computed registers: injection from the pre-delay byte, damping from the pre-LPF ladder,
     // and the gain-bank targets the per-block ramp converts.
-    const std::vector<std::uint16_t> ladder = read_u16(rom, reverb_damp_ladder, 16);
-    const int level = read_row(rom, level_pointers, character, 1)[0];
+    const std::vector<std::uint16_t> ladder = read_u16(rom, located(rom, "reverb_damp_ladder", reverb_damp_ladder), 16);
+    const int level = read_row(rom, located(rom, "level_pointers", level_pointers), character, 1)[0];
 
     preset.injection_tap = (pre_delay + 0x80) * 0x20;
     preset.damp_feedback = fixed14(ladder[static_cast<std::size_t>(pre_lpf) * 2]);
@@ -346,7 +382,7 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
     // `chorus_apply_params`: the LFO increment and tap bases go through the dispatcher's
     // signed-14-bit decode, where a negative value is a 12.12 fixed-point base rather than a
     // sign-extended count.
-    const std::vector<std::uint16_t> ladder = read_u16(rom, chorus_lpf_ladder, 16);
+    const std::vector<std::uint16_t> ladder = read_u16(rom, located(rom, "chorus_lpf_ladder", chorus_lpf_ladder), 16);
     const int tap_depth = (depth + 1) * 0x28;
     const int base = tap_base((delay * 3) - 0x8000);
 
@@ -374,8 +410,8 @@ read_signed_row(const RomImage& rom, std::int64_t pointer_table, int index, std:
 std::vector<std::array<int, EffectProgrammer::delay_preset_stride>>
 EffectProgrammer::read_delay_presets(const RomImage& rom)
 {
-    const std::vector<std::uint8_t> bytes = rom.read(
-        delay_preset_offset, static_cast<std::size_t>(delay_type_count) * delay_preset_stride);
+    const std::vector<std::uint8_t> bytes = rom.read_raw(
+        located(rom, "delay_preset_offset", delay_preset_offset), static_cast<std::size_t>(delay_type_count) * delay_preset_stride);
 
     std::vector<std::array<int, delay_preset_stride>> presets(delay_type_count);
     for (int t = 0; t < delay_type_count; ++t) {
@@ -397,7 +433,7 @@ EffectProgrammer::read_delay_presets(const RomImage& rom)
 std::array<std::uint8_t, EffectProgrammer::reverb_row_bytes>
 EffectProgrammer::reverb_macro_row(const RomImage& rom, int type)
 {
-    const std::vector<std::uint8_t> rows = rom.read(reverb_macro_rows, 8 * reverb_row_bytes);
+    const std::vector<std::uint8_t> rows = rom.read_raw(located(rom, "reverb_macro_rows", reverb_macro_rows), 8 * reverb_row_bytes);
     std::array<std::uint8_t, reverb_row_bytes> row{};
     const std::size_t at = static_cast<std::size_t>(std::clamp(type, 0, 7)) * reverb_row_bytes;
     std::copy_n(rows.begin() + static_cast<std::ptrdiff_t>(at), reverb_row_bytes, row.begin());
@@ -407,7 +443,7 @@ EffectProgrammer::reverb_macro_row(const RomImage& rom, int type)
 std::array<std::uint8_t, EffectProgrammer::chorus_row_bytes>
 EffectProgrammer::chorus_macro_row(const RomImage& rom, int type)
 {
-    const std::vector<std::uint8_t> rows = rom.read(chorus_macro_rows, 8 * chorus_row_bytes);
+    const std::vector<std::uint8_t> rows = rom.read_raw(located(rom, "chorus_macro_rows", chorus_macro_rows), 8 * chorus_row_bytes);
     std::array<std::uint8_t, chorus_row_bytes> row{};
     const std::size_t at = static_cast<std::size_t>(std::clamp(type, 0, 7)) * chorus_row_bytes;
     std::copy_n(rows.begin() + static_cast<std::ptrdiff_t>(at), chorus_row_bytes, row.begin());
@@ -428,8 +464,8 @@ ChorusPreset EffectProgrammer::chorus_from_row(const RomImage& rom,
 
 EffectPresets EffectProgrammer::compute(const RomImage& rom)
 {
-    const std::vector<std::uint8_t> reverb_rows = rom.read(reverb_macro_rows, 8 * 7);
-    const std::vector<std::uint8_t> chorus_rows = rom.read(chorus_macro_rows, 8 * 8);
+    const std::vector<std::uint8_t> reverb_rows = rom.read_raw(located(rom, "reverb_macro_rows", reverb_macro_rows), 8 * 7);
+    const std::vector<std::uint8_t> chorus_rows = rom.read_raw(located(rom, "chorus_macro_rows", chorus_macro_rows), 8 * 8);
 
     ReverbPresets reverb;
     reverb.type_names = {"Room1", "Room2", "Room3", "Hall1", "Hall2", "Plate", "Delay", "PanDelay"};
@@ -473,8 +509,8 @@ EffectPresets EffectProgrammer::compute(const RomImage& rom)
     delay.raw_presets = read_delay_presets(rom);
 
     EqPresets eq;
-    read_eq_table(rom, eq_low_table, eq.low);
-    read_eq_table(rom, eq_high_table, eq.high);
+    read_eq_table(rom, located(rom, "eq_low_table", eq_low_table), eq.low);
+    read_eq_table(rom, located(rom, "eq_high_table", eq_high_table), eq.high);
 
     return EffectPresets::from_parts(std::move(reverb), std::move(chorus), std::move(delay), eq);
 }
