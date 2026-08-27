@@ -269,8 +269,9 @@ The 1.0.3 builds hold the same table data and the same wave ROM; Roland simply r
 between the releases, so the engine translates through a per-build segment map. Rendering the same
 notes through both DLLs agrees to within one 16-bit LSB.
 
-Support for 1.0.3 is not yet complete: 39 of the 52 tables resolve in it, the rest being ranges whose
-re-packed location could not be proven. `tabula-sonora info --dll <path>` names them. Reading one is
+Support for 1.0.3 is not yet complete: 41 of the 52 tables resolve in it. The rest are ranges where
+the cached blob over-reads past the real table into the linker's own section names and pointers, which
+encode addresses and so cannot exist in a differently laid-out build. `tabula-sonora info --dll <path>` names them. Reading one is
 refused rather than guessed at, so a partial build fails loudly instead of rendering subtly wrong.
 
 ## What is and is not in this repository
