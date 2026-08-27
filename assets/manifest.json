@@ -211,7 +211,10 @@
       "va": "0x181a01020",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "multisample velocity-crossfade curve"
+      "purpose": "multisample velocity-crossfade curve",
+      "index": "(block[0x4e] & 0xf)*0x80 + t",
+      "rows": 16,
+      "index_note": "crossfade shape row per low nibble"
     },
     {
       "name": "env_shape_7a90.bin",
@@ -257,13 +260,16 @@
       "symbol": "g_kf_pitch",
       "subsystem": "PITCH",
       "dtype": "s16",
-      "shape": "4x128 (row*0x80+key); the cached 2048 bytes run into g_kf_pitchrate0",
+      "shape": "8x128 (row*0x80+key)",
       "size": 2048,
       "file_offset": "0x1a00b20",
       "va": "0x181a01b20",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "pitch key-follow; partial_compute_pitch @18005fc20 reads row 2"
+      "purpose": "pitch key-follow (row=(block[0x13]-0x40)>>2)",
+      "index": "clamp(0,7,(block[0x13]-0x40)>>2)*0x80 + key",
+      "rows": 8,
+      "index_note": "row clamped to 0-7"
     },
     {
       "name": "kf_pitchrate0_01f20.bin",
@@ -276,7 +282,10 @@
       "va": "0x181a01f20",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "pitch env rate key-follow, segments (block 0x27/0x29)"
+      "purpose": "pitch env rate key-follow, segments (block 0x27/0x29)",
+      "index": "block[0x27]*0x80 + key",
+      "rows": 128,
+      "index_note": "block[0x27] reaches 0xff in the tone table, which would index row 255 -- this blob covers only rows 0-127; see docs/DLL_VERSIONS.md"
     },
     {
       "name": "kf_pitchrate1_01aa0.bin",
@@ -289,7 +298,10 @@
       "va": "0x181a01aa0",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "pitch env rate key-follow, release (block 0x27/0x2a)"
+      "purpose": "pitch env rate key-follow, release (block 0x27/0x2a)",
+      "index": "block[0x27]*0x80 + key",
+      "rows": 128,
+      "index_note": "same 0xff reach as kf_pitchrate0"
     },
     {
       "name": "kf_tvalevel2_01fa0.bin",
@@ -302,7 +314,9 @@
       "va": "0x181a01fa0",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "TVA level key-follow (second term)"
+      "purpose": "TVA level key-follow (second term)",
+      "index": "block[0x55]*0x80 + key",
+      "rows": 128
     },
     {
       "name": "kf_tvalevel_026a0.bin",
@@ -315,7 +329,9 @@
       "va": "0x181a026a0",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "TVA base-level key-follow"
+      "purpose": "TVA base-level key-follow",
+      "index": "block[0x54]*0x80 + key",
+      "rows": 128
     },
     {
       "name": "kf_tvarate0_023a0.bin",
@@ -328,7 +344,9 @@
       "va": "0x181a023a0",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "TVA env rate key-follow, segments (block 0x65)"
+      "purpose": "TVA env rate key-follow, segments (block 0x65)",
+      "index": "block[0x65]*0x80 + key  (block[0x66] for the release row)",
+      "rows": 128
     },
     {
       "name": "kf_tvarate1_020a0.bin",
@@ -341,20 +359,25 @@
       "va": "0x181a020a0",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "TVA env rate key-follow, release (block 0x66)"
+      "purpose": "TVA env rate key-follow, release (block 0x66)",
+      "index": "block[0x66]*0x80 + key",
+      "rows": 128
     },
     {
       "name": "kf_tvfenv_02a20.bin",
       "symbol": "g_kf_tvfenv",
       "subsystem": "TVF",
       "dtype": "s16",
-      "shape": "128x128 (rows 0-15 used)",
-      "size": 32768,
+      "shape": "16x128 (row = block[0x32] & 0xf)",
+      "size": 4096,
       "file_offset": "0x1a01a20",
       "va": "0x181a02a20",
       "section_adjust": "0x1000",
-      "match": "prefix 25059/32768",
-      "purpose": "TVF env-depth key-follow (block 0x32 nibble)"
+      "match": "full",
+      "purpose": "TVF env-depth key-follow (block 0x32 nibble)",
+      "index": "(block[0x32] & 0xf)*0x80 + key",
+      "rows": 16,
+      "index_note": "index nibble-masked, so only rows 0-15 are reachable"
     },
     {
       "name": "kf_tvfrate_03920.bin",
@@ -367,7 +390,9 @@
       "va": "0x181a03920",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "TVF env rate key-follow (main 0x46/0x48; release row0 == g_kf_tvfrate2)"
+      "purpose": "TVF env rate key-follow (main 0x46/0x48; release row0 == g_kf_tvfrate2)",
+      "index": "block[0x46]*0x80 + key  (block[0x47] for the release row)",
+      "rows": 128
     },
     {
       "name": "layered_1896690.bin",
@@ -484,7 +509,8 @@
       "va": "0x1819f28b0",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "program/tone directory LUT 2"
+      "purpose": "program/tone directory LUT 2",
+      "index": "g_dir_lut1[tone_map]*0x80 + bank"
     },
     {
       "name": "lut3_32b0.bin",
@@ -497,7 +523,8 @@
       "va": "0x1819f32b0",
       "section_adjust": "0x1000",
       "match": "full",
-      "purpose": "program/tone directory LUT 3 (tone# lookup)"
+      "purpose": "program/tone directory LUT 3 (tone# lookup)",
+      "index": "(g_dir_lut2[i2]*0x80 + program)*2"
     },
     {
       "name": "multisample_a.bin",
@@ -601,8 +628,7 @@
       "va": null,
       "section_adjust": null,
       "match": "full",
-      "purpose": "tone records (header 0x24 + 4 partial 0x6e blocks), 2363 records",
-      "note": "was 0x80000 (2048 records), which was short: drum kits reference tones up to 2353, and those records read as ordinary tones -- 2049 is 'Tabla_Te', 2071 'Standard KK1'. The engine bounds this table nowhere (tone_lookup indexes it after testing only tone# < 0x4000), so the length is a layout fact: records read as tone records through 2362 and stop at 2363, and the next known object starts at 0x1985420. Confirmed against the DLL: program 49 note 57 on the drum part sounds at peak 0.118 there and rendered silent here."
+      "purpose": "tone records (header 0x24 + 4 partial 0x6e blocks)"
     },
     {
       "name": "tvf_ceil_a7ed0.bin",
@@ -667,8 +693,7 @@
       "va": null,
       "section_adjust": null,
       "match": "full",
-      "purpose": "wave descriptors: ROM coords, root key, loop",
-      "note": "was 0x16000 (4096 records), another round number and another 163 zones short. Multisamples a defined tone reaches name waves up to 4258, and 4259 records is exactly what fits before g_drum_kits at 0x18ad950 -- they end at 0x18ad942. The keys this silenced are the reverse and SFX drum kits, whose tones are themselves in the range the short tone slice used to hide. Note that g_wave_desc_table_b and _g_multisample_table_b are both aliased to the A tables at init (@180086d00), so the A/B selector in multisample_select_wave picks between two pointers to the same memory in this build -- these indices are not a second table."
+      "purpose": "wave descriptors: ROM coords, root key, loop"
     },
     {
       "name": "tone_indirect_bank64_a8bf0.bin",
@@ -740,5 +765,6 @@
       "va": "0x19f1eb0",
       "purpose": "[row*0x80+program] -> kit index (0xFF=undefined)"
     }
-  ]
+  ],
+  "_overlap_note": "Several cached_tables overlap in the file. That is NOT an extraction error: the key-follow tables and the directory LUTs are base pointers into a shared region, and each one legitimately spans its own whole indexable range (see each entry's 'index' and 'rows'). Do not 'fix' an overlap by shrinking a blob to the next entry's offset -- the engine really does read that far. The one true over-read was kf_tvfenv, whose index is nibble-masked to 16 rows; it is now sized 4096."
 }

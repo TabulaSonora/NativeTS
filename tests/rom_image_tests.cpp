@@ -70,7 +70,7 @@ TEST_CASE("every table reads byte-identical to the extracted cache", "[rom][scco
 
     // Guard against passing vacuously: a loop over an empty manifest would agree perfectly.
     CHECK(compared == 52);
-    CHECK(bytes == 1'246'872);
+    CHECK(bytes == 1'218'200);
 }
 
 TEST_CASE("a memory image reads the same as a file image", "[rom][sccore]")
