@@ -24,7 +24,9 @@
             </dl>
 
             <div class="row">
-                <span class="tag tag-success">Verified against the pinned build</span>
+                <span class="tag tag-success">{{ store.rom.version
+                    ? `Identified as SOUND Canvas VA ${store.rom.version} ${store.rom.architecture}`
+                    : 'Identified' }}</span>
                 <span class="note">Tables loaded.</span>
             </div>
 

@@ -93,12 +93,14 @@ void WebSession::load_rom(std::uint8_t* data, std::size_t length, std::string na
                                      trusted ? RomVerification::quick : RomVerification::full,
                                      nullptr, name);
 
-    // A stored hash still has to match the build this library is pinned to; the quick check above
-    // only skips recomputing it, it does not skip believing it.
-    if (trusted && !equals_ignore_case(expected_sha256, rom.manifest().dll().sha256)) {
+    // A stored hash still has to match the build the file was just identified as; the quick check
+    // above only skips recomputing it, it does not skip believing it. Compare against the build we
+    // resolved rather than the pinned one, or a perfectly good 2016 DLL is rejected for not being
+    // the 2019 one.
+    if (trusted && !equals_ignore_case(expected_sha256, rom.build().identity().sha256)) {
         throw RomIdentityError("The stored copy of '" + name + "' has SHA-256 " + expected_sha256
-                               + "; the pinned build is " + rom.manifest().dll().sha256
-                               + ". Pick the file again.");
+                               + ", but that file is " + rom.build().id() + ", whose SHA-256 is "
+                               + rom.build().identity().sha256 + ". Pick the file again.");
     }
 
     unload_rom();
@@ -432,7 +434,11 @@ std::string WebSession::rom_info_json() const
 
     return json{{"name", rom_name_},
                 {"size", rom_length_},
-                {"sha256", rom_->manifest().dll().sha256},
+                {"sha256", rom_->build().identity().sha256},
+                {"build", rom_->build().id()},
+                {"version", rom_->build().identity().version},
+                {"architecture", rom_->build().architecture()},
+                {"pinned", rom_->build().pinned()},
                 {"verified", rom_verified_}}
         .dump();
 }

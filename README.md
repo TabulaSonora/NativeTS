@@ -249,18 +249,29 @@ Mermaid, rendered by Doxygen itself.
 
 ## You need your own `SCCore.dll`
 
-The engine is inert without one, from a Sound Canvas VA installation you have licensed. The offsets
-are pinned to exactly one build — the one shipped in **SOUND Canvas VA 1.1.6**:
+The engine is inert without one, from a Sound Canvas VA installation you have licensed. Three builds
+are recognised, and `tabula-sonora manifest` lists them:
 
-| field | value |
-|---|---|
-| size | 27,347,456 bytes |
-| SHA-256 | `117e6aa147a96fbde5e10d2caf16c89965acc1e44235fd245992216cc620bdb1` |
-| PE timestamp | 2019-10-30 |
+| SCVA release | file | size | architecture |
+|---|---|---|---|
+| **1.1.6** (2019-10-30) | `SCCore.dll` | 27,347,456 bytes | x64 |
+| **1.0.3** (2016-03-09) | `SCCore.64.dll` | 27,440,128 bytes | x64 |
+| **1.0.3** (2016-03-09) | `SCCore.32.dll` | 27,472,384 bytes | x86 |
 
-A different build moves every table offset, so the ROM reader refuses to open one. The release
-number is how you find the right installer; it is not what identifies the file. The DLL carries no
-version resource at all, so the hash, the timestamp and the size are the identity.
+The DLL is read as *data*, never executed, so the x86 build is as usable as the x64 ones on any
+host. The release number is how you find the right installer; it is not what identifies the file.
+The DLL carries no version resource at all, so the hash, the timestamp and the size are the identity,
+and anything else is refused.
+
+`assets/manifest.json` records its offsets in the coordinates of the 1.1.6 build — that is the build
+the engine's behaviour was reverse-engineered from, which is the only sense in which it is special.
+The 1.0.3 builds hold the same table data and the same wave ROM; Roland simply re-packed `.rdata`
+between the releases, so the engine translates through a per-build segment map. Rendering the same
+notes through both DLLs agrees to within one 16-bit LSB.
+
+Support for 1.0.3 is not yet complete: 39 of the 52 tables resolve in it, the rest being ranges whose
+re-packed location could not be proven. `tabula-sonora info --dll <path>` names them. Reading one is
+refused rather than guessed at, so a partial build fails loudly instead of rendering subtly wrong.
 
 ## What is and is not in this repository
 

@@ -61,8 +61,10 @@ namespace `ts`.
 
 This engine is inert on its own. Roland's wave ROM and tables are not redistributed here — see
 `NOTICE.md`, which also covers what little is. You need a legally obtained `SCCore.dll` from a
-Sound Canvas VA installation you have licensed, pinned to one exact build: the one shipped in
-**SOUND Canvas VA 1.1.6**.
+Sound Canvas VA installation you have licensed. Three builds are recognised — **SOUND Canvas VA
+1.1.6** (2019, x64) and the **1.0.3** pair (2016, x64 and x86). Offsets are recorded in 1.1.6's
+coordinates because that is the build the behaviour was reverse-engineered from; the 1.0.3 builds
+hold the same data re-packed, and the engine translates through a per-build segment map.
 
 | field | value |
 |---|---|

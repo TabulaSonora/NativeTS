@@ -55,11 +55,11 @@ public:
 
     /// Takes ownership of malloc'd DLL bytes and builds the engine over them.
     ///
-    /// With a 64-hex-digit `expected_sha256` from storage the image is verified by size and PE
-    /// timestamp only — but the stored hash still has to match the build the library is pinned to;
-    /// the quick check skips recomputing it, not believing it.
+    /// With a 64-hex-digit `expected_sha256` from storage the image is identified by size and PE
+    /// timestamp only — but the stored hash still has to match the build it was identified as; the
+    /// quick check skips recomputing it, not believing it.
     ///
-    /// Throws RomIdentityError if the bytes are not the pinned build.
+    /// Throws RomIdentityError if the bytes are not one of the builds the engine can read.
     void load_rom(std::uint8_t* data, std::size_t length, std::string name,
                   const std::string& expected_sha256);
 

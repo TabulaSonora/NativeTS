@@ -3,6 +3,7 @@
 #include "tabulasonora/note_renderer.hpp"
 #include "tabulasonora/pitch_chain.hpp"
 #include "tabulasonora/render_options.hpp"
+#include "tabulasonora/build_registry.hpp"
 #include "tabulasonora/rom_image.hpp"
 #include "tabulasonora/rom_locator.hpp"
 #include "tabulasonora/soundfont_bank.hpp"
@@ -67,7 +68,15 @@ int manifest_command()
               << "sha256    " << dll.sha256 << '\n'
               << "timestamp " << dll.pe_timestamp << " (PE TimeDateStamp)\n"
               << "tables    " << manifest.cached_tables().size() << " static, "
-              << manifest.live_regions().size() << " live regions\n";
+              << manifest.live_regions().size() << " live regions\n"
+              << '\n'
+              << "reads these builds:\n";
+    for (const ts::BuildProfile& build : ts::BuildRegistry::defaults().builds()) {
+        std::cout << "  " << build.identity().product << ' ' << build.identity().version << ' '
+                  << build.architecture() << "  " << build.identity().file_name << "  "
+                  << with_separators(build.identity().size) << " bytes"
+                  << (build.pinned() ? "  (the offset reference)" : "") << '\n';
+    }
     return 0;
 }
 
@@ -77,11 +86,36 @@ int info_command(const std::string& path)
     const ts::RomImage rom = ts::RomImage::open(path, ts::RomVerification::full);
     const ts::WaveRom waves{rom};
 
-    std::cout << "verified  " << fs::path{path}.filename().string() << " against the pinned build\n"
+    const ts::BuildProfile& build = rom.build();
+    std::cout << "identified " << fs::path{path}.filename().string() << " as "
+              << build.identity().product << ' ' << build.identity().version << ' '
+              << build.architecture()
+              << (build.pinned() ? " (offsets are recorded in this build's coordinates)" : "")
+              << '\n'
+              << "build     " << build.id() << '\n'
               << "size      " << with_separators(rom.length()) << " bytes\n"
               << "sha256    " << rom.compute_sha256() << '\n'
               << "timestamp " << rom.read_pe_timestamp() << '\n'
               << '\n';
+
+    // A build other than the pinned one is read by translating the manifest's offsets through its
+    // own .rdata packing, and a few tables cannot be traced all the way. Say so here rather than
+    // let a render fail later with no context.
+    if (!build.pinned()) {
+        const auto incomplete = build.incomplete_tables(rom.manifest());
+        if (incomplete.empty()) {
+            std::cout << "mapping   every table resolves in this build\n\n";
+        } else {
+            std::cout << "mapping   " << (rom.manifest().cached_tables().size() - incomplete.size())
+                      << " of " << rom.manifest().cached_tables().size()
+                      << " tables resolve; these do not:\n";
+            for (const ts::TableCoverage& row : incomplete) {
+                std::cout << "          " << row.name << "  " << row.mapped_bytes << '/' << row.size
+                          << " bytes\n";
+            }
+            std::cout << '\n';
+        }
+    }
 
     std::int64_t table_bytes = 0;
     for (const ts::TableEntry& entry : rom.manifest().cached_tables()) {
@@ -110,8 +144,16 @@ int extract_tables_command(const std::string& path, const fs::path& output)
 
     std::size_t written = 0;
     std::int64_t bytes = 0;
+    std::vector<std::string> skipped;
 
     for (const ts::TableEntry& entry : rom.manifest().cached_tables()) {
+        // A build whose .rdata is packed differently may not place every table. Write the ones it
+        // does and name the rest: a partial extraction plus an explicit list is far more useful
+        // than aborting on the first hole, and silently writing a short file would be worse still.
+        if (!rom.build().covers_table(entry)) {
+            skipped.push_back(entry.name);
+            continue;
+        }
         const std::vector<std::uint8_t> data = rom.read(entry);
 
         std::ofstream stream{output / entry.name, std::ios::binary};
@@ -128,10 +170,20 @@ int extract_tables_command(const std::string& path, const fs::path& output)
         bytes += static_cast<std::int64_t>(data.size());
     }
 
-    std::cout << "Verified " << fs::path{path}.filename().string() << " against the pinned build.\n"
+    std::cout << "Read " << fs::path{path}.filename().string() << " as "
+              << rom.build().identity().product << ' ' << rom.build().identity().version << ' '
+              << rom.build().architecture() << ".\n"
               << "Wrote " << written << " tables (" << with_separators(bytes) << " bytes) to "
               << output.string() << '\n';
-    return 0;
+
+    if (!skipped.empty()) {
+        std::cout << "Skipped " << skipped.size()
+                  << " this build's packing could not place:\n";
+        for (const std::string& name : skipped) {
+            std::cout << "  " << name << '\n';
+        }
+    }
+    return skipped.empty() ? 0 : 2;
 }
 
 /// Renders one note and writes interleaved raw float32 stereo.
